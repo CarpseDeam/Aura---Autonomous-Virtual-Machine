@@ -1,0 +1,5 @@
+PySide6
+python-dotenv
+google-generativeai
+ollama
+jinja2
