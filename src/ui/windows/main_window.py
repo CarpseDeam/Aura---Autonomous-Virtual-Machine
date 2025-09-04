@@ -5,6 +5,7 @@ from PySide6.QtGui import QFont, QTextCursor, QIcon
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+from src.aura.config import ASSETS_DIR
 from src.ui.widgets.chat_input import ChatInputTextEdit
 
 logger = logging.getLogger(__name__)
@@ -89,17 +90,11 @@ class MainWindow(QMainWindow):
         self._register_event_handlers()
         self._start_boot_sequence()
 
-    def _get_asset_path(self, asset_name: str) -> str:
-        """Constructs the full path to an asset in the assets folder."""
-        # This path navigates from this file up to the project root and then to assets
-        base_path = os.path.dirname(__file__)
-        return os.path.abspath(os.path.join(base_path, "..", "..", "..", "..", "assets", asset_name))
-
     def _set_window_icon(self):
         """Sets the main window icon."""
-        icon_path = self._get_asset_path("aura_gear_icon.png")
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+        icon_path = ASSETS_DIR / "aura_gear_icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         else:
             logger.warning(f"Window icon not found at {icon_path}.")
 
@@ -120,10 +115,10 @@ class MainWindow(QMainWindow):
         self.chat_display.setReadOnly(True)
         main_layout.addWidget(self.chat_display)
 
-        self.chat_input = ChatInputTextEdit()  # Using our new custom widget
+        self.chat_input = ChatInputTextEdit()
         self.chat_input.setObjectName("chat_input")
         self.chat_input.setPlaceholderText("Describe what you want to build... (Shift+Enter for new line)")
-        self.chat_input.sendMessage.connect(self._send_message)  # Connect the custom signal
+        self.chat_input.sendMessage.connect(self._send_message)
         self.chat_input.setEnabled(False)
         main_layout.addWidget(self.chat_input)
 
@@ -197,7 +192,6 @@ class MainWindow(QMainWindow):
         self.chat_input.clear()
         self.chat_input.setEnabled(False)
 
-        # New message format
         self.chat_display.append(f"<span style='color: #FFB74D;'>[USER]</span>")
         self.chat_display.append(f"<div style='padding-left: 15px;'>{user_text.replace(os.linesep, '<br>')}</div><br>")
         self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
@@ -209,7 +203,6 @@ class MainWindow(QMainWindow):
         """Appends a chunk of text from the model to the display."""
         if not self.is_streaming_response:
             self.is_streaming_response = True
-            # New message format
             self.chat_display.append(f"<span style='color: #00FFFF;'>[AURA]</span>")
             self.chat_display.insertHtml("<div style='padding-left: 15px;'>")
 
@@ -220,7 +213,7 @@ class MainWindow(QMainWindow):
     def _handle_stream_end(self):
         """Called when the model is finished sending chunks."""
         if self.is_streaming_response:
-            self.chat_display.insertHtml("</div><br>")  # Close the div
+            self.chat_display.insertHtml("</div><br>")
         self.is_streaming_response = False
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()

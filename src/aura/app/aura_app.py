@@ -6,6 +6,7 @@ from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
+from src.aura.config import ASSETS_DIR
 from src.ui.windows.main_window import MainWindow
 
 
@@ -32,12 +33,12 @@ class AuraApp:
 
     def _load_fonts(self):
         """Loads custom fonts from the assets directory."""
-        font_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "JetBrainsMono-Regular.ttf")
-        if os.path.exists(font_path):
-            font_id = QFontDatabase.addApplicationFont(font_path)
+        font_path = ASSETS_DIR / "JetBrainsMono-Regular.ttf"
+        if font_path.exists():
+            font_id = QFontDatabase.addApplicationFont(str(font_path))
             if font_id != -1:
                 family = QFontDatabase.applicationFontFamilies(font_id)[0]
-                logging.info(f"Successfully loaded font: '{family}' from {font_path}")
+                logging.info(f"Successfully loaded font: '{family}'")
             else:
                 logging.error(f"Failed to load font from {font_path}.")
         else:

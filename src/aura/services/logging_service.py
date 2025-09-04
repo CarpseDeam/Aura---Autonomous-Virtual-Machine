@@ -2,6 +2,7 @@ import logging
 import sys
 import os
 from logging.handlers import RotatingFileHandler
+from src.aura.config import LOGS_DIR
 
 
 class ColorFormatter(logging.Formatter):
@@ -33,7 +34,6 @@ class LoggingService:
     """
     A service to configure centralized logging for the application.
     """
-    LOG_DIR = "logs"
     LOG_FILE = "aura.log"
 
     @staticmethod
@@ -43,25 +43,23 @@ class LoggingService:
         This should be called once when the application starts.
         """
         # Ensure the log directory exists
-        if not os.path.exists(LoggingService.LOG_DIR):
-            os.makedirs(LoggingService.LOG_DIR)
-
-        log_file_path = os.path.join(LoggingService.LOG_DIR, LoggingService.LOG_FILE)
+        LOGS_DIR.mkdir(exist_ok=True)
+        log_file_path = LOGS_DIR / LoggingService.LOG_FILE
 
         # Get the root logger
         root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)  # Capture all levels of logs
+        root_logger.setLevel(logging.DEBUG)
 
         # Create console handler with color formatter
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)  # Only show INFO and above on console
+        console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(ColorFormatter())
 
         # Create rotating file handler
         file_handler = RotatingFileHandler(
             log_file_path, maxBytes=10 * 1024 * 1024, backupCount=5
         )
-        file_handler.setLevel(logging.DEBUG)  # Log everything to the file
+        file_handler.setLevel(logging.DEBUG)
         file_formatter = logging.Formatter(
             '%(asctime)s - %(levelname)s - %(name)s:%(funcName)s:%(lineno)d - %(message)s'
         )
