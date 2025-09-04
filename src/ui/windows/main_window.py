@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
 ██╔══██║██║   ██║██╔══██╗██╔══██║
 ██║  ██║╚██████╔╝██║  ██║██║  ██║
 ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-A U T O N O M O U S   V I R T U A L   M A C H I N E"""
+    A U T O N O M O U S   V I R T U A L   M A C H I N E"""
 
     AURA_STYLESHEET = """
         QMainWindow, QWidget {
@@ -51,7 +51,7 @@ A U T O N O M O U S   V I R T U A L   M A C H I N E"""
         }
         QTextEdit#chat_input {
             background-color: #2c2c2c;
-            border: 1px solid #FFB74D; /* Amber */
+            border: 1px solid #4a4a4a; /* Subtle Grey */
             color: #dcdcdc;
             font-size: 14px;
             padding: 8px;
@@ -59,7 +59,7 @@ A U T O N O M O U S   V I R T U A L   M A C H I N E"""
             max-height: 80px; /* Control the height */
         }
         QTextEdit#chat_input:focus {
-            border: 1px solid #00FFFF; /* Cyan */
+            border: 1px solid #FFB74D; /* Amber */
         }
     """
 

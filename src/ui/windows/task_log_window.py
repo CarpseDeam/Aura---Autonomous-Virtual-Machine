@@ -39,7 +39,7 @@ class TaskLogWindow(QWidget):
         }
         QLineEdit#task_input {
             background-color: #2c2c2c;
-            border: 1px solid #00FFFF; /* Cyan */
+            border: 1px solid #4a4a4a; /* Subtle Grey */
             color: #dcdcdc;
             font-size: 14px;
             padding: 6px;
@@ -125,6 +125,7 @@ class TaskLogWindow(QWidget):
         if not tasks:
             placeholder = QLabel("No active tasks.")
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet("border: none;") # Ensure placeholder has no border
             self.task_list_layout.addWidget(placeholder)
         else:
             for task_data in tasks:
