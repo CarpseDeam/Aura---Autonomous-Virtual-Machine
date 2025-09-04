@@ -23,7 +23,7 @@ class LLMService:
         self.prompt_manager = prompt_manager
         self.model = None
         self._configure_client()
-        self.event_bus.subscribe("SEND_USER_MESSAGE", self.handle_user_message)
+        self._register_event_handlers()
 
     def _configure_client(self):
         """Configures the Gemini client using the API key from environment variables."""
@@ -39,6 +39,11 @@ class LLMService:
             logger.critical(f"Failed to configure Gemini client: {e}", exc_info=True)
             self.model = None
 
+    def _register_event_handlers(self):
+        """Subscribes the service to relevant events from the event bus."""
+        self.event_bus.subscribe("SEND_USER_MESSAGE", self.handle_user_message)
+        self.event_bus.subscribe("DISPATCH_TASK", self.handle_dispatch_task)
+
     def handle_user_message(self, event: Event):
         """
         Handles the SEND_USER_MESSAGE event by starting a new thread to process
@@ -49,8 +54,23 @@ class LLMService:
             self._handle_error("LLM not configured or empty prompt.")
             return
 
-        # The entire cognitive process runs in a thread to not block the UI
         thread = threading.Thread(target=self._cognitive_router, args=(prompt,))
+        thread.start()
+
+    def handle_dispatch_task(self, event: Event):
+        """
+        Handles the DISPATCH_TASK event, preparing for the Engineer Agent's work.
+        """
+        task_id = event.payload.get("task_id")
+        if not task_id:
+            return
+
+        logger.info(f"Received DISPATCH_TASK for task ID: {task_id}. Triggering Engineer Agent.")
+        # Placeholder for Engineer Agent logic
+        # For now, we'll just send a confirmation message to the main chat
+        dispatch_prompt = f"Acknowledge that the user has dispatched a task with ID {task_id} and that the engineering team is now working on it."
+
+        thread = threading.Thread(target=self._stream_generation, args=(dispatch_prompt,))
         thread.start()
 
     def _cognitive_router(self, user_prompt: str):
@@ -87,7 +107,6 @@ class LLMService:
             logger.info("Requesting intent detection from LLM...")
             response = self.model.generate_content(prompt)
 
-            # Clean up the response to extract JSON
             response_text = response.text.strip().replace("```json", "").replace("```", "")
 
             data = json.loads(response_text)
@@ -104,17 +123,15 @@ class LLMService:
 
     def _handle_planning_session(self, user_prompt: str):
         """
-        Handles the PLANNING_SESSION intent. For now, it adds a task to Mission Control
+        Handles the PLANNING_SESSION intent. It adds a task to Mission Control
         and sends a confirmatory message.
         """
-        # For demonstration, we'll create a task from the user's prompt
         task_description = f"Plan and design: {user_prompt[:100]}..."
         self.event_bus.dispatch(Event(
             event_type="ADD_TASK",
             payload={"description": task_description}
         ))
 
-        # Now, generate a response confirming the planning session
         confirm_prompt = f"Acknowledge that you are ready to start a planning session based on the user's request: '{user_prompt}'"
         self._stream_generation(confirm_prompt)
 
