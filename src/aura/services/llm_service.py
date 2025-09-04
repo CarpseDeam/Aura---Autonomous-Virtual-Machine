@@ -6,6 +6,7 @@ import google.generativeai as genai
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
+from src.aura.services.task_management_service import TaskManagementService
 from src.aura.models.intent import Intent
 
 logger = logging.getLogger(__name__)
@@ -17,10 +18,16 @@ class LLMService:
     This service now includes the "Cognitive Router" to detect user intent.
     """
 
-    def __init__(self, event_bus: EventBus, prompt_manager: PromptManager):
+    def __init__(
+        self,
+        event_bus: EventBus,
+        prompt_manager: PromptManager,
+        task_management_service: TaskManagementService
+    ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
         self.prompt_manager = prompt_manager
+        self.task_management_service = task_management_service
         self.model = None
         self._configure_client()
         self._register_event_handlers()
@@ -59,19 +66,66 @@ class LLMService:
 
     def handle_dispatch_task(self, event: Event):
         """
-        Handles the DISPATCH_TASK event, preparing for the Engineer Agent's work.
+        Handles the DISPATCH_TASK event, activating the Engineer Agent.
         """
         task_id = event.payload.get("task_id")
         if not task_id:
+            logger.warning("DISPATCH_TASK event received with no task_id.")
             return
 
-        logger.info(f"Received DISPATCH_TASK for task ID: {task_id}. Triggering Engineer Agent.")
-        # Placeholder for Engineer Agent logic
-        # For now, we'll just send a confirmation message to the main chat
-        dispatch_prompt = f"Acknowledge that the user has dispatched a task with ID {task_id} and that the engineering team is now working on it."
+        task = self.task_management_service.get_task_by_id(task_id)
+        if not task:
+            self._handle_error(f"Could not find task with ID {task_id} to dispatch.")
+            return
 
-        thread = threading.Thread(target=self._stream_generation, args=(dispatch_prompt,))
+        logger.info(f"Engineer Agent activated for task: '{task.description}'")
+        # For now, we assume the task description implies the filename.
+        # This will become more robust later.
+        file_path = f"generated/{task.description.split('`')[1]}" if '`' in task.description else "generated/file.py"
+
+        engineer_prompt = self.prompt_manager.render(
+            "generate_code.jinja2",
+            task_description=task.description,
+            file_path=file_path
+        )
+
+        if not engineer_prompt:
+            self._handle_error("Failed to render the engineer prompt.")
+            return
+
+        # Run code generation in a thread to keep the UI responsive.
+        thread = threading.Thread(target=self._generate_code, args=(engineer_prompt, file_path))
         thread.start()
+
+    def _generate_code(self, prompt: str, file_path: str):
+        """
+        The Engineer Agent's core logic for generating code.
+        """
+        try:
+            logger.info("Sending prompt to Engineer Agent for code generation...")
+            # This is a non-streaming call because we want the full code at once.
+            response = self.model.generate_content(prompt)
+            generated_code = response.text
+
+            # Clean up the response to get only the raw code
+            if "```python" in generated_code:
+                generated_code = generated_code.split("```python\n")[1].split("```")
+            elif "```" in generated_code:
+                 generated_code = generated_code.split("```\n").split("```")[0]
+
+            logger.info(f"Code generation successful for file: {file_path}")
+            # TODO: In the future, this event will be caught by the Code Viewer window
+            # For now, we'll log it and send a success message to the main chat.
+            print("--- GENERATED CODE ---")
+            print(generated_code)
+            print("----------------------")
+
+            success_prompt = f"Confirm that the Engineer Agent has successfully generated the code for the task: '{file_path}'. State that it is ready for review."
+            self._stream_generation(success_prompt)
+
+        except Exception as e:
+            logger.error(f"Error during code generation: {e}", exc_info=True)
+            self._handle_error(f"An error occurred while generating code: {e}")
 
     def _cognitive_router(self, user_prompt: str):
         """
@@ -84,7 +138,7 @@ class LLMService:
 
             if intent == Intent.PLANNING_SESSION:
                 self._handle_planning_session(user_prompt)
-            else:  # Default to chitchat for CHITCHAT or UNKNOWN
+            else: # Default to chitchat for CHITCHAT or UNKNOWN
                 self._stream_generation(user_prompt)
 
         except Exception as e:
@@ -92,26 +146,18 @@ class LLMService:
             self._handle_error(f"An error occurred during intent processing: {e}")
 
     def _detect_intent(self, user_prompt: str) -> Intent:
-        """
-        Calls the LLM with a specific prompt to classify the user's intent.
-        This is a non-streaming, fast call.
-        """
+        """Calls the LLM with a specific prompt to classify the user's intent."""
         try:
             prompt = self.prompt_manager.render(
                 "detect_intent.jinja2",
                 user_prompt=user_prompt
             )
-            if not prompt:
-                return Intent.UNKNOWN
+            if not prompt: return Intent.UNKNOWN
 
-            logger.info("Requesting intent detection from LLM...")
             response = self.model.generate_content(prompt)
-
             response_text = response.text.strip().replace("```json", "").replace("```", "")
-
             data = json.loads(response_text)
             intent_str = data.get("intent", "UNKNOWN").upper()
-
             return Intent(intent_str)
 
         except (json.JSONDecodeError, KeyError, ValueError) as e:
@@ -122,16 +168,12 @@ class LLMService:
             return Intent.UNKNOWN
 
     def _handle_planning_session(self, user_prompt: str):
-        """
-        Handles the PLANNING_SESSION intent. It adds a task to Mission Control
-        and sends a confirmatory message.
-        """
+        """Handles the PLANNING_SESSION intent."""
         task_description = f"Plan and design: {user_prompt[:100]}..."
         self.event_bus.dispatch(Event(
             event_type="ADD_TASK",
             payload={"description": task_description}
         ))
-
         confirm_prompt = f"Acknowledge that you are ready to start a planning session based on the user's request: '{user_prompt}'"
         self._stream_generation(confirm_prompt)
 
@@ -142,11 +184,10 @@ class LLMService:
             response_stream = self.model.generate_content(prompt, stream=True)
 
             for chunk in response_stream:
-                chunk_event = Event(
+                self.event_bus.dispatch(Event(
                     event_type="MODEL_CHUNK_RECEIVED",
                     payload={"chunk": chunk.text}
-                )
-                self.event_bus.dispatch(chunk_event)
+                ))
 
         except Exception as e:
             logger.error(f"Error communicating with Gemini API: {e}", exc_info=True)

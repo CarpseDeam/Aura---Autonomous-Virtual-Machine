@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
 
     AURA_STYLESHEET = """
         QMainWindow, QWidget {
-            background-color: #000000;
+            background-color: #1a1a1a;
             color: #dcdcdc;
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
         }
@@ -40,17 +40,17 @@ class MainWindow(QMainWindow):
             color: #FFB74D; /* Amber */
             font-weight: bold;
             font-size: 10px;
-            padding: 5px;
+            padding-bottom: 10px;
         }
         QTextEdit#chat_display {
-            background-color: #000000;
+            background-color: #2c2c2c;
             border-top: 1px solid #4a4a4a;
             border-bottom: 1px solid #4a4a4a;
             color: #dcdcdc; /* Light Grey */
             font-size: 14px;
         }
         QTextEdit#chat_input {
-            background-color: #000000;
+            background-color: #2c2c2c;
             border: 1px solid #4a4a4a; /* Subtle Grey */
             color: #dcdcdc;
             font-size: 14px;
@@ -61,16 +61,18 @@ class MainWindow(QMainWindow):
         QTextEdit#chat_input:focus {
             border: 1px solid #FFB74D; /* Amber */
         }
-        QPushButton#settings_button {
-            background-color: #000000;
-            border: 1px solid #4a4a4a;
-            color: #dcdcdc;
-            border-radius: 5px;
-            width: 40px;
-            height: 40px;
-        }
-        QPushButton#settings_button:hover {
+        QPushButton#top_bar_button {
+            background-color: #2c2c2c;
             border: 1px solid #FFB74D; /* Amber */
+            color: #FFB74D;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 8px 12px;
+            border-radius: 5px;
+            min-width: 150px;
+        }
+        QPushButton#top_bar_button:hover {
+            background-color: #3a3a3a;
         }
     """
 
@@ -121,7 +123,8 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
-        header_widget = self._create_header()
+        top_bar = self._create_top_bar()
+        banner_widget = self._create_banner()
 
         self.chat_display = QTextEdit()
         self.chat_display.setObjectName("chat_display")
@@ -129,47 +132,39 @@ class MainWindow(QMainWindow):
 
         input_container = self._create_input_area()
 
-        main_layout.addWidget(header_widget)
+        main_layout.addWidget(top_bar)
+        main_layout.addWidget(banner_widget)
         main_layout.addWidget(self.chat_display, 1)
         main_layout.addWidget(input_container)
 
-    def _create_header(self):
-        """Creates the dedicated header widget with banner and settings button."""
-        header_widget = QWidget()
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(0, 0, 0, 0)
+    def _create_top_bar(self):
+        """Creates the dedicated top bar for controls."""
+        top_bar_widget = QWidget()
+        layout = QHBoxLayout(top_bar_widget)
+        layout.setContentsMargins(0, 0, 0, 10) # Add some padding below
+
+        btn_configure_agents = QPushButton("Configure Agents")
+        btn_configure_agents.setObjectName("top_bar_button")
+        btn_configure_agents.clicked.connect(self._open_settings_dialog)
+
+        layout.addStretch()
+        layout.addWidget(btn_configure_agents)
+
+        return top_bar_widget
+
+    def _create_banner(self):
+        """Creates the widget for the AURA ASCII banner."""
+        banner_widget = QWidget()
+        layout = QHBoxLayout(banner_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         banner_label = QLabel(self.AURA_ASCII_BANNER)
         banner_label.setObjectName("aura_banner")
         banner_label.setFont(QFont("JetBrains Mono", 10))
         banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Buttons Container
-        button_container = QWidget()
-        button_layout = QVBoxLayout(button_container)
-        button_layout.setSpacing(8)
-
-        self.btn_settings = QPushButton()
-        self.btn_settings.setObjectName("settings_button")
-        self.btn_settings.setToolTip("Settings")
-        icon_path = ASSETS_DIR / "aura_gear_icon.ico"
-        if icon_path.exists():
-            self.btn_settings.setIcon(QIcon(str(icon_path)))
-            self.btn_settings.setIconSize(QSize(24, 24))
-        else:
-            logger.warning(f"Settings icon not found at {icon_path}. Using text fallback.")
-            self.btn_settings.setText("⚙")
-
-        self.btn_settings.clicked.connect(self._open_settings_dialog)
-
-        button_layout.addWidget(self.btn_settings)
-        button_layout.addStretch() # Pushes the button to the top
-
-        header_layout.addStretch(1)
-        header_layout.addWidget(banner_label, 2) # Banner takes twice the space
-        header_layout.addWidget(button_container, 1) # Buttons take 1 part
-
-        return header_widget
+        layout.addWidget(banner_label)
+        return banner_widget
 
     def _create_input_area(self):
         """Creates the bottom input area."""
@@ -201,7 +196,7 @@ class MainWindow(QMainWindow):
 
     def _open_settings_dialog(self):
         """Placeholder for opening the settings dialog."""
-        logger.info("Settings button clicked. This will open the settings dialog.")
+        logger.info("Configure Agents button clicked. This will open the settings dialog.")
 
     def _start_boot_sequence(self):
         """Starts the boot sequence animation."""

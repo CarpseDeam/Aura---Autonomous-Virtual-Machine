@@ -7,9 +7,9 @@ from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.task_management_service import TaskManagementService
+from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.config import ASSETS_DIR
 from src.aura.models.events import Event
-from src.aura.prompts.prompt_manager import PromptManager
 from src.ui.windows.main_window import MainWindow
 from src.ui.windows.task_log_window import TaskLogWindow
 
@@ -30,8 +30,12 @@ class AuraApp:
 
         self.event_bus = EventBus()
         self.prompt_manager = PromptManager()
-        self.llm_service = LLMService(self.event_bus, self.prompt_manager)
         self.task_management_service = TaskManagementService(self.event_bus)
+        self.llm_service = LLMService(
+            self.event_bus,
+            self.prompt_manager,
+            self.task_management_service
+        )
         self.main_window = MainWindow(self.event_bus)
         self.task_log_window = TaskLogWindow(self.event_bus)
 
@@ -62,9 +66,8 @@ class AuraApp:
     def _dispatch_initial_tasks_for_testing(self):
         """Dispatches a few dummy tasks for development and testing."""
         tasks_to_add = [
-            "Implement the 'Cognitive Router'",
-            "Add Header Buttons & Settings Dialog",
-            "Build the Code Viewer Window"
+            "Create a file named `main.py` that prints 'Hello, World!' to the console.",
+            "Create a file named `utils.py` with a function that adds two numbers.",
         ]
         for desc in tasks_to_add:
             self.event_bus.dispatch(Event(

@@ -40,6 +40,7 @@ class TaskWidgetItem(QWidget):
 
         description_label = QLabel(f"○ {self.task.description}")
         description_label.setStyleSheet("border: none; padding: 0;")
+        description_label.setWordWrap(True) # Enable word wrapping
 
         self.dispatch_button = QPushButton("Dispatch")
         self.dispatch_button.setToolTip("Send this task to the Engineer Agent")
