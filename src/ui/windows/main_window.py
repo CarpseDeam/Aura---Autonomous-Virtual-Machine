@@ -1,6 +1,6 @@
 import logging
 import os
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication
 from PySide6.QtGui import QFont, QTextCursor, QIcon
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from src.aura.app.event_bus import EventBus
@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         """Initializes the MainWindow."""
         super().__init__()
         self.event_bus = event_bus
+        self.task_log_window = None  # Will be set by AuraApp
         self.setWindowTitle("Aura - Command Deck")
         self.setGeometry(100, 100, 900, 700)
 
@@ -92,7 +93,7 @@ class MainWindow(QMainWindow):
 
     def _set_window_icon(self):
         """Sets the main window icon."""
-        icon_path = ASSETS_DIR / "aura_gear_icon.png"
+        icon_path = ASSETS_DIR / "aura_gear_icon.ico"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         else:
@@ -223,3 +224,39 @@ class MainWindow(QMainWindow):
         """Displays an error message in the chat."""
         self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] {error_message}</span>")
         self._handle_stream_end()
+
+    def _update_task_log_position(self):
+        """Updates the position of the task log window to be pinned to the right."""
+        if not self.task_log_window or not self.isVisible():
+            return
+
+        main_window_pos = self.pos()
+        main_window_width = self.width()
+        gap = 8  # A small gap between windows
+
+        new_x = main_window_pos.x() + main_window_width + gap
+        new_y = main_window_pos.y()
+
+        self.task_log_window.move(new_x, new_y)
+        self.task_log_window.resize(self.task_log_window.width(), self.height())
+
+    def moveEvent(self, event):
+        """Override moveEvent to move the task log window along with the main window."""
+        super().moveEvent(event)
+        self._update_task_log_position()
+
+    def resizeEvent(self, event):
+        """Override resizeEvent to adjust the task log window's position and height."""
+        super().resizeEvent(event)
+        self._update_task_log_position()
+
+    def showEvent(self, event):
+        """Override showEvent to position the task log window when the main window is first shown."""
+        super().showEvent(event)
+        # The position is only correct after the window is shown, so we call it here.
+        QTimer.singleShot(0, self._update_task_log_position)
+
+    def closeEvent(self, event):
+        """Ensure the entire application quits when the main window is closed."""
+        QApplication.quit()
+        super().closeEvent(event)
