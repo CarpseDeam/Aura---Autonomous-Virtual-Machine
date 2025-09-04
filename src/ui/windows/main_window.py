@@ -61,16 +61,15 @@ class MainWindow(QMainWindow):
         QTextEdit#chat_input:focus {
             border: 1px solid #FFB74D; /* Amber */
         }
-        QPushButton#header_button {
+        QPushButton#settings_button {
             background-color: #2c2c2c;
             border: 1px solid #4a4a4a;
             color: #dcdcdc;
-            font-size: 14px;
-            padding: 8px 12px;
             border-radius: 5px;
-            min-width: 120px;
+            width: 40px;
+            height: 40px;
         }
-        QPushButton#header_button:hover {
+        QPushButton#settings_button:hover {
             border: 1px solid #FFB74D; /* Amber */
         }
     """
@@ -135,7 +134,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(input_container)
 
     def _create_header(self):
-        """Creates the dedicated header widget with banner and buttons."""
+        """Creates the dedicated header widget with banner and settings button."""
         header_widget = QWidget()
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -150,20 +149,24 @@ class MainWindow(QMainWindow):
         button_layout = QVBoxLayout(button_container)
         button_layout.setSpacing(8)
 
-        btn_new_project = QPushButton("New Project")
-        btn_new_project.setObjectName("header_button")
-        btn_load_project = QPushButton("Load Project")
-        btn_load_project.setObjectName("header_button")
-        btn_agent_todo = QPushButton("Agent TODO")
-        btn_agent_todo.setObjectName("header_button")
+        self.btn_settings = QPushButton()
+        self.btn_settings.setObjectName("settings_button")
+        self.btn_settings.setToolTip("Settings")
+        icon_path = ASSETS_DIR / "aura_gear_icon.ico"
+        if icon_path.exists():
+            self.btn_settings.setIcon(QIcon(str(icon_path)))
+            self.btn_settings.setIconSize(QSize(24, 24))
+        else:
+            logger.warning(f"Settings icon not found at {icon_path}. Using text fallback.")
+            self.btn_settings.setText("⚙")
 
-        button_layout.addWidget(btn_new_project)
-        button_layout.addWidget(btn_load_project)
-        button_layout.addWidget(btn_agent_todo)
-        button_layout.addStretch()
+        self.btn_settings.clicked.connect(self._open_settings_dialog)
+
+        button_layout.addWidget(self.btn_settings)
+        button_layout.addStretch() # Pushes the button to the top
 
         header_layout.addStretch(1)
-        header_layout.addWidget(banner_label, 2) # Banner takes twice the space of stretch
+        header_layout.addWidget(banner_label, 2) # Banner takes twice the space
         header_layout.addWidget(button_container, 1) # Buttons take 1 part
 
         return header_widget
@@ -195,6 +198,10 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("MODEL_STREAM_ENDED", lambda event: self.signaller.stream_ended.emit())
         self.event_bus.subscribe("MODEL_ERROR", lambda event: self.signaller.error_received.emit(
             event.payload.get("message", "Unknown error")))
+
+    def _open_settings_dialog(self):
+        """Placeholder for opening the settings dialog."""
+        logger.info("Settings button clicked. This will open the settings dialog.")
 
     def _start_boot_sequence(self):
         """Starts the boot sequence animation."""
