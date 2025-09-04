@@ -1,56 +1,52 @@
-import os
 import logging
+import inspect
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from src.aura.config import ROOT_DIR
+from src.aura.prompts import master_rules
 
 logger = logging.getLogger(__name__)
 
 class PromptManager:
     """
-    Manages loading and rendering of Jinja2 prompts from the filesystem.
+    Manages loading and rendering of Jinja2 prompt templates.
     """
     def __init__(self):
-        """
-        Initializes the PromptManager and sets up the Jinja2 environment.
-        It assumes templates are located in a 'templates' subdirectory
-        relative to this file's location.
-        """
-        # The base directory for templates is <current_file_path>/templates
-        templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
-
-        if not os.path.isdir(templates_dir):
-            # Let's try to create it
-            try:
-                os.makedirs(templates_dir)
-                logger.info(f"Created templates directory at {templates_dir}")
-            except OSError as e:
-                logger.warning(f"Could not create templates directory at {templates_dir}: {e}. Prompt rendering will fail.")
-                self.env = None
-                return
-
+        """Initializes the PromptManager."""
+        template_dir = ROOT_DIR / "src" / "aura" / "prompts" / "templates"
+        if not template_dir.exists():
+            logger.error(f"Prompt template directory not found at: {template_dir}")
+            raise FileNotFoundError(f"Prompt template directory not found: {template_dir}")
 
         self.env = Environment(
-            loader=FileSystemLoader(templates_dir),
-            autoescape=select_autoescape(['html', 'xml', 'jinja2'])
+            loader=FileSystemLoader(template_dir),
+            autoescape=select_autoescape()
         )
-        logger.info(f"PromptManager initialized. Loading templates from: {templates_dir}")
+        self._load_master_rules_as_globals()
+        logger.info("PromptManager initialized and master rules loaded.")
+
+    def _load_master_rules_as_globals(self):
+        """
+        Inspects the master_rules module and loads all uppercase constants
+        as global variables in the Jinja2 environment.
+        """
+        for name, value in inspect.getmembers(master_rules):
+            if name.isupper() and isinstance(value, str):
+                self.env.globals[name] = value
 
     def render(self, template_name: str, **kwargs) -> str:
         """
-        Renders a specified Jinja2 template with the given context.
+        Renders a prompt template with the given context.
 
         Args:
-            template_name: The filename of the template to render.
+            template_name: The name of the template file (e.g., 'generate_code.jinja2').
             **kwargs: The context variables to pass to the template.
 
         Returns:
-            The rendered prompt as a string, or an empty string if rendering fails.
+            The rendered prompt string.
         """
-        if not self.env:
-            logger.error("Jinja2 environment not initialized. Cannot render prompt.")
-            return ""
         try:
             template = self.env.get_template(template_name)
             return template.render(**kwargs)
         except Exception as e:
             logger.error(f"Failed to render prompt template '{template_name}': {e}", exc_info=True)
-            return ""
+            return "" # Return empty string on failure
