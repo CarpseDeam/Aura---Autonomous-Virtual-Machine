@@ -1,9 +1,11 @@
 import logging
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QLineEdit
-from PySide6.QtGui import QFont, QTextCursor
+import os
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout
+from PySide6.QtGui import QFont, QTextCursor, QIcon
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+from src.ui.widgets.chat_input import ChatInputTextEdit
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,6 @@ class MainWindow(QMainWindow):
     """
     The main window for the AURA application, serving as the command deck.
     """
-    # ... (AURA_ASCII_BANNER remains the same) ...
     AURA_ASCII_BANNER = """
  █████╗ ██╗   ██╗██████╗  █████╗ 
 ██╔══██╗██║   ██║██╔══██╗██╔══██╗
@@ -34,7 +35,7 @@ class MainWindow(QMainWindow):
         QMainWindow, QWidget {
             background-color: #1a1a1a;
             color: #dcdcdc;
-            font-family: "Courier New", Courier, monospace;
+            font-family: "JetBrains Mono", "Courier New", Courier, monospace;
         }
         QLabel#aura_banner {
             color: #FFB74D; /* Amber */
@@ -49,15 +50,16 @@ class MainWindow(QMainWindow):
             color: #dcdcdc; /* Light Grey */
             font-size: 14px;
         }
-        QLineEdit#chat_input {
+        QTextEdit#chat_input {
             background-color: #2c2c2c;
             border: 1px solid #FFB74D; /* Amber */
             color: #dcdcdc;
             font-size: 14px;
             padding: 8px;
             border-radius: 5px;
+            max-height: 80px; /* Control the height */
         }
-        QLineEdit#chat_input:focus {
+        QTextEdit#chat_input:focus {
             border: 1px solid #00FFFF; /* Cyan */
         }
     """
@@ -75,6 +77,8 @@ class MainWindow(QMainWindow):
         self.event_bus = event_bus
         self.setWindowTitle("Aura - Command Deck")
         self.setGeometry(100, 100, 900, 700)
+
+        self._set_window_icon()
         self.setStyleSheet(self.AURA_STYLESHEET)
 
         self.is_booting = True
@@ -84,6 +88,20 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._register_event_handlers()
         self._start_boot_sequence()
+
+    def _get_asset_path(self, asset_name: str) -> str:
+        """Constructs the full path to an asset in the assets folder."""
+        # This path navigates from this file up to the project root and then to assets
+        base_path = os.path.dirname(__file__)
+        return os.path.abspath(os.path.join(base_path, "..", "..", "..", "..", "assets", asset_name))
+
+    def _set_window_icon(self):
+        """Sets the main window icon."""
+        icon_path = self._get_asset_path("aura_gear_icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            logger.warning(f"Window icon not found at {icon_path}.")
 
     def _init_ui(self):
         """Initializes the user interface of the main window."""
@@ -102,16 +120,15 @@ class MainWindow(QMainWindow):
         self.chat_display.setReadOnly(True)
         main_layout.addWidget(self.chat_display)
 
-        self.chat_input = QLineEdit()
+        self.chat_input = ChatInputTextEdit()  # Using our new custom widget
         self.chat_input.setObjectName("chat_input")
-        self.chat_input.setPlaceholderText("Describe what you want to build...")
-        self.chat_input.returnPressed.connect(self._send_message)
-        self.chat_input.setEnabled(False)  # Disabled until boot sequence finishes
+        self.chat_input.setPlaceholderText("Describe what you want to build... (Shift+Enter for new line)")
+        self.chat_input.sendMessage.connect(self._send_message)  # Connect the custom signal
+        self.chat_input.setEnabled(False)
         main_layout.addWidget(self.chat_input)
 
     def _create_header(self):
         """Creates the header widget containing the banner and buttons."""
-        # ... (This method remains the same) ...
         header_widget = QWidget()
         header_layout = QVBoxLayout(header_widget)
         header_layout.setContentsMargins(5, 5, 5, 5)
@@ -119,7 +136,7 @@ class MainWindow(QMainWindow):
 
         banner_label = QLabel(self.AURA_ASCII_BANNER)
         banner_label.setObjectName("aura_banner")
-        banner_label.setFont(QFont("Courier New", 10))
+        banner_label.setFont(QFont("JetBrains Mono", 10))
         banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         button_container = QWidget()
@@ -133,11 +150,9 @@ class MainWindow(QMainWindow):
 
     def _register_event_handlers(self):
         """Connects UI signals to the event bus."""
-        # Use a signaller to safely update UI from other threads
         self.signaller.chunk_received.connect(self._handle_model_chunk)
         self.signaller.stream_ended.connect(self._handle_stream_end)
         self.signaller.error_received.connect(self._handle_model_error)
-
         self.event_bus.subscribe("MODEL_CHUNK_RECEIVED",
                                  lambda event: self.signaller.chunk_received.emit(event.payload.get("chunk", "")))
         self.event_bus.subscribe("MODEL_STREAM_ENDED", lambda event: self.signaller.stream_ended.emit())
@@ -155,7 +170,7 @@ class MainWindow(QMainWindow):
         """Updates the boot sequence display with the next line."""
         if self.current_boot_step < len(self.BOOT_SEQUENCE):
             line_info = self.BOOT_SEQUENCE[self.current_boot_step]
-            self.chat_display.append(f"<span style='color: #39FF14;'>{line_info['text']}</span>")  # Neon Green
+            self.chat_display.append(f"<span style='color: #39FF14;'>{line_info['text']}</span>")
             self.current_boot_step += 1
             if self.current_boot_step < len(self.BOOT_SEQUENCE):
                 self.boot_timer.setInterval(self.BOOT_SEQUENCE[self.current_boot_step]["delay"])
@@ -169,19 +184,22 @@ class MainWindow(QMainWindow):
         self.boot_timer.stop()
         self.is_booting = False
         self.chat_display.append(
-            "<br><span style='color: #00FFFF;'>[AURA]</span> Welcome. I am online and ready to assist.")  # Cyan
+            "<br><span style='color: #00FFFF;'>[AURA]</span> Welcome. I am online and ready to assist.")
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
 
     def _send_message(self):
         """Sends the user's message from the input box."""
-        user_text = self.chat_input.text().strip()
+        user_text = self.chat_input.toPlainText().strip()
         if not user_text:
             return
 
         self.chat_input.clear()
         self.chat_input.setEnabled(False)
-        self.chat_display.append(f"<br><span style='color: #FFB74D;'>[USER]</span> {user_text}")  # Amber
+
+        # New message format
+        self.chat_display.append(f"<span style='color: #FFB74D;'>[USER]</span>")
+        self.chat_display.append(f"<div style='padding-left: 15px;'>{user_text.replace(os.linesep, '<br>')}</div><br>")
         self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
 
         event = Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text})
@@ -191,15 +209,18 @@ class MainWindow(QMainWindow):
         """Appends a chunk of text from the model to the display."""
         if not self.is_streaming_response:
             self.is_streaming_response = True
-            self.chat_display.insertHtml("<br><span style='color: #00FFFF;'>[AURA]</span> ")  # Cyan
+            # New message format
+            self.chat_display.append(f"<span style='color: #00FFFF;'>[AURA]</span>")
+            self.chat_display.insertHtml("<div style='padding-left: 15px;'>")
 
-        # Replace newlines with HTML line breaks for proper rendering
         safe_chunk = chunk.replace('\n', '<br>')
         self.chat_display.insertHtml(safe_chunk)
         self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
 
     def _handle_stream_end(self):
         """Called when the model is finished sending chunks."""
+        if self.is_streaming_response:
+            self.chat_display.insertHtml("</div><br>")  # Close the div
         self.is_streaming_response = False
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
@@ -207,5 +228,5 @@ class MainWindow(QMainWindow):
 
     def _handle_model_error(self, error_message: str):
         """Displays an error message in the chat."""
-        self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] {error_message}</span>")  # Red
+        self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] {error_message}</span>")
         self._handle_stream_end()
