@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
             font-weight: bold;
             font-size: 10px;
             padding: 5px;
-            text-align: center;
+            text-align: left;
         }
         QTextEdit#chat_display {
             background-color: transparent;
@@ -116,12 +116,22 @@ class MainWindow(QMainWindow):
         self.chat_display.setReadOnly(True)
         main_layout.addWidget(self.chat_display)
 
+        # Create a container and layout for the input field
+        input_container = QWidget()
+        input_layout = QHBoxLayout(input_container)
+        input_layout.setContentsMargins(0, 0, 0, 0)  # No extra margins around the input
+
         self.chat_input = ChatInputTextEdit()
         self.chat_input.setObjectName("chat_input")
         self.chat_input.setPlaceholderText("Describe what you want to build... (Shift+Enter for new line)")
         self.chat_input.sendMessage.connect(self._send_message)
         self.chat_input.setEnabled(False)
-        main_layout.addWidget(self.chat_input)
+
+        # Add input and a stretch to make it take up half the space
+        input_layout.addWidget(self.chat_input, 1)  # Stretch factor of 1
+        input_layout.addStretch(1)                    # Matching stretch factor
+
+        main_layout.addWidget(input_container)
 
     def _create_header(self):
         """Creates the header widget containing the banner and buttons."""
@@ -133,7 +143,7 @@ class MainWindow(QMainWindow):
         banner_label = QLabel(self.AURA_ASCII_BANNER)
         banner_label.setObjectName("aura_banner")
         banner_label.setFont(QFont("JetBrains Mono", 10))
-        banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        banner_label.setAlignment(Qt.AlignmentFlag.AlignLeft)  # Align banner to the left
 
         button_container = QWidget()
         button_layout = QHBoxLayout(button_container)
