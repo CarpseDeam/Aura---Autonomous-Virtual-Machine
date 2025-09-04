@@ -22,15 +22,13 @@ class MainWindow(QMainWindow):
     """
     The main window for the AURA application, serving as the command deck.
     """
-    AURA_ASCII_BANNER = """
- █████╗ ██╗   ██╗██████╗  █████╗ 
+    AURA_ASCII_BANNER = """█████╗ ██╗   ██╗██████╗  █████╗ 
 ██╔══██╗██║   ██║██╔══██╗██╔══██╗
 ███████║██║   ██║██████╔╝███████║
 ██╔══██║██║   ██║██╔══██╗██╔══██║
 ██║  ██║╚██████╔╝██║  ██║██║  ██║
 ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-    A U T O N O M O U S   V I R T U A L   M A C H I N E
-    """
+A U T O N O M O U S   V I R T U A L   M A C H I N E"""
 
     AURA_STYLESHEET = """
         QMainWindow, QWidget {
@@ -109,12 +107,10 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(10)
 
         header_widget = self._create_header()
-        main_layout.addWidget(header_widget)
 
         self.chat_display = QTextEdit()
         self.chat_display.setObjectName("chat_display")
         self.chat_display.setReadOnly(True)
-        main_layout.addWidget(self.chat_display)
 
         # Create a container and layout for the input field
         input_container = QWidget()
@@ -131,7 +127,10 @@ class MainWindow(QMainWindow):
         input_layout.addWidget(self.chat_input, 1)  # Stretch factor of 1
         input_layout.addStretch(1)                    # Matching stretch factor
 
-        main_layout.addWidget(input_container)
+        # Add widgets to the main layout with stretch factors
+        main_layout.addWidget(header_widget, 0)       # Header takes minimum space
+        main_layout.addWidget(self.chat_display, 1)   # Chat display expands to fill space
+        main_layout.addWidget(input_container, 0)     # Input takes minimum space at the bottom
 
     def _create_header(self):
         """Creates the header widget containing the banner and buttons."""
