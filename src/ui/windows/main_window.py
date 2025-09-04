@@ -1,8 +1,8 @@
 import logging
 import os
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication, QPushButton
 from PySide6.QtGui import QFont, QTextCursor, QIcon
-from PySide6.QtCore import Qt, QTimer, Signal, QObject
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QSize
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.config import ASSETS_DIR
@@ -41,11 +41,11 @@ class MainWindow(QMainWindow):
             font-weight: bold;
             font-size: 10px;
             padding: 5px;
-            text-align: left;
         }
         QTextEdit#chat_display {
-            background-color: transparent;
-            border: none;
+            background-color: #2c2c2c;
+            border-top: 1px solid #4a4a4a;
+            border-bottom: 1px solid #4a4a4a;
             color: #dcdcdc; /* Light Grey */
             font-size: 14px;
         }
@@ -61,13 +61,29 @@ class MainWindow(QMainWindow):
         QTextEdit#chat_input:focus {
             border: 1px solid #FFB74D; /* Amber */
         }
+        QPushButton#header_button {
+            background-color: #2c2c2c;
+            border: 1px solid #4a4a4a;
+            color: #dcdcdc;
+            font-size: 14px;
+            padding: 8px 12px;
+            border-radius: 5px;
+            min-width: 120px;
+        }
+        QPushButton#header_button:hover {
+            border: 1px solid #FFB74D; /* Amber */
+        }
     """
 
     BOOT_SEQUENCE = [
-        {"delay": 200, "text": "[KERNEL] AURA KERNEL V4.0 ... ONLINE"},
-        {"delay": 100, "text": "[SYSTEM] Establishing secure link to command deck..."},
-        {"delay": 150, "text": "[NEURAL] Cognitive models synchronized."},
-        {"delay": 80, "text": "[SYSTEM] All systems nominal. Ready for user input."},
+        {"delay": 200, "text": "[SYSTEM] 09:25:51"},
+        {"delay": 150, "text": "AURA Command Deck Initialized"},
+        {"delay": 100, "text": ""},
+        {"delay": 80, "text": "Status: READY"},
+        {"delay": 80, "text": "System: Online"},
+        {"delay": 80, "text": "Mode: Interactive"},
+        {"delay": 250, "text": ""},
+        {"delay": 100, "text": "Enter your commands or describe what you want to build..."},
     ]
 
     def __init__(self, event_bus: EventBus):
@@ -103,7 +119,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(10, 0, 10, 10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
 
         header_widget = self._create_header()
@@ -112,46 +128,62 @@ class MainWindow(QMainWindow):
         self.chat_display.setObjectName("chat_display")
         self.chat_display.setReadOnly(True)
 
-        # Create a container and layout for the input field
-        input_container = QWidget()
-        input_layout = QHBoxLayout(input_container)
-        input_layout.setContentsMargins(0, 0, 0, 0)  # No extra margins around the input
+        input_container = self._create_input_area()
 
-        self.chat_input = ChatInputTextEdit()
-        self.chat_input.setObjectName("chat_input")
-        self.chat_input.setPlaceholderText("Describe what you want to build... (Shift+Enter for new line)")
-        self.chat_input.sendMessage.connect(self._send_message)
-        self.chat_input.setEnabled(False)
-
-        # Add input and a stretch to make it take up half the space
-        input_layout.addWidget(self.chat_input, 1)  # Stretch factor of 1
-        input_layout.addStretch(1)                    # Matching stretch factor
-
-        # Add widgets to the main layout with stretch factors
-        main_layout.addWidget(header_widget, 0)       # Header takes minimum space
-        main_layout.addWidget(self.chat_display, 1)   # Chat display expands to fill space
-        main_layout.addWidget(input_container, 0)     # Input takes minimum space at the bottom
+        main_layout.addWidget(header_widget)
+        main_layout.addWidget(self.chat_display, 1)
+        main_layout.addWidget(input_container)
 
     def _create_header(self):
-        """Creates the header widget containing the banner and buttons."""
+        """Creates the dedicated header widget with banner and buttons."""
         header_widget = QWidget()
-        header_layout = QVBoxLayout(header_widget)
-        header_layout.setContentsMargins(5, 5, 5, 5)
-        header_layout.setSpacing(10)
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
 
         banner_label = QLabel(self.AURA_ASCII_BANNER)
         banner_label.setObjectName("aura_banner")
         banner_label.setFont(QFont("JetBrains Mono", 10))
-        banner_label.setAlignment(Qt.AlignmentFlag.AlignLeft)  # Align banner to the left
+        banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # Buttons Container
         button_container = QWidget()
-        button_layout = QHBoxLayout(button_container)
+        button_layout = QVBoxLayout(button_container)
+        button_layout.setSpacing(8)
+
+        btn_new_project = QPushButton("New Project")
+        btn_new_project.setObjectName("header_button")
+        btn_load_project = QPushButton("Load Project")
+        btn_load_project.setObjectName("header_button")
+        btn_agent_todo = QPushButton("Agent TODO")
+        btn_agent_todo.setObjectName("header_button")
+
+        button_layout.addWidget(btn_new_project)
+        button_layout.addWidget(btn_load_project)
+        button_layout.addWidget(btn_agent_todo)
         button_layout.addStretch()
 
-        header_layout.addWidget(banner_label)
-        header_layout.addWidget(button_container)
+        header_layout.addStretch(1)
+        header_layout.addWidget(banner_label, 2) # Banner takes twice the space of stretch
+        header_layout.addWidget(button_container, 1) # Buttons take 1 part
 
         return header_widget
+
+    def _create_input_area(self):
+        """Creates the bottom input area."""
+        input_container = QWidget()
+        input_layout = QHBoxLayout(input_container)
+        input_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.chat_input = ChatInputTextEdit()
+        self.chat_input.setObjectName("chat_input")
+        self.chat_input.setPlaceholderText("Describe what you want to build...")
+        self.chat_input.sendMessage.connect(self._send_message)
+        self.chat_input.setEnabled(False)
+
+        input_layout.addWidget(self.chat_input, 1)
+        input_layout.addStretch(1)
+
+        return input_container
 
     def _register_event_handlers(self):
         """Connects UI signals to the event bus."""
@@ -166,10 +198,11 @@ class MainWindow(QMainWindow):
 
     def _start_boot_sequence(self):
         """Starts the boot sequence animation."""
+        self.chat_display.clear()
         self.current_boot_step = 0
         self.boot_timer = QTimer(self)
         self.boot_timer.timeout.connect(self._update_boot_sequence)
-        self.boot_timer.start(500)
+        self.boot_timer.start(50) # Start faster
 
     def _update_boot_sequence(self):
         """Updates the boot sequence display with the next line."""
@@ -188,8 +221,6 @@ class MainWindow(QMainWindow):
         """Finalizes the boot sequence."""
         self.boot_timer.stop()
         self.is_booting = False
-        self.chat_display.append(
-            "<br><span style='color: #00FFFF;'>[AURA]</span> Welcome. I am online and ready to assist.")
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
 
@@ -202,8 +233,8 @@ class MainWindow(QMainWindow):
         self.chat_input.clear()
         self.chat_input.setEnabled(False)
 
-        self.chat_display.append(f"<span style='color: #FFB74D;'>[USER]</span>")
-        self.chat_display.append(f"<div style='padding-left: 15px;'>{user_text.replace(os.linesep, '<br>')}</div><br>")
+        self.chat_display.append(f"<br><span style='color: #FFB74D;'>[USER]</span>")
+        self.chat_display.append(f"<div style='padding-left: 15px;'>{user_text.replace(os.linesep, '<br>')}</div>")
         self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
 
         event = Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text})
@@ -213,7 +244,7 @@ class MainWindow(QMainWindow):
         """Appends a chunk of text from the model to the display."""
         if not self.is_streaming_response:
             self.is_streaming_response = True
-            self.chat_display.append(f"<span style='color: #00FFFF;'>[AURA]</span>")
+            self.chat_display.append(f"<br><span style='color: #00FFFF;'>[AURA]</span>")
             self.chat_display.insertHtml("<div style='padding-left: 15px;'>")
 
         safe_chunk = chunk.replace('\n', '<br>')
@@ -223,7 +254,7 @@ class MainWindow(QMainWindow):
     def _handle_stream_end(self):
         """Called when the model is finished sending chunks."""
         if self.is_streaming_response:
-            self.chat_display.insertHtml("</div><br>")
+            self.chat_display.insertHtml("</div>")
         self.is_streaming_response = False
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
@@ -262,7 +293,6 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         """Override showEvent to position the task log window when the main window is first shown."""
         super().showEvent(event)
-        # The position is only correct after the window is shown, so we call it here.
         QTimer.singleShot(0, self._update_task_log_position)
 
     def closeEvent(self, event):
