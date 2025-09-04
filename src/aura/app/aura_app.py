@@ -7,6 +7,7 @@ from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.task_management_service import TaskManagementService
+from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.config import ASSETS_DIR
 from src.aura.models.events import Event
 from src.ui.windows.main_window import MainWindow
@@ -28,7 +29,8 @@ class AuraApp:
         self._load_fonts()
 
         self.event_bus = EventBus()
-        self.llm_service = LLMService(self.event_bus)
+        self.prompt_manager = PromptManager()
+        self.llm_service = LLMService(self.event_bus, self.prompt_manager)
         self.task_management_service = TaskManagementService(self.event_bus)
         self.main_window = MainWindow(self.event_bus)
         self.task_log_window = TaskLogWindow(self.event_bus)

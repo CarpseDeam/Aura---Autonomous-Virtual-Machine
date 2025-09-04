@@ -19,7 +19,7 @@ class TaskLogWindow(QWidget):
     """
     TASK_LOG_STYLESHEET = """
         QWidget {
-            background-color: #1a1a1a;
+            background-color: #000000;
             color: #dcdcdc;
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
             border: 1px solid #FFB74D; /* Amber */
@@ -38,7 +38,7 @@ class TaskLogWindow(QWidget):
             border: none;
         }
         QLineEdit#task_input {
-            background-color: #2c2c2c;
+            background-color: #000000;
             border: 1px solid #4a4a4a; /* Subtle Grey */
             color: #dcdcdc;
             font-size: 14px;

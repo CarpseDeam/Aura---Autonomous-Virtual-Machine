@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
 
     AURA_STYLESHEET = """
         QMainWindow, QWidget {
-            background-color: #1a1a1a;
+            background-color: #000000;
             color: #dcdcdc;
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
         }
@@ -43,14 +43,14 @@ class MainWindow(QMainWindow):
             padding: 5px;
         }
         QTextEdit#chat_display {
-            background-color: #2c2c2c;
+            background-color: #000000;
             border-top: 1px solid #4a4a4a;
             border-bottom: 1px solid #4a4a4a;
             color: #dcdcdc; /* Light Grey */
             font-size: 14px;
         }
         QTextEdit#chat_input {
-            background-color: #2c2c2c;
+            background-color: #000000;
             border: 1px solid #4a4a4a; /* Subtle Grey */
             color: #dcdcdc;
             font-size: 14px;
@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
             border: 1px solid #FFB74D; /* Amber */
         }
         QPushButton#settings_button {
-            background-color: #2c2c2c;
+            background-color: #000000;
             border: 1px solid #4a4a4a;
             color: #dcdcdc;
             border-radius: 5px;
