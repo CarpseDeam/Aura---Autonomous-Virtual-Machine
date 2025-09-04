@@ -7,9 +7,9 @@ from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.task_management_service import TaskManagementService
-from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.config import ASSETS_DIR
 from src.aura.models.events import Event
+from src.aura.prompts.prompt_manager import PromptManager
 from src.ui.windows.main_window import MainWindow
 from src.ui.windows.task_log_window import TaskLogWindow
 
