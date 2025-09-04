@@ -105,3 +105,12 @@ ENV/
 env/
 env.bak/
 venv.bak/
+
+# Logs
+logs/
+
+# IDE-specific files
+.idea/
+.vscode/
+*.swp
+*~

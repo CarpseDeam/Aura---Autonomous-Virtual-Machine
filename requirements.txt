@@ -3,3 +3,4 @@ python-dotenv
 google-generativeai
 ollama
 jinja2
+pydantic
