@@ -6,8 +6,11 @@ from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
+from src.aura.services.task_management_service import TaskManagementService
 from src.aura.config import ASSETS_DIR
+from src.aura.models.events import Event
 from src.ui.windows.main_window import MainWindow
+from src.ui.windows.task_log_window import TaskLogWindow
 
 
 class AuraApp:
@@ -26,9 +29,15 @@ class AuraApp:
 
         self.event_bus = EventBus()
         self.llm_service = LLMService(self.event_bus)
+        self.task_management_service = TaskManagementService(self.event_bus)
         self.main_window = MainWindow(self.event_bus)
+        self.task_log_window = TaskLogWindow(self.event_bus)
+
+        # Give the main window a reference to the task log for positioning
+        self.main_window.task_log_window = self.task_log_window
 
         self._register_event_handlers()
+        self._dispatch_initial_tasks_for_testing()
         logging.info("AuraApp initialized successfully.")
 
     def _load_fonts(self):
@@ -48,6 +57,19 @@ class AuraApp:
         """Register all event handlers for the application."""
         self.event_bus.subscribe("APP_START", self.on_app_start)
 
+    def _dispatch_initial_tasks_for_testing(self):
+        """Dispatches a few dummy tasks for development and testing."""
+        tasks_to_add = [
+            "Implement the 'Cognitive Router'",
+            "Add Header Buttons & Settings Dialog",
+            "Build the Code Viewer Window"
+        ]
+        for desc in tasks_to_add:
+            self.event_bus.dispatch(Event(
+                event_type="ADD_TASK",
+                payload={"description": desc}
+            ))
+
     def on_app_start(self, event):
         """Example event handler for application start."""
         logging.info(f"AuraApp caught event: {event.event_type}")
@@ -56,4 +78,5 @@ class AuraApp:
         """Shows the main window and starts the application."""
         logging.info("Starting Aura application...")
         self.main_window.show()
+        self.task_log_window.show()
         sys.exit(self.app.exec())
