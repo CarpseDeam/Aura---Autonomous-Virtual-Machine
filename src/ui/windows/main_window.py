@@ -1,15 +1,25 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout
-from PySide6.QtGui import QFont
-from PySide6.QtCore import Qt, QTimer
+import logging
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QLineEdit
+from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+
+logger = logging.getLogger(__name__)
+
+
+# Helper class to run Qt signals from non-GUI threads
+class Signaller(QObject):
+    chunk_received = Signal(str)
+    stream_ended = Signal()
+    error_received = Signal(str)
 
 
 class MainWindow(QMainWindow):
     """
     The main window for the AURA application, serving as the command deck.
     """
-
+    # ... (AURA_ASCII_BANNER remains the same) ...
     AURA_ASCII_BANNER = """
  █████╗ ██╗   ██╗██████╗  █████╗ 
 ██╔══██╗██║   ██║██╔══██╗██╔══██╗
@@ -27,43 +37,52 @@ class MainWindow(QMainWindow):
             font-family: "Courier New", Courier, monospace;
         }
         QLabel#aura_banner {
-            color: #FFB74D;
+            color: #FFB74D; /* Amber */
             font-weight: bold;
             font-size: 10px;
             padding: 5px;
             text-align: center;
         }
-        QTextEdit#boot_sequence_display {
+        QTextEdit#chat_display {
             background-color: transparent;
             border: none;
-            color: #39FF14; /* Neon Green */
+            color: #dcdcdc; /* Light Grey */
             font-size: 14px;
+        }
+        QLineEdit#chat_input {
+            background-color: #2c2c2c;
+            border: 1px solid #FFB74D; /* Amber */
+            color: #dcdcdc;
+            font-size: 14px;
+            padding: 8px;
+            border-radius: 5px;
+        }
+        QLineEdit#chat_input:focus {
+            border: 1px solid #00FFFF; /* Cyan */
         }
     """
 
     BOOT_SEQUENCE = [
-        {"delay": 500, "text": "[KERNEL] AURA KERNEL V4.0 ... ONLINE"},
-        {"delay": 200, "text": "[SYSTEM] Establishing secure link to command deck..."},
-        {"delay": 300, "text": "[NEURAL] Cognitive models synchronized."},
-        {"delay": 150, "text": "[SYSTEM] All systems nominal. Ready for user input."},
-        {"delay": 0, "text": "\n[AURA] Welcome. How can I assist you today?"}
+        {"delay": 200, "text": "[KERNEL] AURA KERNEL V4.0 ... ONLINE"},
+        {"delay": 100, "text": "[SYSTEM] Establishing secure link to command deck..."},
+        {"delay": 150, "text": "[NEURAL] Cognitive models synchronized."},
+        {"delay": 80, "text": "[SYSTEM] All systems nominal. Ready for user input."},
     ]
 
     def __init__(self, event_bus: EventBus):
-        """
-        Initializes the MainWindow.
-
-        Args:
-            event_bus: The application's central event bus.
-        """
+        """Initializes the MainWindow."""
         super().__init__()
         self.event_bus = event_bus
         self.setWindowTitle("Aura - Command Deck")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 900, 700)
         self.setStyleSheet(self.AURA_STYLESHEET)
 
-        self.current_boot_step = 0
+        self.is_booting = True
+        self.is_streaming_response = False
+        self.signaller = Signaller()
+
         self._init_ui()
+        self._register_event_handlers()
         self._start_boot_sequence()
 
     def _init_ui(self):
@@ -72,63 +91,121 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(10, 0, 10, 10)
+        main_layout.setSpacing(10)
 
-        # Header (Banner and Buttons)
         header_widget = self._create_header()
         main_layout.addWidget(header_widget)
 
-        # Main content area for boot sequence/chat
-        self.boot_sequence_display = QTextEdit()
-        self.boot_sequence_display.setObjectName("boot_sequence_display")
-        self.boot_sequence_display.setReadOnly(True)
-        main_layout.addWidget(self.boot_sequence_display)
+        self.chat_display = QTextEdit()
+        self.chat_display.setObjectName("chat_display")
+        self.chat_display.setReadOnly(True)
+        main_layout.addWidget(self.chat_display)
 
-        # We will add the input text box here later
+        self.chat_input = QLineEdit()
+        self.chat_input.setObjectName("chat_input")
+        self.chat_input.setPlaceholderText("Describe what you want to build...")
+        self.chat_input.returnPressed.connect(self._send_message)
+        self.chat_input.setEnabled(False)  # Disabled until boot sequence finishes
+        main_layout.addWidget(self.chat_input)
 
     def _create_header(self):
         """Creates the header widget containing the banner and buttons."""
+        # ... (This method remains the same) ...
         header_widget = QWidget()
         header_layout = QVBoxLayout(header_widget)
         header_layout.setContentsMargins(5, 5, 5, 5)
         header_layout.setSpacing(10)
 
-        # AURA Banner
         banner_label = QLabel(self.AURA_ASCII_BANNER)
         banner_label.setObjectName("aura_banner")
         banner_label.setFont(QFont("Courier New", 10))
         banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Placeholder for buttons
         button_container = QWidget()
         button_layout = QHBoxLayout(button_container)
-        button_layout.addStretch()  # For now, we will add buttons later
+        button_layout.addStretch()
 
         header_layout.addWidget(banner_label)
         header_layout.addWidget(button_container)
 
         return header_widget
 
+    def _register_event_handlers(self):
+        """Connects UI signals to the event bus."""
+        # Use a signaller to safely update UI from other threads
+        self.signaller.chunk_received.connect(self._handle_model_chunk)
+        self.signaller.stream_ended.connect(self._handle_stream_end)
+        self.signaller.error_received.connect(self._handle_model_error)
+
+        self.event_bus.subscribe("MODEL_CHUNK_RECEIVED",
+                                 lambda event: self.signaller.chunk_received.emit(event.payload.get("chunk", "")))
+        self.event_bus.subscribe("MODEL_STREAM_ENDED", lambda event: self.signaller.stream_ended.emit())
+        self.event_bus.subscribe("MODEL_ERROR", lambda event: self.signaller.error_received.emit(
+            event.payload.get("message", "Unknown error")))
+
     def _start_boot_sequence(self):
         """Starts the boot sequence animation."""
-        self.event_bus.dispatch(Event(event_type="APP_START"))
+        self.current_boot_step = 0
         self.boot_timer = QTimer(self)
         self.boot_timer.timeout.connect(self._update_boot_sequence)
-        self.boot_timer.start(500)  # Initial delay for the first line
+        self.boot_timer.start(500)
 
     def _update_boot_sequence(self):
         """Updates the boot sequence display with the next line."""
         if self.current_boot_step < len(self.BOOT_SEQUENCE):
             line_info = self.BOOT_SEQUENCE[self.current_boot_step]
-            self.boot_sequence_display.append(line_info["text"])
+            self.chat_display.append(f"<span style='color: #39FF14;'>{line_info['text']}</span>")  # Neon Green
             self.current_boot_step += 1
-
-            # Set timer for the next line's delay
             if self.current_boot_step < len(self.BOOT_SEQUENCE):
-                next_delay = self.BOOT_SEQUENCE[self.current_boot_step]["delay"]
-                self.boot_timer.setInterval(next_delay)
+                self.boot_timer.setInterval(self.BOOT_SEQUENCE[self.current_boot_step]["delay"])
             else:
-                self.boot_timer.stop()
+                self._end_boot_sequence()
         else:
-            self.boot_timer.stop()
+            self._end_boot_sequence()
+
+    def _end_boot_sequence(self):
+        """Finalizes the boot sequence."""
+        self.boot_timer.stop()
+        self.is_booting = False
+        self.chat_display.append(
+            "<br><span style='color: #00FFFF;'>[AURA]</span> Welcome. I am online and ready to assist.")  # Cyan
+        self.chat_input.setEnabled(True)
+        self.chat_input.setFocus()
+
+    def _send_message(self):
+        """Sends the user's message from the input box."""
+        user_text = self.chat_input.text().strip()
+        if not user_text:
+            return
+
+        self.chat_input.clear()
+        self.chat_input.setEnabled(False)
+        self.chat_display.append(f"<br><span style='color: #FFB74D;'>[USER]</span> {user_text}")  # Amber
+        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+
+        event = Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text})
+        self.event_bus.dispatch(event)
+
+    def _handle_model_chunk(self, chunk: str):
+        """Appends a chunk of text from the model to the display."""
+        if not self.is_streaming_response:
+            self.is_streaming_response = True
+            self.chat_display.insertHtml("<br><span style='color: #00FFFF;'>[AURA]</span> ")  # Cyan
+
+        # Replace newlines with HTML line breaks for proper rendering
+        safe_chunk = chunk.replace('\n', '<br>')
+        self.chat_display.insertHtml(safe_chunk)
+        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+
+    def _handle_stream_end(self):
+        """Called when the model is finished sending chunks."""
+        self.is_streaming_response = False
+        self.chat_input.setEnabled(True)
+        self.chat_input.setFocus()
+        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+
+    def _handle_model_error(self, error_message: str):
+        """Displays an error message in the chat."""
+        self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] {error_message}</span>")  # Red
+        self._handle_stream_end()
