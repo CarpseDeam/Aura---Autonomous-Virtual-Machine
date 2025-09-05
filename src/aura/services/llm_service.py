@@ -8,6 +8,7 @@ from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.models.intent import Intent
+from src.aura.config import AGENT_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -28,23 +29,29 @@ class LLMService:
         self.event_bus = event_bus
         self.prompt_manager = prompt_manager
         self.task_management_service = task_management_service
-        self.model = None
+        self.models = {}
+        self.generation_configs = {}
         self._configure_client()
         self._register_event_handlers()
 
     def _configure_client(self):
-        """Configures the Gemini client using the API key from environment variables."""
+        """Configures the Gemini client for all agents using the API key from environment variables."""
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key or api_key == "YOUR_API_KEY_HERE":
             logger.critical("GEMINI_API_KEY not found or not set. LLMService will be disabled.")
             return
         try:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-1.5-pro-latest')
-            logger.info("Gemini client configured successfully.")
+            for agent_name, config in AGENT_CONFIG.items():
+                self.models[agent_name] = genai.GenerativeModel(config["model"])
+                self.generation_configs[agent_name] = genai.GenerationConfig(
+                    temperature=config["temperature"],
+                    top_p=config["top_p"],
+                )
+            logger.info(f"Gemini clients configured successfully for agents: {list(self.models.keys())}")
         except Exception as e:
             logger.critical(f"Failed to configure Gemini client: {e}", exc_info=True)
-            self.model = None
+            self.models = {}
 
     def _register_event_handlers(self):
         """Subscribes the service to relevant events from the event bus."""
@@ -57,7 +64,7 @@ class LLMService:
         the user's request, starting with intent detection.
         """
         prompt = event.payload.get("text")
-        if not self.model or not prompt:
+        if not self.models or not prompt:
             self._handle_error("LLM not configured or empty prompt.")
             return
 
@@ -79,8 +86,6 @@ class LLMService:
             return
 
         logger.info(f"Engineer Agent activated for task: '{task.description}'")
-        # For now, we assume the task description implies the filename.
-        # This will become more robust later.
         file_path = f"generated/{task.description.split('`')[1]}" if '`' in task.description else "generated/file.py"
 
         engineer_prompt = self.prompt_manager.render(
@@ -93,7 +98,6 @@ class LLMService:
             self._handle_error("Failed to render the engineer prompt.")
             return
 
-        # Run code generation in a thread to keep the UI responsive.
         thread = threading.Thread(target=self._generate_code, args=(engineer_prompt, file_path))
         thread.start()
 
@@ -101,26 +105,33 @@ class LLMService:
         """
         The Engineer Agent's core logic for generating code.
         """
+        agent_name = "engineer_agent"
+        model = self.models.get(agent_name)
+        if not model:
+            self._handle_error(f"Model for agent '{agent_name}' is not configured.")
+            return
+        
         try:
-            logger.info("Sending prompt to Engineer Agent for code generation...")
-            # This is a non-streaming call because we want the full code at once.
-            response = self.model.generate_content(prompt)
-            generated_code = response.text
-
-            # Clean up the response to get only the raw code
-            if "```python" in generated_code:
-                generated_code = generated_code.split("```python\n")[1].split("```")
-            elif "```" in generated_code:
-                 generated_code = generated_code.split("```\n").split("```")[0]
+            logger.info(f"Sending prompt to Engineer Agent ('{agent_name}' config) for code generation...")
+            config = self.generation_configs.get(agent_name)
+            response = model.generate_content(prompt, generation_config=config)
+            
+            code_block = response.text
+            if "```python" in code_block:
+                code_block = code_block.split("```python\n", 1)[1]
+                code_block = code_block.split("```", 1)[0]
+            elif "```" in code_block:
+                code_block = code_block.split("```\n", 1)[1]
+                code_block = code_block.split("```", 1)[0]
+            
+            generated_code = code_block.strip()
 
             logger.info(f"Code generation successful for file: {file_path}")
-            # TODO: In the future, this event will be caught by the Code Viewer window
-            # For now, we'll log it and send a success message to the main chat.
             print("--- GENERATED CODE ---")
             print(generated_code)
             print("----------------------")
 
-            success_prompt = f"Confirm that the Engineer Agent has successfully generated the code for the task: '{file_path}'. State that it is ready for review."
+            success_prompt = f"Confirm that the Engineer Agent has successfully generated the code for the file: '{file_path}'. State that it is ready for review."
             self._stream_generation(success_prompt)
 
         except Exception as e:
@@ -138,7 +149,7 @@ class LLMService:
 
             if intent == Intent.PLANNING_SESSION:
                 self._handle_planning_session(user_prompt)
-            else: # Default to chitchat for CHITCHAT or UNKNOWN
+            else:
                 self._stream_generation(user_prompt)
 
         except Exception as e:
@@ -147,6 +158,12 @@ class LLMService:
 
     def _detect_intent(self, user_prompt: str) -> Intent:
         """Calls the LLM with a specific prompt to classify the user's intent."""
+        agent_name = "cognitive_router"
+        model = self.models.get(agent_name)
+        if not model:
+            logger.error(f"Model for agent '{agent_name}' is not configured.")
+            return Intent.UNKNOWN
+            
         try:
             prompt = self.prompt_manager.render(
                 "detect_intent.jinja2",
@@ -154,14 +171,15 @@ class LLMService:
             )
             if not prompt: return Intent.UNKNOWN
 
-            response = self.model.generate_content(prompt)
+            config = self.generation_configs.get(agent_name)
+            response = model.generate_content(prompt, generation_config=config)
             response_text = response.text.strip().replace("```json", "").replace("```", "")
             data = json.loads(response_text)
             intent_str = data.get("intent", "UNKNOWN").upper()
             return Intent(intent_str)
 
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning(f"Could not parse intent from LLM response: {response.text}. Error: {e}")
+            logger.warning(f"Could not parse intent from LLM response: '{response.text}'. Error: {e}")
             return Intent.UNKNOWN
         except Exception as e:
             logger.error(f"Error during intent detection: {e}", exc_info=True)
@@ -179,9 +197,16 @@ class LLMService:
 
     def _stream_generation(self, prompt: str):
         """Generates content from the LLM and streams the response."""
+        agent_name = "default_streaming"
+        model = self.models.get(agent_name)
+        if not model:
+            self._handle_error(f"Model for agent '{agent_name}' is not configured.")
+            return
+            
         try:
-            logger.info(f"Sending prompt to Gemini for streaming: '{prompt[:80]}...'")
-            response_stream = self.model.generate_content(prompt, stream=True)
+            logger.info(f"Sending prompt to Gemini for streaming ('{agent_name}' config): '{prompt[:80]}...'" )
+            config = self.generation_configs.get(agent_name)
+            response_stream = model.generate_content(prompt, stream=True, generation_config=config)
 
             for chunk in response_stream:
                 self.event_bus.dispatch(Event(
