@@ -7,6 +7,7 @@ from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.config import ASSETS_DIR
 from src.ui.widgets.chat_input import ChatInputTextEdit
+from src.ui.windows.settings_window import SettingsWindow
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class MainWindow(QMainWindow):
 
     AURA_STYLESHEET = """
         QMainWindow, QWidget {
-            background-color: #1a1a1a;
+            background-color: #000000;
             color: #dcdcdc;
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
         }
@@ -92,6 +93,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.event_bus = event_bus
         self.task_log_window = None  # Will be set by AuraApp
+        self.settings_window = None  # To hold the settings window instance
         self.setWindowTitle("Aura - Command Deck")
         self.setGeometry(100, 100, 900, 700)
 
@@ -195,8 +197,10 @@ class MainWindow(QMainWindow):
             event.payload.get("message", "Unknown error")))
 
     def _open_settings_dialog(self):
-        """Placeholder for opening the settings dialog."""
-        logger.info("Configure Agents button clicked. This will open the settings dialog.")
+        """Opens the settings dialog, creating it if it doesn't exist."""
+        if self.settings_window is None:
+            self.settings_window = SettingsWindow()
+        self.settings_window.show()
 
     def _start_boot_sequence(self):
         """Starts the boot sequence animation."""

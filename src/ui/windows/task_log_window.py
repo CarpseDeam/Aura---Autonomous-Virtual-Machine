@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton
 from PySide6.QtCore import Qt, Signal, QObject
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
@@ -21,7 +21,7 @@ class TaskLogWindow(QWidget):
     """
     TASK_LOG_STYLESHEET = """
         QWidget {
-            background-color: #1a1a1a;
+            background-color: #000000;
             color: #dcdcdc;
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
             border: 1px solid #FFB74D; /* Amber */
@@ -45,6 +45,17 @@ class TaskLogWindow(QWidget):
         }
         QLineEdit#task_input:focus {
             border: 1px solid #FFB74D; /* Amber */
+        }
+        QPushButton#dispatch_button {
+            background-color: #FFB74D; /* Amber */
+            color: #000000;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 8px;
+            border-radius: 5px;
+        }
+        QPushButton#dispatch_button:hover {
+            background-color: #FFA726; /* Lighter Amber */
         }
     """
 
@@ -82,9 +93,14 @@ class TaskLogWindow(QWidget):
         self.task_input.setPlaceholderText("Add a new task...")
         self.task_input.returnPressed.connect(self._add_task_from_input)
 
+        self.dispatch_button = QPushButton("Dispatch All Tasks")
+        self.dispatch_button.setObjectName("dispatch_button")
+        self.dispatch_button.clicked.connect(self._dispatch_all_tasks)
+
         self.main_layout.addWidget(title_label)
         self.main_layout.addWidget(self.task_list_container, 1)
         self.main_layout.addWidget(self.task_input)
+        self.main_layout.addWidget(self.dispatch_button)
 
     def _register_event_handlers(self):
         """Subscribe to events from the event bus."""
@@ -99,21 +115,22 @@ class TaskLogWindow(QWidget):
         description = self.task_input.text().strip()
         if not description:
             return
-
         self.task_input.clear()
-        logger.info(f"User added new task via input: '{description}'")
         self.event_bus.dispatch(Event(
             event_type="ADD_TASK",
             payload={"description": description}
         ))
 
-    def _dispatch_task(self, task_id: str):
-        """Fires the DISPATCH_TASK event."""
-        logger.info(f"Dispatching task with ID: {task_id}")
-        self.event_bus.dispatch(Event(
-            event_type="DISPATCH_TASK",
-            payload={"task_id": task_id}
-        ))
+    def _dispatch_all_tasks(self):
+        """Fires the DISPATCH_ALL_TASKS event."""
+        logger.info("Dispatch all tasks button clicked.")
+        # We will create a new event for this bulk action
+        self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
+
+        # For immediate user feedback, we can disable the button.
+        # It will be re-enabled when the task list is cleared or updated.
+        self.dispatch_button.setText("Dispatching...")
+        self.dispatch_button.setEnabled(False)
 
     def _on_tasks_updated(self, tasks: List[Dict]):
         """Clears and redraws the task list with interactive widgets."""
@@ -131,5 +148,8 @@ class TaskLogWindow(QWidget):
             for task_data in tasks:
                 task = Task(**task_data)
                 task_widget = TaskWidgetItem(task)
-                task_widget.task_dispatched.connect(self._dispatch_task)
                 self.task_list_layout.addWidget(task_widget)
+
+        # Re-enable the dispatch button whenever the list updates
+        self.dispatch_button.setText("Dispatch All Tasks")
+        self.dispatch_button.setEnabled(bool(tasks))

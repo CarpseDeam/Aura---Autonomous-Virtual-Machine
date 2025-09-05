@@ -43,7 +43,6 @@ class AuraApp:
         self.main_window.task_log_window = self.task_log_window
 
         self._register_event_handlers()
-        self._dispatch_initial_tasks_for_testing()
         logging.info("AuraApp initialized successfully.")
 
     def _load_fonts(self):
@@ -62,18 +61,6 @@ class AuraApp:
     def _register_event_handlers(self):
         """Register all event handlers for the application."""
         self.event_bus.subscribe("APP_START", self.on_app_start)
-
-    def _dispatch_initial_tasks_for_testing(self):
-        """Dispatches a few dummy tasks for development and testing."""
-        tasks_to_add = [
-            "Create a file named `main.py` that prints 'Hello, World!' to the console.",
-            "Create a file named `utils.py` with a function that adds two numbers.",
-        ]
-        for desc in tasks_to_add:
-            self.event_bus.dispatch(Event(
-                event_type="ADD_TASK",
-                payload={"description": desc}
-            ))
 
     def on_app_start(self, event):
         """Example event handler for application start."""
