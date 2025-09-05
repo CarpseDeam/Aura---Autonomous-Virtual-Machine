@@ -11,17 +11,17 @@ LOGS_DIR = ROOT_DIR / "logs"
 # Agent Configurations
 AGENT_CONFIG = {
     "cognitive_router": {
-        "model": "gemini-1.5-pro-latest",
+        "model": "gemini-2.5-pro",
         "temperature": 0.2,
         "top_p": 0.8,
     },
     "default_streaming": {
-        "model": "gemini-1.5-pro-latest",
+        "model": "gemini-2.5-pro",
         "temperature": 0.7,
         "top_p": 1.0,
     },
     "engineer_agent": {
-        "model": "gemini-1.5-pro-latest",
+        "model": "gemini-2.5-pro",
         "temperature": 0.1,
         "top_p": 1.0,
     }
