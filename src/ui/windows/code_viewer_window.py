@@ -1,4 +1,5 @@
 import logging
+import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QSplitter,
                                QTreeWidget, QTreeWidgetItem, QTabWidget, QTextEdit, QApplication)
 from PySide6.QtCore import Qt, Signal, QObject, Slot
@@ -72,6 +73,7 @@ class CodeViewerWindow(QWidget):
         self.event_bus = event_bus
         self.signaller = CodeViewerSignaller()
         self.open_tabs = {}  # Maps file_path to its editor widget
+        self.tree_items = {} # Maps a full path to its tree widget item for quick lookup
 
         self.setWindowTitle("Code Viewer")
         self.setWindowFlags(Qt.WindowType.Tool)
@@ -116,6 +118,28 @@ class CodeViewerWindow(QWidget):
             lambda event: self.signaller.code_generated.emit(event.payload)
         )
 
+    def _add_path_to_tree(self, file_path: str):
+        """Adds a file path to the tree, creating parent directories as needed."""
+        path_parts = file_path.replace("\\", "/").split("/")
+        current_parent_item = self.file_tree.invisibleRootItem()
+        current_path_key = ""
+
+        for part in path_parts:
+            if not current_path_key:
+                current_path_key = part
+            else:
+                current_path_key = f"{current_path_key}/{part}"
+
+            child_item = self.tree_items.get(current_path_key)
+
+            if not child_item:
+                child_item = QTreeWidgetItem([part])
+                child_item.setData(0, Qt.ItemDataRole.UserRole, current_path_key)
+                current_parent_item.addChild(child_item)
+                self.tree_items[current_path_key] = child_item
+            
+            current_parent_item = child_item
+
     @Slot(dict)
     def _on_code_generated(self, payload: dict):
         """Handles the code_generated signal to update the UI."""
@@ -126,12 +150,8 @@ class CodeViewerWindow(QWidget):
             logger.warning("CODE_GENERATED event received with missing payload.")
             return
 
-        # Add file to tree if it doesn't exist
-        if not self.file_tree.findItems(file_path, Qt.MatchFlag.MatchExactly):
-            tree_item = QTreeWidgetItem([file_path])
-            self.file_tree.addTopLevelItem(tree_item)
+        self._add_path_to_tree(file_path)
 
-        # Create or update tab
         if file_path in self.open_tabs:
             editor = self.open_tabs[file_path]
             editor.setPlainText(code)
@@ -144,28 +164,24 @@ class CodeViewerWindow(QWidget):
             highlighter = PythonSyntaxHighlighter(editor.document())
 
             self.open_tabs[file_path] = editor
-            tab_index = self.tab_widget.addTab(editor, file_path.split('/')[-1])
+            tab_index = self.tab_widget.addTab(editor, os.path.basename(file_path))
             self.tab_widget.setCurrentIndex(tab_index)
             self.tab_widget.setTabToolTip(tab_index, file_path)
 
-    @Slot(QTreeWidgetItem)
+    @Slot(QTreeWidgetItem, int)
     def _on_file_tree_item_clicked(self, item: QTreeWidgetItem, column: int):
         """Handles clicks on the file tree to open/focus tabs."""
-        file_path = item.text(0)
-        if file_path in self.open_tabs:
+        file_path = item.data(0, Qt.ItemDataRole.UserRole)
+        if file_path and file_path in self.open_tabs:
             editor = self.open_tabs[file_path]
             tab_index = self.tab_widget.indexOf(editor)
             self.tab_widget.setCurrentIndex(tab_index)
-        else:
-            # This case shouldn't normally be hit if code is always added via event
-            logger.warning(f"File '{file_path}' clicked in tree but not found in open tabs.")
 
     @Slot(int)
     def _close_tab(self, index: int):
         """Closes a tab and removes it from our tracking dictionary."""
         widget = self.tab_widget.widget(index)
         if widget:
-            # Find the file_path associated with this widget
             file_path_to_remove = None
             for path, editor in self.open_tabs.items():
                 if editor == widget:

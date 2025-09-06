@@ -120,15 +120,24 @@ class LLMService:
 
     def handle_dispatch_task(self, event: Event):
         """Handles dispatched tasks by routing them to the engineer agent."""
-        task = self.task_management_service.get_task_by_id(event.payload.get("task_id"))
+        task_id = event.payload.get("task_id")
+        if not task_id:
+            self._handle_error("Dispatch event received with no task_id.")
+            return
+
+        task = self.task_management_service.get_task_by_id(task_id)
         if not task:
-            self._handle_error(f"Could not find task with ID {event.payload.get('task_id')}")
+            self._handle_error(f"Could not find task with ID {task_id}")
             return
 
         logger.info(f"Engineer Agent activated for task: '{task.description}'")
-        file_path = f"generated/{task.description.split('`')[1]}" if '`' in task.description else "generated/file.py"
+        try:
+            file_path = task.description.split('`')[1]
+        except IndexError:
+            logger.warning(f"Could not extract file path from task: '{task.description}'. Using a default.")
+            file_path = "generated/default.py"
 
-        prompt = self.prompt_мanager.render(
+        prompt = self.prompt_manager.render(
             "generate_code.jinja2",
             task_description=task.description,
             file_path=file_path
@@ -137,8 +146,37 @@ class LLMService:
             self._handle_error("Failed to render the engineer prompt.")
             return
 
-        thread = threading.Thread(target=self._stream_generation, args=(prompt, "engineer_agent"))
+        # We will now run the code generation in a thread to avoid blocking the UI.
+        thread = threading.Thread(target=self._generate_and_dispatch_code, args=(prompt, "engineer_agent", file_path))
         thread.start()
+
+    def _generate_and_dispatch_code(self, prompt: str, agent_name: str, file_path: str):
+        """Generates code and dispatches it in a dedicated thread."""
+        provider, model_name, config = self._get_provider_for_agent(agent_name)
+        if not provider or not model_name:
+            self._handle_error(f"Agent '{agent_name}' is not configured for code generation.")
+            return
+
+        try:
+            logger.info(f"Generating code for '{file_path}' with agent '{agent_name}'.")
+            response_stream = provider.stream_chat(model_name, prompt, config)
+            full_code = "".join(list(response_stream))
+
+            if full_code.startswith("ERROR:"):
+                self._handle_error(full_code)
+                return
+
+            # Dispatch the completed code to the Code Viewer
+            code_generated_event = Event(
+                event_type="CODE_GENERATED",
+                payload={"file_path": file_path, "code": full_code}
+            )
+            self.event_bus.dispatch(code_generated_event)
+            logger.info(f"Successfully generated and dispatched code for '{file_path}'.")
+
+        except Exception as e:
+            logger.error(f"Error during code generation thread for {file_path}: {e}", exc_info=True)
+            self._handle_error(f"A critical error occurred while generating code for {file_path}.")
 
     def _handle_conversation(self, user_prompt: str):
         """
@@ -153,11 +191,14 @@ class LLMService:
         try:
             prompt = self.prompt_manager.render("lead_companion_master.jinja2", user_prompt=user_prompt)
             response_stream = provider.stream_chat(model_name, prompt, config)
+            # Buffer the full response to check for tool calls
             full_response = "".join(list(response_stream))
 
+            # This is the "Cognitive Loop" decision point
             if "tool_name" in full_response:
                 self._handle_tool_call(full_response)
             else:
+                # If no tool, it's a standard chat response. Dispatch it.
                 self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": full_response}))
                 self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED"))
 
@@ -180,6 +221,7 @@ class LLMService:
 
         except json.JSONDecodeError:
             logger.error(f"Failed to decode tool call JSON: {tool_call_json}")
+            # If the AI messes up the JSON, tell the user gracefully.
             self._stream_generation(
                 f"My apologies, I had a formatting error in my thinking process. Could you please rephrase your request? Original request: {tool_call_json}",
                 "lead_companion_agent"
@@ -197,6 +239,7 @@ class LLMService:
             response_stream = provider.stream_chat(model_name, prompt, config)
             full_response = "".join(list(response_stream))
 
+            # Clean up potential markdown backticks from the response
             plan_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
             tasks = plan_data.get("plan", [])
 
@@ -204,9 +247,11 @@ class LLMService:
                 self._handle_error("The Architect returned an empty plan.")
                 return
 
+            # Add all the planned tasks to Mission Control!
             for task in tasks:
                 self.event_bus.dispatch(Event("ADD_TASK", {"description": task["description"]}))
 
+            # Send a confirmation message back to the user
             confirmation_prompt = "Excellent! I've drafted a plan and added it to Mission Control. Take a look and let me know when you're ready to start building. You can dispatch them all at once or we can refine the plan further."
             self._stream_generation(confirmation_prompt, "lead_companion_agent")
 
