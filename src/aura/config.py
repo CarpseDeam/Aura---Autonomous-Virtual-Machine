@@ -16,9 +16,14 @@ AGENT_CONFIG = {
         "temperature": 0.2,
         "top_p": 0.8,
     },
-    "default_streaming": {
+    "lead_companion_agent": {
         "model": "gemini-2.5-pro",
         "temperature": 0.7,
+        "top_p": 1.0,
+    },
+    "architect_agent": {
+        "model": "gemini-2.5-pro",
+        "temperature": 0.1,
         "top_p": 1.0,
     },
     "engineer_agent": {

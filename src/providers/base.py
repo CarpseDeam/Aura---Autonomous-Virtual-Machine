@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Dict, Any, Generator
 
 
 class LLMProvider(ABC):
@@ -21,5 +21,25 @@ class LLMProvider(ABC):
 
         Returns:
             A list of strings, where each string is a model identifier.
+        """
+        pass
+
+    @abstractmethod
+    def stream_chat(
+        self,
+        model_name: str,
+        prompt: str,
+        config: Dict[str, Any]
+    ) -> Generator[str, None, None]:
+        """
+        Streams a chat response from the provider's API.
+
+        Args:
+            model_name: The specific model to use for the chat.
+            prompt: The user's input prompt.
+            config: A dictionary containing generation parameters like 'temperature' and 'top_p'.
+
+        Yields:
+            A stream of strings, where each string is a chunk of the response.
         """
         pass

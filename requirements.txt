@@ -4,3 +4,4 @@ google-generativeai
 ollama
 jinja2
 pydantic
+requests

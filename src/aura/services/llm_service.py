@@ -3,38 +3,57 @@ import logging
 import threading
 import json
 import copy
-import google.generativeai as genai
+from typing import Dict
+
+# Application-specific imports
 from src.aura.app.event_bus import EventBus
+from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
 from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
+
 from src.aura.services.task_management_service import TaskManagementService
-from src.aura.models.intent import Intent
-from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
+from src.providers.gemini_provider import GeminiProvider
+from src.providers.ollama_provider import OllamaProvider
 
 logger = logging.getLogger(__name__)
 
 
 class LLMService:
     """
-    Handles all interactions with the language model providers (e.g., Gemini).
-    This service now includes the "Cognitive Router" to detect user intent.
+    A dispatcher service that routes LLM requests to the appropriate provider
+    based on user-configured agent settings.
     """
 
     def __init__(
-        self,
-        event_bus: EventBus,
-        prompt_manager: PromptManager,
-        task_management_service: TaskManagementService
+            self,
+            event_bus: EventBus,
+            prompt_manager: PromptManager,
+            task_management_service: TaskManagementService
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
         self.prompt_manager = prompt_manager
         self.task_management_service = task_management_service
-        self.models = {}
-        self.generation_configs = {}
+
         self.agent_config = {}
-        self._configure_client()
+        self.providers = {}
+        self.model_to_provider_map = {}
+
+        self._load_providers()
+        self._load_agent_configurations()
         self._register_event_handlers()
+
+    def _load_providers(self):
+        """Initializes providers and builds a map of models to their provider."""
+        logger.info("Loading LLM providers...")
+        provider_instances = [GeminiProvider(), OllamaProvider()]
+
+        for provider in provider_instances:
+            self.providers[provider.provider_name] = provider
+            models = provider.get_available_models()
+            for model_name in models:
+                self.model_to_provider_map[model_name] = provider.provider_name
+        logger.info(f"Loaded {len(self.providers)} providers managing {len(self.model_to_provider_map)} models.")
 
     def _load_agent_configurations(self):
         """Loads agent configurations, merging user settings over defaults."""
@@ -49,222 +68,166 @@ class LLMService:
 
                 for agent_name, user_settings in user_config.items():
                     if agent_name in config:
-                        config[agent_name].update(user_settings)
+                        if user_settings.get("model"):
+                            config[agent_name].update(user_settings)
                     else:
                         config[agent_name] = user_settings
             except (IOError, json.JSONDecodeError) as e:
-                logger.error(f"Failed to load or parse user settings from {SETTINGS_FILE}: {e}. Using defaults.")
+                logger.error(f"Failed to load or parse user settings: {e}. Using defaults.")
 
         self.agent_config = config
-        logger.info(f"Final agent configurations loaded.")
-
-
-    def _configure_client(self):
-        """Configures the Gemini client for all agents using the API key from environment variables."""
-        self._load_agent_configurations()
-
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key or api_key == "YOUR_API_KEY_HERE":
-            logger.critical("GEMINI_API_KEY not found or not set. LLMService will be disabled.")
-            return
-        try:
-            genai.configure(api_key=api_key)
-            for agent_name, config in self.agent_config.items():
-                model_name = config.get("model", "")
-                if 'gemini' in model_name:
-                    self.models[agent_name] = genai.GenerativeModel(model_name)
-                    self.generation_configs[agent_name] = genai.GenerationConfig(
-                        temperature=config["temperature"],
-                        top_p=config.get("top_p", 1.0),
-                    )
-                else:
-                    logger.warning(f"Skipping configuration for agent '{agent_name}'. Model '{model_name}' is not a Gemini model. Multi-provider support is not yet fully implemented in LLMService.")
-
-            logger.info(f"Gemini clients configured successfully for agents: {list(self.models.keys())}")
-        except Exception as e:
-            logger.critical(f"Failed to configure Gemini client: {e}", exc_info=True)
-            self.models = {}
+        logger.info("Final agent configurations loaded.")
 
     def _register_event_handlers(self):
-        """Subscribes the service to relevant events from the event bus."""
+        """Subscribes the service to relevant events."""
         self.event_bus.subscribe("SEND_USER_MESSAGE", self.handle_user_message)
         self.event_bus.subscribe("DISPATCH_TASK", self.handle_dispatch_task)
-        self.event_bus.subscribe("RELOAD_LLM_CONFIG", lambda event: self._configure_client())
+        self.event_bus.subscribe("RELOAD_LLM_CONFIG", lambda event: self._load_agent_configurations())
 
+    def _get_provider_for_agent(self, agent_name: str) -> tuple[any, str, Dict]:
+        """Determines the correct provider and model for a given agent."""
+        config = self.agent_config.get(agent_name)
+        if not config: return None, None, None
+
+        model_name = config.get("model")
+        if not model_name: return None, None, config
+
+        provider_name = self.model_to_provider_map.get(model_name)
+        if not provider_name:
+            if 'gemini' in model_name: provider_name = 'Google'
+
+        provider = self.providers.get(provider_name)
+        return provider, model_name, config
 
     def handle_user_message(self, event: Event):
-        """
-        Handles the SEND_USER_MESSAGE event by starting a new thread to process
-        the user's request, starting with intent detection.
-        """
+        """Handles user messages by routing them through the lead companion's cognitive loop."""
         prompt = event.payload.get("text")
-        if not self.models or not prompt:
-            # Check if any models are configured at all
-            if not self.agent_config:
-                 self._handle_error("LLM configurations not loaded.")
-                 return
-            self._handle_error("LLM not configured or empty prompt. Please select a valid Gemini model in settings.")
-            return
+        if not prompt: return
 
-        thread = threading.Thread(target=self._cognitive_router, args=(prompt,))
+        thread = threading.Thread(target=self._handle_conversation, args=(prompt,))
         thread.start()
 
     def handle_dispatch_task(self, event: Event):
-        """
-        Handles the DISPATCH_TASK event, activating the Engineer Agent.
-        """
-        task_id = event.payload.get("task_id")
-        if not task_id:
-            logger.warning("DISPATCH_TASK event received with no task_id.")
-            return
-
-        task = self.task_management_service.get_task_by_id(task_id)
+        """Handles dispatched tasks by routing them to the engineer agent."""
+        task = self.task_management_service.get_task_by_id(event.payload.get("task_id"))
         if not task:
-            self._handle_error(f"Could not find task with ID {task_id} to dispatch.")
+            self._handle_error(f"Could not find task with ID {event.payload.get('task_id')}")
             return
 
         logger.info(f"Engineer Agent activated for task: '{task.description}'")
         file_path = f"generated/{task.description.split('`')[1]}" if '`' in task.description else "generated/file.py"
 
-        engineer_prompt = self.prompt_manager.render(
+        prompt = self.prompt_мanager.render(
             "generate_code.jinja2",
             task_description=task.description,
             file_path=file_path
         )
-
-        if not engineer_prompt:
+        if not prompt:
             self._handle_error("Failed to render the engineer prompt.")
             return
 
-        thread = threading.Thread(target=self._generate_code, args=(engineer_prompt, file_path))
+        thread = threading.Thread(target=self._stream_generation, args=(prompt, "engineer_agent"))
         thread.start()
 
-    def _generate_code(self, prompt: str, file_path: str):
+    def _handle_conversation(self, user_prompt: str):
         """
-        The Engineer Agent's core logic for generating code.
+        Manages the main conversational flow with the Lead Companion agent.
+        This method embodies the "Cognitive Loop".
         """
-        agent_name = "engineer_agent"
-        model = self.models.get(agent_name)
-        if not model:
-            self._handle_error(f"Model for agent '{agent_name}' is not configured. Please select a Gemini model in settings.")
+        provider, model_name, config = self._get_provider_for_agent("lead_companion_agent")
+        if not provider or not model_name:
+            self._handle_error("Lead Companion agent not configured correctly.")
             return
 
         try:
-            logger.info(f"Sending prompt to Engineer Agent ('{agent_name}' config) for code generation...")
-            config = self.generation_configs.get(agent_name)
-            response = model.generate_content(prompt, generation_config=config)
+            prompt = self.prompt_manager.render("lead_companion_master.jinja2", user_prompt=user_prompt)
+            response_stream = provider.stream_chat(model_name, prompt, config)
+            full_response = "".join(list(response_stream))
 
-            code_block = response.text
-            if "```python" in code_block:
-                code_block = code_block.split("```python\n", 1)[1]
-                code_block = code_block.split("```", 1)
-            elif "```" in code_block:
-                code_block = code_block.split("```\n", 1)
-                code_block = code_block.split("```", 1)[0]
-
-            generated_code = code_block.strip()
-
-            logger.info(f"Code generation successful for file: {file_path}")
-
-            self.event_bus.dispatch(Event(
-                event_type="CODE_GENERATED",
-                payload={
-                    "file_path": file_path,
-                    "code": generated_code
-                }
-            ))
-
-            success_prompt = f"Confirm that the Engineer Agent has successfully generated the code for the file: '{file_path}'. State that it is ready for review."
-            self._stream_generation(success_prompt)
-
-        except Exception as e:
-            logger.error(f"Error during code generation: {e}", exc_info=True)
-            self._handle_error(f"An error occurred while generating code: {e}")
-
-    def _cognitive_router(self, user_prompt: str):
-        """
-        First step: Detect the user's intent.
-        Second step: Route to the appropriate handler based on intent.
-        """
-        try:
-            intent = self._detect_intent(user_prompt)
-            logger.info(f"Detected intent: {intent.value}")
-
-            if intent == Intent.PLANNING_SESSION:
-                self._handle_planning_session(user_prompt)
+            if "tool_name" in full_response:
+                self._handle_tool_call(full_response)
             else:
-                self._stream_generation(user_prompt)
+                self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": full_response}))
+                self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED"))
 
         except Exception as e:
-            logger.error(f"Error in cognitive router: {e}", exc_info=True)
-            self._handle_error(f"An error occurred during intent processing: {e}")
+            logger.error(f"Error in conversation handler: {e}", exc_info=True)
+            self._handle_error("A critical error occurred in the conversation handler.")
 
-    def _detect_intent(self, user_prompt: str) -> Intent:
-        """Calls the LLM with a specific prompt to classify the user's intent."""
-        agent_name = "cognitive_router"
-        model = self.models.get(agent_name)
-        if not model:
-            logger.error(f"Model for agent '{agent_name}' is not configured. Defaulting to CHITCHAT.")
-            return Intent.CHITCHAT
-
+    def _handle_tool_call(self, tool_call_json: str):
+        """Parses and executes a tool call from the Lead Companion."""
         try:
-            prompt = self.prompt_manager.render(
-                "detect_intent.jinja2",
-                user_prompt=user_prompt
+            data = json.loads(tool_call_json)
+            tool_name = data.get("tool_name")
+            arguments = data.get("arguments", {})
+            logger.info(f"Lead Companion requested tool: '{tool_name}' with args: {arguments}")
+
+            if tool_name == "consult_architect":
+                self._execute_architect_consultation(arguments.get("user_request"))
+            else:
+                self._handle_error(f"Received unknown tool call: {tool_name}")
+
+        except json.JSONDecodeError:
+            logger.error(f"Failed to decode tool call JSON: {tool_call_json}")
+            self._stream_generation(
+                f"My apologies, I had a formatting error in my thinking process. Could you please rephrase your request? Original request: {tool_call_json}",
+                "lead_companion_agent"
             )
-            if not prompt: return Intent.UNKNOWN
 
-            config = self.generation_configs.get(agent_name)
-            response = model.generate_content(prompt, generation_config=config)
-            response_text = response.text.strip().replace("```json", "").replace("```", "")
-            data = json.loads(response_text)
-            intent_str = data.get("intent", "UNKNOWN").upper()
-            return Intent(intent_str)
-
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning(f"Could not parse intent from LLM response: '{response.text}'. Error: {e}")
-            return Intent.UNKNOWN
-        except Exception as e:
-            logger.error(f"Error during intent detection: {e}", exc_info=True)
-            return Intent.UNKNOWN
-
-    def _handle_planning_session(self, user_prompt: str):
-        """Handles the PLANNING_SESSION intent."""
-        task_description = f"Plan and design: {user_prompt[:100]}..."
-        self.event_bus.dispatch(Event(
-            event_type="ADD_TASK",
-            payload={"description": task_description}
-        ))
-        confirm_prompt = f"Acknowledge that you are ready to start a planning session based on the user's request: '{user_prompt}'"
-        self._stream_generation(confirm_prompt)
-
-    def _stream_generation(self, prompt: str):
-        """Generates content from the LLM and streams the response."""
-        agent_name = "default_streaming"
-        model = self.models.get(agent_name)
-        if not model:
-            self._handle_error(f"Model for agent '{agent_name}' is not configured. Please select a Gemini model in settings.")
+    def _execute_architect_consultation(self, user_request: str):
+        """Invokes the Architect agent to generate a project plan."""
+        provider, model_name, config = self._get_provider_for_agent("architect_agent")
+        if not provider or not model_name:
+            self._handle_error("Architect agent is not configured.")
             return
 
         try:
-            logger.info(f"Sending prompt to Gemini for streaming ('{agent_name}' config): '{prompt[:80]}...'" )
-            config = self.generation_configs.get(agent_name)
-            response_stream = model.generate_content(prompt, stream=True, generation_config=config)
+            prompt = self.prompt_manager.render("plan_project.jinja2", user_request=user_request)
+            response_stream = provider.stream_chat(model_name, prompt, config)
+            full_response = "".join(list(response_stream))
+
+            plan_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
+            tasks = plan_data.get("plan", [])
+
+            if not tasks:
+                self._handle_error("The Architect returned an empty plan.")
+                return
+
+            for task in tasks:
+                self.event_bus.dispatch(Event("ADD_TASK", {"description": task["description"]}))
+
+            confirmation_prompt = "Excellent! I've drafted a plan and added it to Mission Control. Take a look and let me know when you're ready to start building. You can dispatch them all at once or we can refine the plan further."
+            self._stream_generation(confirmation_prompt, "lead_companion_agent")
+
+        except Exception as e:
+            logger.error(f"Error during architect consultation: {e}", exc_info=True)
+            self._handle_error("The Architect specialist encountered an error while drafting the plan.")
+
+    def _stream_generation(self, prompt: str, agent_name: str):
+        """The main generation method that dispatches a request to the correct provider."""
+        provider, model_name, config = self._get_provider_for_agent(agent_name)
+        if not provider or not model_name:
+            self._handle_error(f"Agent '{agent_name}' is not configured with a valid model.")
+            return
+
+        try:
+            logger.info(
+                f"Dispatching to '{provider.provider_name}' for agent '{agent_name}' with model '{model_name}'.")
+            response_stream = provider.stream_chat(model_name, prompt, config)
 
             for chunk in response_stream:
-                self.event_bus.dispatch(Event(
-                    event_type="MODEL_CHUNK_RECEIVED",
-                    payload={"chunk": chunk.text}
-                ))
+                if chunk.startswith("ERROR:"):
+                    self._handle_error(chunk)
+                    break
+                self.event_bus.dispatch(Event("MODEL_CHUNK_RECEIVED", payload={"chunk": chunk}))
 
         except Exception as e:
-            logger.error(f"Error communicating with Gemini API: {e}", exc_info=True)
-            self._handle_error(f"An error occurred with the Gemini API: {e}")
+            logger.error(f"Error dispatching to provider {provider.provider_name}: {e}", exc_info=True)
+            self._handle_error(f"An error occurred with the {provider.provider_name} provider.")
         finally:
             self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED"))
 
     def _handle_error(self, message: str):
         """Dispatches a model error event."""
         logger.error(message)
-        error_event = Event(event_type="MODEL_ERROR", payload={"message": message})
-        self.event_bus.dispatch(error_event)
+        self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": message}))
