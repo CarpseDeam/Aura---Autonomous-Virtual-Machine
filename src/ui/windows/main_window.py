@@ -304,19 +304,19 @@ class MainWindow(QMainWindow):
         self.task_log_window.resize(self.task_log_window.width(), self.height())
 
     def _update_code_viewer_position(self):
-        """Updates the position of the code viewer window to be pinned to the left."""
-        if not self.code_viewer_window or not self.code_viewer_window.isVisible() or not self.isVisible():
+        """Updates the position of the code viewer window to be pinned to the right of the task log."""
+        if not self.isVisible() or not self.code_viewer_window or not self.code_viewer_window.isVisible() or not self.task_log_window or not self.task_log_window.isVisible():
             return
 
-        main_window_pos = self.pos()
-        code_viewer_width = self.code_viewer_window.width()
+        task_log_pos = self.task_log_window.pos()
+        task_log_width = self.task_log_window.width()
         gap = 8  # A small gap between windows
 
-        new_x = main_window_pos.x() - code_viewer_width - gap
-        new_y = main_window_pos.y()
+        new_x = task_log_pos.x() + task_log_width + gap
+        new_y = task_log_pos.y()
 
         self.code_viewer_window.move(new_x, new_y)
-        self.code_viewer_window.resize(code_viewer_width, self.height())
+        self.code_viewer_window.resize(self.code_viewer_window.width(), self.height())
 
     def moveEvent(self, event):
         """Override moveEvent to move child windows along with the main window."""
