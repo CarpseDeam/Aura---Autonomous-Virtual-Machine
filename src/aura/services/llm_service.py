@@ -94,8 +94,18 @@ class LLMService:
         if not model_name: return None, None, config
 
         provider_name = self.model_to_provider_map.get(model_name)
+
         if not provider_name:
-            if 'gemini' in model_name: provider_name = 'Google'
+            # If model not in map, try to infer provider from model name.
+            for p_name in self.providers:
+                if model_name.lower().startswith(p_name.lower()):
+                    provider_name = p_name
+                    break
+
+            # Fallback for models that don't follow the prefix convention (e.g., gemini).
+            if not provider_name:
+                if 'gemini' in model_name:
+                    provider_name = 'Google'
 
         provider = self.providers.get(provider_name)
         return provider, model_name, config
