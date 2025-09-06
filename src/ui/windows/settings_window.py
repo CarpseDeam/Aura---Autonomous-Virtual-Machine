@@ -193,7 +193,11 @@ class SettingsWindow(QWidget):
             combo_box = widgets["model"]
             combo_box.clear()
             for provider, model_list in models.items():
-                combo_box.addItem(f"--- {provider} ---").setFlags(Qt.ItemFlag.NoItemFlags)
+                combo_box.addItem(f"--- {provider} ---")
+                index = combo_box.count() - 1
+                item = combo_box.model().item(index)
+                if item:
+                    item.setFlags(Qt.ItemFlag.NoItemFlags)
                 for model_name in model_list:
                     combo_box.addItem(model_name)
         self._load_settings()
