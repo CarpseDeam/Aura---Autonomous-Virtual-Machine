@@ -200,7 +200,7 @@ class MainWindow(QMainWindow):
     def _open_settings_dialog(self):
         """Opens the settings dialog, creating it if it doesn't exist."""
         if self.settings_window is None:
-            self.settings_window = SettingsWindow()
+            self.settings_window = SettingsWindow(self.event_bus)
         self.settings_window.show()
 
     def _start_boot_sequence(self):

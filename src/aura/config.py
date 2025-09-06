@@ -7,11 +7,12 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 # All other important paths are built from the ROOT_DIR to ensure they are always correct.
 ASSETS_DIR = ROOT_DIR / "assets"
 LOGS_DIR = ROOT_DIR / "logs"
+SETTINGS_FILE = ROOT_DIR / "user_settings.json"
 
 # Agent Configurations
 AGENT_CONFIG = {
     "cognitive_router": {
-        "model": "gemini-2.5-pro",
+        "model": "gemini-2.5-flash",
         "temperature": 0.2,
         "top_p": 0.8,
     },

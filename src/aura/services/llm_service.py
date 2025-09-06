@@ -2,13 +2,14 @@ import os
 import logging
 import threading
 import json
+import copy
 import google.generativeai as genai
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.models.intent import Intent
-from src.aura.config import AGENT_CONFIG
+from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +21,10 @@ class LLMService:
     """
 
     def __init__(
-            self,
-            event_bus: EventBus,
-            prompt_manager: PromptManager,
-            task_management_service: TaskManagementService
+        self,
+        event_bus: EventBus,
+        prompt_manager: PromptManager,
+        task_management_service: TaskManagementService
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
@@ -31,23 +32,54 @@ class LLMService:
         self.task_management_service = task_management_service
         self.models = {}
         self.generation_configs = {}
+        self.agent_config = {}
         self._configure_client()
         self._register_event_handlers()
 
+    def _load_agent_configurations(self):
+        """Loads agent configurations, merging user settings over defaults."""
+        config = copy.deepcopy(AGENT_CONFIG)
+        logger.info("Loading default agent configurations.")
+
+        if SETTINGS_FILE.exists():
+            try:
+                logger.info(f"Found user settings file at {SETTINGS_FILE}, merging...")
+                with open(SETTINGS_FILE, 'r') as f:
+                    user_config = json.load(f)
+
+                for agent_name, user_settings in user_config.items():
+                    if agent_name in config:
+                        config[agent_name].update(user_settings)
+                    else:
+                        config[agent_name] = user_settings
+            except (IOError, json.JSONDecodeError) as e:
+                logger.error(f"Failed to load or parse user settings from {SETTINGS_FILE}: {e}. Using defaults.")
+
+        self.agent_config = config
+        logger.info(f"Final agent configurations loaded.")
+
+
     def _configure_client(self):
         """Configures the Gemini client for all agents using the API key from environment variables."""
+        self._load_agent_configurations()
+
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key or api_key == "YOUR_API_KEY_HERE":
             logger.critical("GEMINI_API_KEY not found or not set. LLMService will be disabled.")
             return
         try:
             genai.configure(api_key=api_key)
-            for agent_name, config in AGENT_CONFIG.items():
-                self.models[agent_name] = genai.GenerativeModel(config["model"])
-                self.generation_configs[agent_name] = genai.GenerationConfig(
-                    temperature=config["temperature"],
-                    top_p=config["top_p"],
-                )
+            for agent_name, config in self.agent_config.items():
+                model_name = config.get("model", "")
+                if 'gemini' in model_name:
+                    self.models[agent_name] = genai.GenerativeModel(model_name)
+                    self.generation_configs[agent_name] = genai.GenerationConfig(
+                        temperature=config["temperature"],
+                        top_p=config.get("top_p", 1.0),
+                    )
+                else:
+                    logger.warning(f"Skipping configuration for agent '{agent_name}'. Model '{model_name}' is not a Gemini model. Multi-provider support is not yet fully implemented in LLMService.")
+
             logger.info(f"Gemini clients configured successfully for agents: {list(self.models.keys())}")
         except Exception as e:
             logger.critical(f"Failed to configure Gemini client: {e}", exc_info=True)
@@ -57,6 +89,8 @@ class LLMService:
         """Subscribes the service to relevant events from the event bus."""
         self.event_bus.subscribe("SEND_USER_MESSAGE", self.handle_user_message)
         self.event_bus.subscribe("DISPATCH_TASK", self.handle_dispatch_task)
+        self.event_bus.subscribe("RELOAD_LLM_CONFIG", lambda event: self._configure_client())
+
 
     def handle_user_message(self, event: Event):
         """
@@ -65,7 +99,11 @@ class LLMService:
         """
         prompt = event.payload.get("text")
         if not self.models or not prompt:
-            self._handle_error("LLM not configured or empty prompt.")
+            # Check if any models are configured at all
+            if not self.agent_config:
+                 self._handle_error("LLM configurations not loaded.")
+                 return
+            self._handle_error("LLM not configured or empty prompt. Please select a valid Gemini model in settings.")
             return
 
         thread = threading.Thread(target=self._cognitive_router, args=(prompt,))
@@ -108,7 +146,7 @@ class LLMService:
         agent_name = "engineer_agent"
         model = self.models.get(agent_name)
         if not model:
-            self._handle_error(f"Model for agent '{agent_name}' is not configured.")
+            self._handle_error(f"Model for agent '{agent_name}' is not configured. Please select a Gemini model in settings.")
             return
 
         try:
@@ -128,7 +166,6 @@ class LLMService:
 
             logger.info(f"Code generation successful for file: {file_path}")
 
-            # Dispatch an event with the generated code for other components to use
             self.event_bus.dispatch(Event(
                 event_type="CODE_GENERATED",
                 payload={
@@ -167,8 +204,8 @@ class LLMService:
         agent_name = "cognitive_router"
         model = self.models.get(agent_name)
         if not model:
-            logger.error(f"Model for agent '{agent_name}' is not configured.")
-            return Intent.UNKNOWN
+            logger.error(f"Model for agent '{agent_name}' is not configured. Defaulting to CHITCHAT.")
+            return Intent.CHITCHAT
 
         try:
             prompt = self.prompt_manager.render(
@@ -206,11 +243,11 @@ class LLMService:
         agent_name = "default_streaming"
         model = self.models.get(agent_name)
         if not model:
-            self._handle_error(f"Model for agent '{agent_name}' is not configured.")
+            self._handle_error(f"Model for agent '{agent_name}' is not configured. Please select a Gemini model in settings.")
             return
 
         try:
-            logger.info(f"Sending prompt to Gemini for streaming ('{agent_name}' config): '{prompt[:80]}...'")
+            logger.info(f"Sending prompt to Gemini for streaming ('{agent_name}' config): '{prompt[:80]}...'" )
             config = self.generation_configs.get(agent_name)
             response_stream = model.generate_content(prompt, stream=True, generation_config=config)
 
