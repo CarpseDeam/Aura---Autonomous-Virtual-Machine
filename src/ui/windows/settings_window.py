@@ -112,7 +112,7 @@ class SettingsWindow(QWidget):
         self.agent_widgets = {}
         self._init_ui()
         self._register_event_handlers()
-        self.event_bus.dispatch(Event("REQUEST_AVAILABLE_MODELS"))
+        self.event_bus.dispatch(Event(event_type="REQUEST_AVAILABLE_MODELS"))
 
     def _init_ui(self):
         """Initializes the user interface of the settings window."""
@@ -247,4 +247,4 @@ class SettingsWindow(QWidget):
         """Overrides the show event to request models when the window is shown."""
         super().showEvent(event)
         logger.info("Settings window opened, requesting available models...")
-        self.event_bus.dispatch(Event("REQUEST_AVAILABLE_MODELS"))
+        self.event_bus.dispatch(Event(event_type="REQUEST_AVAILABLE_MODELS"))

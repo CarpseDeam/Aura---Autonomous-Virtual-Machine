@@ -83,6 +83,7 @@ class LLMService:
         self.event_bus.subscribe("SEND_USER_MESSAGE", self.handle_user_message)
         self.event_bus.subscribe("DISPATCH_TASK", self.handle_dispatch_task)
         self.event_bus.subscribe("RELOAD_LLM_CONFIG", lambda event: self._load_agent_configurations())
+        self.event_bus.subscribe("REQUEST_AVAILABLE_MODELS", self._handle_request_available_models)
 
     def _get_provider_for_agent(self, agent_name: str) -> tuple[any, str, Dict]:
         """Determines the correct provider and model for a given agent."""
@@ -231,3 +232,14 @@ class LLMService:
         """Dispatches a model error event."""
         logger.error(message)
         self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": message}))
+
+    def _handle_request_available_models(self, event: Event):
+        """Handles the request for available models."""
+        models_by_provider = {}
+        for provider_name, provider in self.providers.items():
+            models_by_provider[provider_name] = provider.get_available_models()
+
+        self.event_bus.dispatch(Event(
+            event_type="AVAILABLE_MODELS_RECEIVED",
+            payload={"models": models_by_provider}
+        ))
