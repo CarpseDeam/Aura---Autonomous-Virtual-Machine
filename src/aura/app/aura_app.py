@@ -74,5 +74,4 @@ class AuraApp:
         logging.info("Starting Aura application...")
         self.main_window.show()
         self.task_log_window.show()
-        self.code_viewer_window.show()
         sys.exit(self.app.exec())

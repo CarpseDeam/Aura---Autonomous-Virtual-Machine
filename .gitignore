@@ -114,3 +114,4 @@ logs/
 .vscode/
 *.swp
 *~
+/user_settings.json

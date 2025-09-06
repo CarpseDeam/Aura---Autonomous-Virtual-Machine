@@ -146,11 +146,16 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(top_bar_widget)
         layout.setContentsMargins(0, 0, 0, 10) # Add some padding below
 
+        btn_code_workspace = QPushButton("Code Workspace")
+        btn_code_workspace.setObjectName("top_bar_button")
+        btn_code_workspace.clicked.connect(self._open_code_workspace)
+
         btn_configure_agents = QPushButton("Configure Agents")
         btn_configure_agents.setObjectName("top_bar_button")
         btn_configure_agents.clicked.connect(self._open_settings_dialog)
 
         layout.addStretch()
+        layout.addWidget(btn_code_workspace)
         layout.addWidget(btn_configure_agents)
 
         return top_bar_widget
@@ -202,6 +207,12 @@ class MainWindow(QMainWindow):
         if self.settings_window is None:
             self.settings_window = SettingsWindow(self.event_bus)
         self.settings_window.show()
+
+    def _open_code_workspace(self):
+        """Opens the code viewer window."""
+        if self.code_viewer_window:
+            self.code_viewer_window.show()
+            QTimer.singleShot(0, self._update_code_viewer_position)
 
     def _start_boot_sequence(self):
         """Starts the boot sequence animation."""
@@ -294,7 +305,7 @@ class MainWindow(QMainWindow):
 
     def _update_code_viewer_position(self):
         """Updates the position of the code viewer window to be pinned to the left."""
-        if not self.code_viewer_window or not self.isVisible():
+        if not self.code_viewer_window or not self.code_viewer_window.isVisible() or not self.isVisible():
             return
 
         main_window_pos = self.pos()
