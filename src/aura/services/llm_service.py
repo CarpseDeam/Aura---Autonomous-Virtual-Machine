@@ -20,10 +20,10 @@ class LLMService:
     """
 
     def __init__(
-        self,
-        event_bus: EventBus,
-        prompt_manager: PromptManager,
-        task_management_service: TaskManagementService
+            self,
+            event_bus: EventBus,
+            prompt_manager: PromptManager,
+            task_management_service: TaskManagementService
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
@@ -110,26 +110,32 @@ class LLMService:
         if not model:
             self._handle_error(f"Model for agent '{agent_name}' is not configured.")
             return
-        
+
         try:
             logger.info(f"Sending prompt to Engineer Agent ('{agent_name}' config) for code generation...")
             config = self.generation_configs.get(agent_name)
             response = model.generate_content(prompt, generation_config=config)
-            
+
             code_block = response.text
             if "```python" in code_block:
                 code_block = code_block.split("```python\n", 1)[1]
-                code_block = code_block.split("```", 1)[0]
+                code_block = code_block.split("```", 1)
             elif "```" in code_block:
-                code_block = code_block.split("```\n", 1)[1]
+                code_block = code_block.split("```\n", 1)
                 code_block = code_block.split("```", 1)[0]
-            
+
             generated_code = code_block.strip()
 
             logger.info(f"Code generation successful for file: {file_path}")
-            print("--- GENERATED CODE ---")
-            print(generated_code)
-            print("----------------------")
+
+            # Dispatch an event with the generated code for other components to use
+            self.event_bus.dispatch(Event(
+                event_type="CODE_GENERATED",
+                payload={
+                    "file_path": file_path,
+                    "code": generated_code
+                }
+            ))
 
             success_prompt = f"Confirm that the Engineer Agent has successfully generated the code for the file: '{file_path}'. State that it is ready for review."
             self._stream_generation(success_prompt)
@@ -163,7 +169,7 @@ class LLMService:
         if not model:
             logger.error(f"Model for agent '{agent_name}' is not configured.")
             return Intent.UNKNOWN
-            
+
         try:
             prompt = self.prompt_manager.render(
                 "detect_intent.jinja2",
@@ -202,9 +208,9 @@ class LLMService:
         if not model:
             self._handle_error(f"Model for agent '{agent_name}' is not configured.")
             return
-            
+
         try:
-            logger.info(f"Sending prompt to Gemini for streaming ('{agent_name}' config): '{prompt[:80]}...'" )
+            logger.info(f"Sending prompt to Gemini for streaming ('{agent_name}' config): '{prompt[:80]}...'")
             config = self.generation_configs.get(agent_name)
             response_stream = model.generate_content(prompt, stream=True, generation_config=config)
 

@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.event_bus = event_bus
         self.task_log_window = None  # Will be set by AuraApp
+        self.code_viewer_window = None # Will be set by AuraApp
         self.settings_window = None  # To hold the settings window instance
         self.setWindowTitle("Aura - Command Deck")
         self.setGeometry(100, 100, 900, 700)
@@ -271,6 +272,11 @@ class MainWindow(QMainWindow):
         self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] {error_message}</span>")
         self._handle_stream_end()
 
+    def _update_child_window_positions(self):
+        """Updates the position of all attached child windows."""
+        self._update_task_log_position()
+        self._update_code_viewer_position()
+
     def _update_task_log_position(self):
         """Updates the position of the task log window to be pinned to the right."""
         if not self.task_log_window or not self.isVisible():
@@ -286,20 +292,35 @@ class MainWindow(QMainWindow):
         self.task_log_window.move(new_x, new_y)
         self.task_log_window.resize(self.task_log_window.width(), self.height())
 
+    def _update_code_viewer_position(self):
+        """Updates the position of the code viewer window to be pinned to the left."""
+        if not self.code_viewer_window or not self.isVisible():
+            return
+
+        main_window_pos = self.pos()
+        code_viewer_width = self.code_viewer_window.width()
+        gap = 8  # A small gap between windows
+
+        new_x = main_window_pos.x() - code_viewer_width - gap
+        new_y = main_window_pos.y()
+
+        self.code_viewer_window.move(new_x, new_y)
+        self.code_viewer_window.resize(code_viewer_width, self.height())
+
     def moveEvent(self, event):
-        """Override moveEvent to move the task log window along with the main window."""
+        """Override moveEvent to move child windows along with the main window."""
         super().moveEvent(event)
-        self._update_task_log_position()
+        self._update_child_window_positions()
 
     def resizeEvent(self, event):
-        """Override resizeEvent to adjust the task log window's position and height."""
+        """Override resizeEvent to adjust child windows' position and height."""
         super().resizeEvent(event)
-        self._update_task_log_position()
+        self._update_child_window_positions()
 
     def showEvent(self, event):
-        """Override showEvent to position the task log window when the main window is first shown."""
+        """Override showEvent to position child windows when the main window is first shown."""
         super().showEvent(event)
-        QTimer.singleShot(0, self._update_task_log_position)
+        QTimer.singleShot(0, self._update_child_window_positions)
 
     def closeEvent(self, event):
         """Ensure the entire application quits when the main window is closed."""
