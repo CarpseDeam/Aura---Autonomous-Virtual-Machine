@@ -264,6 +264,8 @@ class MainWindow(QMainWindow):
         if self.current_boot_step < len(self.BOOT_SEQUENCE):
             line_info = self.BOOT_SEQUENCE[self.current_boot_step]
             self.chat_display.append(f"<span style='color: #39FF14;'>{line_info['text']}</span>")
+            self.chat_display.moveCursor(QTextCursor.End)
+            self.chat_display.ensureCursorVisible()
             self.current_boot_step += 1
             if self.current_boot_step < len(self.BOOT_SEQUENCE):
                 self.boot_timer.setInterval(self.BOOT_SEQUENCE[self.current_boot_step]["delay"])
@@ -290,7 +292,8 @@ class MainWindow(QMainWindow):
 
         self.chat_display.append(f"<br><span style='color: #FFB74D;'>[USER]</span>")
         self.chat_display.append(f"<div style='padding-left: 15px;'>{user_text.replace(os.linesep, '<br>')}</div>")
-        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.ensureCursorVisible()
 
         # Start thinking animation
         self.thinking_indicator.start_thinking("AURA is analyzing your request...")
@@ -309,7 +312,8 @@ class MainWindow(QMainWindow):
 
         safe_chunk = chunk.replace('\n', '<br>')
         self.chat_display.insertHtml(safe_chunk)
-        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.ensureCursorVisible()
 
     def _handle_stream_end(self):
         """Called when the model is finished sending chunks."""
@@ -318,7 +322,8 @@ class MainWindow(QMainWindow):
         self.is_streaming_response = False
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
-        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.ensureCursorVisible()
 
     def _handle_model_error(self, error_message: str):
         """Displays an error message in the chat."""
@@ -380,7 +385,8 @@ class MainWindow(QMainWindow):
         """
         
         self.chat_display.append(system_html)
-        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.ensureCursorVisible()
 
     def _update_child_window_positions(self):
         """Updates the position of all attached child windows."""

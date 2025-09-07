@@ -17,7 +17,7 @@ class TaskLogSignaller(QObject):
 
 class TaskLogWindow(QWidget):
     """
-    The "Mission Control" window to display and manage the current task list.
+    The "Task List" window to display and manage the current task list.
     """
     TASK_LOG_STYLESHEET = """
         QWidget {
@@ -27,7 +27,7 @@ class TaskLogWindow(QWidget):
             border: 1px solid #4a4a4a; /* Subtle Grey */
             border-radius: 5px;
         }
-        QLabel#mission_control_label {
+        QLabel#task_list_label {
             color: #FFB74D; /* Amber */
             font-weight: bold;
             font-size: 16px;
@@ -67,7 +67,7 @@ class TaskLogWindow(QWidget):
         super().__init__(parent)
         self.event_bus = event_bus
         self.signaller = TaskLogSignaller()
-        self.setWindowTitle("Mission Control")
+        self.setWindowTitle("Task List")
         self.setWindowFlags(Qt.WindowType.Tool)
         self.setGeometry(100, 100, 350, 700)
         self.setStyleSheet(self.TASK_LOG_STYLESHEET)
@@ -80,8 +80,8 @@ class TaskLogWindow(QWidget):
         self.main_layout.setContentsMargins(10, 10, 10, 10)
         self.main_layout.setSpacing(10)
 
-        title_label = QLabel("MISSION CONTROL")
-        title_label.setObjectName("mission_control_label")
+        title_label = QLabel("TASK LIST")
+        title_label.setObjectName("task_list_label")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.task_list_container = QWidget()
