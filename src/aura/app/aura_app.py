@@ -10,7 +10,7 @@ from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.ast_service import ASTService
 from src.aura.prompts.prompt_manager import PromptManager
-from src.aura.config import ASSETS_DIR, ROOT_DIR
+from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
 from src.aura.models.events import Event
 from src.ui.windows.main_window import MainWindow
 from src.ui.windows.task_log_window import TaskLogWindow
@@ -72,7 +72,7 @@ class AuraApp:
         """Initialize the AST service by indexing the current project."""
         try:
             logging.info("Initializing AST service with project indexing...")
-            self.ast_service.index_project(str(ROOT_DIR))
+            self.ast_service.index_project(str(WORKSPACE_DIR))
             stats = self.ast_service.get_project_stats()
             logging.info(f"AST indexing complete: {stats['total_files']} files, "
                         f"{stats['total_functions']} functions, {stats['total_classes']} classes")

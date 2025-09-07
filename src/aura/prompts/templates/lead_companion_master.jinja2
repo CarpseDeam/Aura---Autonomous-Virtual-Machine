@@ -97,7 +97,7 @@ User: "Let's build a game"
 2. **Partner Mode** (Medium) - Collaborative planning for high-level goals  
 3. **Conversational** (Lowest) - Casual interaction only
 
---- CONVERSATION HISTORY ---
-{# Loop through history if provided #}
+{% if user_prompt %}
 --- USER'S LATEST MESSAGE ---
 {{ user_prompt }}
+{% endif %}

@@ -78,3 +78,61 @@ class GeminiProvider(LLMProvider):
         except Exception as e:
             logger.error(f"Error during Gemini stream: {e}", exc_info=True)
             yield f"ERROR: An error occurred with the Gemini API: {e}"
+
+    def stream_chat_structured(
+        self,
+        model_name: str,
+        messages: List[Dict[str, str]],
+        config: Dict[str, Any]
+    ) -> Generator[str, None, None]:
+        """Streams a chat response using structured messages with the Gemini API."""
+        if not self.configured:
+            yield "ERROR: GeminiProvider is not configured. Please check your API key."
+            return
+
+        logger.info(f"Streaming structured chat from Gemini model: {model_name}")
+        try:
+            generation_config = genai.GenerationConfig(
+                temperature=config.get("temperature", 0.7),
+                top_p=config.get("top_p", 1.0)
+            )
+            
+            # Extract system instruction and convert messages to Gemini format
+            system_instruction = None
+            chat_history = []
+            
+            for message in messages:
+                if message['role'] == 'system':
+                    system_instruction = message['content']
+                elif message['role'] == 'user':
+                    chat_history.append({'role': 'user', 'parts': [message['content']]})
+                elif message['role'] == 'assistant':
+                    chat_history.append({'role': 'model', 'parts': [message['content']]})
+            
+            # Create model with system instruction
+            model = genai.GenerativeModel(
+                model_name, 
+                generation_config=generation_config,
+                system_instruction=system_instruction
+            )
+            
+            # Start chat with history (excluding the last user message)
+            user_messages = [msg for msg in chat_history if msg['role'] == 'user']
+            if len(user_messages) > 1:
+                # If there's conversation history, use it
+                chat = model.start_chat(history=chat_history[:-1])
+                response_stream = chat.send_message(chat_history[-1]['parts'][0], stream=True)
+            else:
+                # First message - no history
+                if chat_history:
+                    response_stream = model.generate_content(chat_history[-1]['parts'][0], stream=True)
+                else:
+                    # Fallback to system instruction only
+                    response_stream = model.generate_content("Please respond", stream=True)
+
+            for chunk in response_stream:
+                yield chunk.text
+
+        except Exception as e:
+            logger.error(f"Error during Gemini structured stream: {e}", exc_info=True)
+            yield f"ERROR: An error occurred with the Gemini structured API: {e}"

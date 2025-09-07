@@ -218,8 +218,39 @@ class LLMService:
             return
 
         try:
-            prompt = self.prompt_manager.render("lead_companion_master.jinja2", history=history)
-            response_stream = provider.stream_chat(model_name, prompt, config)
+            # Render only the system instructions from the template
+            system_instructions = self.prompt_manager.render("lead_companion_master.jinja2", user_prompt="")
+            
+            # Create structured messages with proper role separation
+            messages = []
+            
+            # Add system message
+            messages.append({
+                "role": "system",
+                "content": system_instructions
+            })
+            
+            # Add conversation history with proper roles
+            for message in history:
+                role = "user" if message["role"] == "user" else "assistant"
+                messages.append({
+                    "role": role,
+                    "content": message["content"]
+                })
+            
+            # Use structured messages if provider supports it, otherwise fallback to concatenated prompt
+            if hasattr(provider, 'stream_chat_structured') and callable(getattr(provider, 'stream_chat_structured')):
+                response_stream = provider.stream_chat_structured(model_name, messages, config)
+            else:
+                # Fallback: concatenate messages into a single prompt for legacy providers
+                prompt_parts = [system_instructions]
+                for message in history:
+                    role_prefix = "User: " if message["role"] == "user" else "Assistant: "
+                    prompt_parts.append(f"{role_prefix}{message['content']}")
+                
+                fallback_prompt = "\n\n".join(prompt_parts)
+                response_stream = provider.stream_chat(model_name, fallback_prompt, config)
+            
             # Buffer the full response to check for tool calls
             full_response = "".join(list(response_stream))
 
@@ -284,7 +315,9 @@ class LLMService:
 
             # Add all the planned tasks to Mission Control!
             for task in tasks:
-                self.event_bus.dispatch(Event("ADD_TASK", {"description": task["description"]}))
+                self.event_bus.dispatch(
+                    Event(event_type="ADD_TASK", payload={"description": task["description"]})
+                )
 
             # Send a confirmation message back to the user
             confirmation_prompt = "Excellent! I've drafted a plan and added it to Mission Control. Take a look and let me know when you're ready to start building. You can dispatch them all at once or we can refine the plan further."
@@ -344,7 +377,7 @@ class LLMService:
                 if chunk.startswith("ERROR:"):
                     self._handle_error(chunk)
                     break
-                self.event_bus.dispatch(Event("MODEL_CHUNK_RECEIVED", payload={"chunk": chunk}))
+                self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": chunk}))
 
         except Exception as e:
             logger.error(f"Error dispatching to provider {provider.provider_name}: {e}", exc_info=True)

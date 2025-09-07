@@ -43,3 +43,30 @@ class LLMProvider(ABC):
             A stream of strings, where each string is a chunk of the response.
         """
         pass
+
+    def stream_chat_structured(
+        self,
+        model_name: str,
+        messages: List[Dict[str, str]],
+        config: Dict[str, Any]
+    ) -> Generator[str, None, None]:
+        """
+        Streams a chat response using structured messages with roles.
+        Default implementation falls back to concatenated prompt format.
+
+        Args:
+            model_name: The specific model to use for the chat.
+            messages: List of message dictionaries with 'role' and 'content' keys.
+            config: A dictionary containing generation parameters.
+
+        Yields:
+            A stream of strings, where each string is a chunk of the response.
+        """
+        # Default fallback implementation - concatenate messages
+        prompt_parts = []
+        for message in messages:
+            role_prefix = f"{message['role'].capitalize()}: " if message['role'] != 'system' else ""
+            prompt_parts.append(f"{role_prefix}{message['content']}")
+        
+        fallback_prompt = "\n\n".join(prompt_parts)
+        return self.stream_chat(model_name, fallback_prompt, config)
