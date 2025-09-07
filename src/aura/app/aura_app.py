@@ -9,6 +9,7 @@ from src.aura.services.llm_service import LLMService
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.ast_service import ASTService
+from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
 from src.aura.models.events import Event
@@ -36,12 +37,13 @@ class AuraApp:
         self.task_management_service = TaskManagementService(self.event_bus)
         self.conversation_management_service = ConversationManagementService(self.event_bus)
         self.ast_service = ASTService(self.event_bus)
+        self.context_retrieval_service = ContextRetrievalService(self.ast_service)
         self.llm_service = LLMService(
             self.event_bus,
             self.prompt_manager,
             self.task_management_service,
             self.conversation_management_service,
-            self.ast_service
+            self.context_retrieval_service
         )
         self.main_window = MainWindow(self.event_bus)
         self.task_log_window = TaskLogWindow(self.event_bus)

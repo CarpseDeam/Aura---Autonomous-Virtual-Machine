@@ -13,7 +13,7 @@ from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.task_management_service import TaskManagementService
-from src.aura.services.ast_service import ASTService
+from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.models.task import Task
 from src.providers.gemini_provider import GeminiProvider
 from src.providers.ollama_provider import OllamaProvider
@@ -33,14 +33,14 @@ class LLMService:
             prompt_manager: PromptManager,
             task_management_service: TaskManagementService,
             conversation_management_service: ConversationManagementService,
-            ast_service: ASTService
+            context_retrieval_service: ContextRetrievalService
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
         self.prompt_manager = prompt_manager
         self.task_management_service = task_management_service
         self.conversation_management_service = conversation_management_service
-        self.ast_service = ast_service
+        self.context_retrieval_service = context_retrieval_service
 
         self.agent_config = {}
         self.providers = {}
@@ -144,12 +144,16 @@ class LLMService:
         
         if class_func_match:
             symbol_name = class_func_match.group(1)
-            # Try to find the file containing this symbol using AST service
+            # Try to find the file containing this symbol using context retrieval service
             try:
-                if hasattr(self.ast_service, 'find_symbol_file'):
-                    symbol_file = self.ast_service.find_symbol_file(symbol_name)
-                    if symbol_file:
-                        return symbol_file
+                if hasattr(self.context_retrieval_service.ast_service, 'search_functions'):
+                    function_results = self.context_retrieval_service.ast_service.search_functions(symbol_name)
+                    if function_results:
+                        return function_results[0]['file']
+                if hasattr(self.context_retrieval_service.ast_service, 'search_classes'):
+                    class_results = self.context_retrieval_service.ast_service.search_classes(symbol_name)
+                    if class_results:
+                        return class_results[0]['file']
             except Exception as e:
                 logger.debug(f"Failed to find file for symbol '{symbol_name}': {e}")
         
@@ -204,24 +208,8 @@ class LLMService:
         logger.info(f"Engineer Agent activated for task: '{task.description}'")
         file_path = self._extract_file_path(task.description)
 
-        # Get relevant context using AST service
-        context_files = self.ast_service.get_relevant_context(file_path)
-        context_data = []
-        
-        for context_file in context_files:
-            try:
-                full_path = os.path.join(self.ast_service.project_root, context_file) if self.ast_service.project_root else context_file
-                if os.path.exists(full_path):
-                    with open(full_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    context_data.append({
-                        'path': context_file,
-                        'content': content
-                    })
-                    logger.debug(f"Added context file: {context_file}")
-            except Exception as e:
-                logger.warning(f"Failed to read context file {context_file}: {e}")
-                continue
+        # Use the new ContextRetrievalService to get all relevant context
+        context_data = self.context_retrieval_service.get_context_for_task(task.description, file_path)
 
         prompt = self.prompt_manager.render(
             "generate_code.jinja2",

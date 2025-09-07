@@ -1,12 +1,23 @@
 import ast
 import os
 import logging
-from typing import List, Dict, Set
+import numpy as np
+from typing import List, Dict, Set, Optional
 from pathlib import Path
 
 # Application-specific imports
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+
+# Semantic search dependencies
+try:
+    from sentence_transformers import SentenceTransformer
+    import faiss
+    SEMANTIC_SEARCH_AVAILABLE = True
+except ImportError:
+    SEMANTIC_SEARCH_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("sentence-transformers or faiss-cpu not installed. Semantic search will be disabled.")
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +108,16 @@ class ASTService:
         self.event_bus = event_bus
         self.project_index: Dict[str, Dict] = {}
         self.project_root: str = ""
+        
+        # Semantic search components
+        self.semantic_model: Optional[SentenceTransformer] = None
+        self.faiss_index: Optional[faiss.IndexFlatIP] = None
+        self.index_to_location: Dict[int, Dict] = {}  # Maps FAISS index IDs to file/symbol info
+        self._semantic_enabled = False
+        
+        self._initialize_semantic_search()
         self._register_event_handlers()
-        logger.info("ASTService initialized with event-driven dynamic updates.")
+        logger.info("ASTService initialized with event-driven dynamic updates and semantic search capabilities.")
 
     def index_project(self, project_path: str) -> None:
         """
@@ -143,6 +162,10 @@ class ASTService:
                         error_count += 1
         
         logger.info(f"Project indexing complete. Indexed {indexed_count} files, {error_count} errors.")
+        
+        # Build semantic index after project indexing
+        if self._semantic_enabled:
+            self._build_semantic_index()
 
     def _analyze_ast(self, tree: ast.AST, file_path: str) -> Dict:
         """
@@ -426,5 +449,178 @@ class ASTService:
             'total_functions': total_functions,
             'total_classes': total_classes,
             'total_imports': total_imports,
-            'project_root': self.project_root
+            'project_root': self.project_root,
+            'semantic_search_enabled': self._semantic_enabled
         }
+
+    def _initialize_semantic_search(self):
+        """Initialize the semantic search components if dependencies are available."""
+        if not SEMANTIC_SEARCH_AVAILABLE:
+            logger.warning("Semantic search dependencies not available. Continuing without semantic capabilities.")
+            return
+        
+        try:
+            logger.info("Initializing semantic search model...")
+            self.semantic_model = SentenceTransformer('all-MiniLM-L6-v2')
+            
+            # Initialize FAISS index for inner product (cosine similarity after normalization)
+            self.faiss_index = faiss.IndexFlatIP(384)  # all-MiniLM-L6-v2 has 384 dimensions
+            self.index_to_location = {}
+            
+            self._semantic_enabled = True
+            logger.info("Semantic search initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize semantic search: {e}")
+            self._semantic_enabled = False
+
+    def _build_semantic_index(self):
+        """Build the semantic index from all parsed classes and functions."""
+        if not self._semantic_enabled:
+            return
+        
+        logger.info("Building semantic index for code chunks...")
+        embeddings_list = []
+        index_id = 0
+        
+        for file_path, file_info in self.project_index.items():
+            try:
+                # Read the source code for this file
+                full_path = os.path.join(self.project_root, file_path) if self.project_root else file_path
+                if not os.path.exists(full_path):
+                    continue
+                    
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    source_code = f.read()
+                
+                source_lines = source_code.split('\n')
+                
+                # Process classes
+                for cls in file_info.get('classes', []):
+                    class_source = self._extract_symbol_source(source_lines, cls['lineno'], cls['name'])
+                    if class_source:
+                        # Generate embedding for the class
+                        embedding = self.semantic_model.encode([class_source])[0]
+                        # Normalize for cosine similarity
+                        embedding = embedding / np.linalg.norm(embedding)
+                        embeddings_list.append(embedding)
+                        
+                        # Store mapping
+                        self.index_to_location[index_id] = {
+                            'file_path': file_path,
+                            'symbol_type': 'class',
+                            'symbol_name': cls['name'],
+                            'lineno': cls['lineno']
+                        }
+                        index_id += 1
+                
+                # Process functions
+                for func in file_info.get('functions', []):
+                    func_source = self._extract_symbol_source(source_lines, func['lineno'], func['name'])
+                    if func_source:
+                        # Generate embedding for the function
+                        embedding = self.semantic_model.encode([func_source])[0]
+                        # Normalize for cosine similarity
+                        embedding = embedding / np.linalg.norm(embedding)
+                        embeddings_list.append(embedding)
+                        
+                        # Store mapping
+                        self.index_to_location[index_id] = {
+                            'file_path': file_path,
+                            'symbol_type': 'function',
+                            'symbol_name': func['name'],
+                            'lineno': func['lineno']
+                        }
+                        index_id += 1
+                        
+            except Exception as e:
+                logger.warning(f"Failed to process file {file_path} for semantic indexing: {e}")
+                continue
+        
+        if embeddings_list:
+            # Add all embeddings to FAISS index
+            embeddings_array = np.array(embeddings_list, dtype=np.float32)
+            self.faiss_index.add(embeddings_array)
+            logger.info(f"Semantic index built with {len(embeddings_list)} code chunks")
+        else:
+            logger.warning("No code chunks found for semantic indexing")
+
+    def _extract_symbol_source(self, source_lines: List[str], lineno: int, symbol_name: str) -> str:
+        """
+        Extract the source code for a specific symbol (class or function).
+        
+        Args:
+            source_lines: List of source code lines
+            lineno: Starting line number of the symbol (1-based)
+            symbol_name: Name of the symbol
+            
+        Returns:
+            Source code for the symbol, or empty string if extraction fails
+        """
+        try:
+            # Convert to 0-based indexing
+            start_idx = lineno - 1
+            if start_idx >= len(source_lines):
+                return ""
+            
+            # Find the end of the symbol by looking for the next symbol at the same indentation level
+            symbol_line = source_lines[start_idx]
+            base_indent = len(symbol_line) - len(symbol_line.lstrip())
+            
+            end_idx = start_idx + 1
+            while end_idx < len(source_lines):
+                line = source_lines[end_idx]
+                if line.strip():  # Skip empty lines
+                    line_indent = len(line) - len(line.lstrip())
+                    # If we hit a line with the same or less indentation that's not part of this symbol
+                    if line_indent <= base_indent and not line.lstrip().startswith(('"""', "'''", '#')):
+                        break
+                end_idx += 1
+            
+            # Extract the symbol source
+            symbol_source = '\n'.join(source_lines[start_idx:end_idx])
+            return symbol_source
+            
+        except Exception as e:
+            logger.debug(f"Failed to extract source for {symbol_name} at line {lineno}: {e}")
+            return ""
+
+    def search_semantic_context(self, query: str, k: int = 5) -> List[str]:
+        """
+        Search for semantically similar code chunks using the FAISS index.
+        
+        Args:
+            query: Text query describing what to search for
+            k: Number of most similar results to return
+            
+        Returns:
+            List of unique file paths containing semantically relevant code
+        """
+        if not self._semantic_enabled or not self.faiss_index:
+            logger.warning("Semantic search not available, falling back to empty results")
+            return []
+        
+        try:
+            # Generate embedding for the query
+            query_embedding = self.semantic_model.encode([query])[0]
+            # Normalize for cosine similarity
+            query_embedding = query_embedding / np.linalg.norm(query_embedding)
+            
+            # Search the FAISS index
+            query_vector = np.array([query_embedding], dtype=np.float32)
+            scores, indices = self.faiss_index.search(query_vector, min(k, self.faiss_index.ntotal))
+            
+            # Extract unique file paths from the results
+            relevant_files = set()
+            for idx in indices[0]:
+                if idx >= 0 and idx in self.index_to_location:
+                    file_path = self.index_to_location[idx]['file_path']
+                    relevant_files.add(file_path)
+            
+            result_files = list(relevant_files)
+            logger.info(f"Semantic search for '{query}' found {len(result_files)} relevant files")
+            return result_files
+            
+        except Exception as e:
+            logger.error(f"Error during semantic search: {e}")
+            return []
