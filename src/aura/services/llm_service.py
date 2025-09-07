@@ -10,7 +10,7 @@ from src.aura.app.event_bus import EventBus
 from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
 from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
-
+from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.task_management_service import TaskManagementService
 from src.providers.gemini_provider import GeminiProvider
 from src.providers.ollama_provider import OllamaProvider
@@ -28,12 +28,14 @@ class LLMService:
             self,
             event_bus: EventBus,
             prompt_manager: PromptManager,
-            task_management_service: TaskManagementService
+            task_management_service: TaskManagementService,
+            conversation_management_service: ConversationManagementService
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
         self.prompt_manager = prompt_manager
         self.task_management_service = task_management_service
+        self.conversation_management_service = conversation_management_service
 
         self.agent_config = {}
         self.providers = {}
@@ -183,16 +185,21 @@ class LLMService:
         Manages the main conversational flow with the Lead Companion agent.
         This method embodies the "Cognitive Loop".
         """
+        self.conversation_management_service.add_message("user", user_prompt)
+        history = self.conversation_management_service.get_history()
+
         provider, model_name, config = self._get_provider_for_agent("lead_companion_agent")
         if not provider or not model_name:
             self._handle_error("Lead Companion agent not configured correctly.")
             return
 
         try:
-            prompt = self.prompt_manager.render("lead_companion_master.jinja2", user_prompt=user_prompt)
+            prompt = self.prompt_manager.render("lead_companion_master.jinja2", history=history)
             response_stream = provider.stream_chat(model_name, prompt, config)
             # Buffer the full response to check for tool calls
             full_response = "".join(list(response_stream))
+
+            self.conversation_management_service.add_message("model", full_response)
 
             # This is the "Cognitive Loop" decision point
             if "tool_name" in full_response:
