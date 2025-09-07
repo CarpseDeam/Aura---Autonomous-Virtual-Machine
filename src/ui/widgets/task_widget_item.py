@@ -7,7 +7,7 @@ class TaskWidgetItem(QWidget):
     """
     STYLE = """
         QWidget {
-            background-color: #2c2c2c;
+            background-color: #000000;
             border: 1px solid #4a4a4a;
             border-radius: 5px;
             padding: 8px;

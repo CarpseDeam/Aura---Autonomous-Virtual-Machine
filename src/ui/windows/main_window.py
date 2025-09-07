@@ -45,9 +45,9 @@ class MainWindow(QMainWindow):
             padding-bottom: 10px;
         }
         QTextEdit#chat_display {
-            background-color: #2c2c2c;
+            background-color: #000000;
             border-top: 1px solid #4a4a4a;
-            border-bottom: 1px solid #4a4a4a;
+            border-bottom: none;
             color: #dcdcdc; /* Light Grey */
             font-size: 14px;
         }
