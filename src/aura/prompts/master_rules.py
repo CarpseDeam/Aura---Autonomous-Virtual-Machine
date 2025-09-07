@@ -42,3 +42,12 @@ ENGINEER_PHILOSOPHY_RULE = """
 - You understand that this file is one part of a larger system. Your code must be a good citizen, using correct imports, following the established project structure, and anticipating how other components will interact with it.
 - You write code that you would be proud to have peer-reviewed by the best engineers in the world.
 """
+
+# Rule for enforcing the workspace sandbox
+WORKSPACE_SANDBOX_RULE = """
+**LAW: WORKSPACE SANDBOX**
+- ALL file generation and modification MUST occur only within the designated `workspace/` directory.
+- You are strictly FORBIDDEN from reading, writing, or modifying any file outside of the `workspace/` directory.
+- All file paths in your plans and code must be relative to the project root and begin with `workspace/`.
+- Any plan or code that violates this rule is invalid and must be rejected. Example of a valid path: `workspace/my_project/main.py`.
+"""

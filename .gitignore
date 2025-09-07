@@ -115,3 +115,4 @@ logs/
 *.swp
 *~
 /user_settings.json
+/workspace/

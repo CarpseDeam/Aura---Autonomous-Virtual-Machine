@@ -8,6 +8,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 ASSETS_DIR = ROOT_DIR / "assets"
 LOGS_DIR = ROOT_DIR / "logs"
 SETTINGS_FILE = ROOT_DIR / "user_settings.json"
+WORKSPACE_DIR = ROOT_DIR / "workspace"
 
 # Agent Configurations
 AGENT_CONFIG = {

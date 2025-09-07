@@ -209,7 +209,9 @@ class LLMService:
     def _handle_tool_call(self, tool_call_json: str):
         """Parses and executes a tool call from the Lead Companion."""
         try:
-            data = json.loads(tool_call_json)
+            # Clean up potential markdown backticks from the response
+            clean_json = tool_call_json.strip().replace("```json", "").replace("```", "")
+            data = json.loads(clean_json)
             tool_name = data.get("tool_name")
             arguments = data.get("arguments", {})
             logger.info(f"Lead Companion requested tool: '{tool_name}' with args: {arguments}")
