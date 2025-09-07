@@ -122,9 +122,11 @@ class LLMService:
 
     def _extract_file_path(self, task_description: str) -> str:
         """
-        Intelligently extracts file path from task description.
-        Handles various formats and searches for valid Python files.
+        Intelligently extracts file path from task description using multi-layered approach.
+        First tries explicit regex patterns, then uses ASTService intelligence for symbol lookup.
         """
+        # Step 1: Try existing regex patterns to find explicit file path
+        
         # Pattern 1: Look for explicit file paths in backticks
         backtick_match = re.search(r'`([^`]+\.py)`', task_description)
         if backtick_match:
@@ -141,32 +143,54 @@ class LLMService:
         if py_file_match:
             return f"workspace/{py_file_match.group(0)}"
         
-        # Pattern 4: Search for class/function names and try to find their files using AST service
-        class_function_pattern = r'\b(?:class\s+)?(\w+)(?:\s*\(|\s*:|\s+class|\s+function)'
-        class_func_match = re.search(class_function_pattern, task_description, re.IGNORECASE)
+        # Step 2: If explicit paths fail, attempt intelligent symbol lookup using ASTService
         
-        if class_func_match:
-            symbol_name = class_func_match.group(1)
-            # Try to find the file containing this symbol using context retrieval service
-            try:
-                if hasattr(self.context_retrieval_service.ast_service, 'search_functions'):
+        # Look for class or function names that might exist in the codebase
+        # Pattern matches: "Player class", "Player(", "GameEngine:", "create_player function", etc.
+        symbol_patterns = [
+            r'\b([A-Z][a-zA-Z0-9_]*)\s+class\b',  # "Player class"
+            r'\bclass\s+([A-Z][a-zA-Z0-9_]*)\b',  # "class Player"
+            r'\b([A-Z][a-zA-Z0-9_]*)\s*[\(\:]\s*',  # "Player(" or "Player:"
+            r'\b([a-z_][a-zA-Z0-9_]*)\s+function\b',  # "create_player function"
+            r'\bfunction\s+([a-z_][a-zA-Z0-9_]*)\b',  # "function create_player"
+            r'\bdef\s+([a-z_][a-zA-Z0-9_]*)\b',  # "def create_player"
+            r'\b([A-Z][a-zA-Z0-9_]*)\b(?=\s+(?:methods|functionality|logic|implementation))',  # "Player methods"
+        ]
+        
+        for pattern in symbol_patterns:
+            symbol_match = re.search(pattern, task_description, re.IGNORECASE)
+            if symbol_match:
+                symbol_name = symbol_match.group(1)
+                logger.debug(f"Found potential symbol '{symbol_name}' in task description")
+                
+                # Query ASTService to find the file containing this symbol
+                try:
+                    # First try searching for classes (typically capitalized symbols)
+                    if symbol_name and symbol_name[0].isupper():
+                        class_results = self.context_retrieval_service.ast_service.search_classes(symbol_name)
+                        if class_results and len(class_results) > 0:
+                            found_file = class_results[0]['file']
+                            logger.info(f"ASTService found class '{symbol_name}' in file: {found_file}")
+                            return found_file
+                    
+                    # Then try searching for functions (typically lowercase symbols)
                     function_results = self.context_retrieval_service.ast_service.search_functions(symbol_name)
-                    if function_results:
-                        return function_results[0]['file']
-                if hasattr(self.context_retrieval_service.ast_service, 'search_classes'):
-                    class_results = self.context_retrieval_service.ast_service.search_classes(symbol_name)
-                    if class_results:
-                        return class_results[0]['file']
-            except Exception as e:
-                logger.debug(f"Failed to find file for symbol '{symbol_name}': {e}")
+                    if function_results and len(function_results) > 0:
+                        found_file = function_results[0]['file']
+                        logger.info(f"ASTService found function '{symbol_name}' in file: {found_file}")
+                        return found_file
+                        
+                except Exception as e:
+                    logger.debug(f"ASTService lookup failed for symbol '{symbol_name}': {e}")
+                    continue
         
-        # Pattern 5: Look for common Python keywords that might indicate file types
+        # Step 3: Look for common Python keywords that might indicate file types
         if re.search(r'\b(?:main|app|server|client|model|view|controller|service|util|helper)\b', task_description, re.IGNORECASE):
             main_match = re.search(r'\b(main|app|server|client|model|view|controller|service|util|helper)\b', task_description, re.IGNORECASE)
             if main_match:
                 return f"workspace/{main_match.group(1).lower()}.py"
         
-        # Default fallback
+        # Step 4: Final fallback only if all intelligence fails
         logger.warning(f"Could not extract file path from task: '{task_description}'. Using default.")
         return "workspace/generated.py"
 
@@ -225,18 +249,19 @@ class LLMService:
             return
 
         # Run the code generation in a thread to avoid blocking the UI
-        thread = threading.Thread(target=self._generate_and_dispatch_code, args=(prompt, "engineer_agent", file_path))
+        # Pass task info for Phoenix Initiative validation
+        thread = threading.Thread(target=self._generate_and_dispatch_code, args=(prompt, "engineer_agent", file_path, task))
         thread.start()
 
-    def _generate_and_dispatch_code(self, prompt: str, agent_name: str, file_path: str):
-        """Generates code and dispatches it in a dedicated thread."""
+    def _generate_and_dispatch_code(self, prompt: str, agent_name: str, file_path: str, task=None):
+        """Generates code and dispatches it through the Phoenix Initiative validation pipeline."""
         provider, model_name, config = self._get_provider_for_agent(agent_name)
         if not provider or not model_name:
             self._handle_error(f"Agent '{agent_name}' is not configured for code generation.")
             return
 
         try:
-            logger.info(f"Generating code for '{file_path}' with agent '{agent_name}'.")
+            logger.info(f"🔧 Engineer: Generating code for '{file_path}' with agent '{agent_name}'.")
             response_stream = provider.stream_chat(model_name, prompt, config)
             full_code = "".join(list(response_stream))
 
@@ -247,13 +272,30 @@ class LLMService:
             # Sanitize the code to remove markdown fences
             sanitized_code = self._sanitize_code(full_code)
 
-            # Dispatch the completed code to the Code Viewer
-            code_generated_event = Event(
-                event_type="CODE_GENERATED",
-                payload={"file_path": file_path, "code": sanitized_code}
-            )
-            self.event_bus.dispatch(code_generated_event)
-            logger.info(f"Successfully generated and dispatched code for '{file_path}'.")
+            # Phoenix Initiative: Route through Quality Gate instead of direct dispatch
+            if task and hasattr(task, 'spec') and task.spec:
+                # This is a spec-driven task - send to ValidationService
+                logger.info(f"🚦 Phoenix Initiative: Routing task {task.id} through Quality Gate")
+                validation_event = Event(
+                    event_type="VALIDATE_CODE",
+                    payload={
+                        "spec": task.spec,
+                        "generated_code": sanitized_code,
+                        "task_id": task.id,
+                        "file_path": file_path
+                    }
+                )
+                self.event_bus.dispatch(validation_event)
+            else:
+                # Legacy path: Direct dispatch for non-spec tasks
+                logger.info(f"📋 Legacy: Direct dispatch for non-spec task in '{file_path}'")
+                code_generated_event = Event(
+                    event_type="CODE_GENERATED",
+                    payload={"file_path": file_path, "code": sanitized_code}
+                )
+                self.event_bus.dispatch(code_generated_event)
+
+            logger.info(f"Successfully processed code generation for '{file_path}'.")
 
         except Exception as e:
             logger.error(f"Error during code generation thread for {file_path}: {e}", exc_info=True)
@@ -349,7 +391,7 @@ class LLMService:
             )
 
     def _execute_architect_consultation(self, user_request: str):
-        """Invokes the Architect agent to generate a project plan."""
+        """Invokes the Architect agent to generate a granular blueprint and orchestrates multi-specialist execution."""
         provider, model_name, config = self._get_provider_for_agent("architect_agent")
         if not provider or not model_name:
             self._handle_error("Architect agent is not configured.")
@@ -361,16 +403,16 @@ class LLMService:
             full_response = "".join(list(response_stream))
 
             # Clean up potential markdown backticks from the response
-            plan_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
-            project_name = plan_data.get("project_name")
-            tasks = plan_data.get("plan", [])
+            blueprint_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
+            project_name = blueprint_data.get("project_name")
+            blueprint = blueprint_data.get("blueprint", {})
 
             if not project_name:
-                self._handle_error("The Architect returned a plan without a project_name.")
+                self._handle_error("The Architect returned a blueprint without a project_name.")
                 return
 
-            if not tasks:
-                self._handle_error("The Architect returned an empty plan.")
+            if not blueprint:
+                self._handle_error("The Architect returned an empty blueprint.")
                 return
 
             # Set active project (triggers Prime Directive: automatic re-indexing)
@@ -381,19 +423,76 @@ class LLMService:
                 self._handle_error(f"Failed to activate project '{project_name}': {e}")
                 return
 
-            # Add all the planned tasks to Mission Control!
-            for task in tasks:
-                self.event_bus.dispatch(
-                    Event(event_type="ADD_TASK", payload={"description": task["description"]})
-                )
+            # Phoenix Initiative: Multi-Specialist Execution
+            # Parse the granular blueprint and create highly specific tasks for each symbol
+            total_tasks = 0
+            
+            for file_path, file_spec in blueprint.items():
+                # Generate tasks for each class and its methods
+                for class_spec in file_spec.get("classes", []):
+                    class_name = class_spec.get("name", "UnknownClass")
+                    
+                    for method_spec in class_spec.get("methods", []):
+                        method_name = method_spec.get("name", "unknown_method")
+                        method_signature = method_spec.get("signature", "def unknown_method(self)")
+                        method_description = method_spec.get("description", "No description provided")
+                        
+                        # Create highly specific task for this individual method
+                        task_description = (
+                            f"In the file `{file_path}`, implement the `{method_name}` method for the `{class_name}` class. "
+                            f"Method signature: `{method_signature}`. "
+                            f"Functionality: {method_description}"
+                        )
+                        
+                        self.event_bus.dispatch(
+                            Event(event_type="ADD_TASK", payload={
+                                "description": task_description,
+                                "spec": {
+                                    "file_path": file_path,
+                                    "class_name": class_name,
+                                    "method_name": method_name,
+                                    "signature": method_signature,
+                                    "return_type": method_spec.get("return_type", "None"),
+                                    "description": method_description
+                                }
+                            })
+                        )
+                        total_tasks += 1
+                
+                # Generate tasks for standalone functions
+                for function_spec in file_spec.get("functions", []):
+                    function_name = function_spec.get("name", "unknown_function")
+                    function_signature = function_spec.get("signature", "def unknown_function()")
+                    function_description = function_spec.get("description", "No description provided")
+                    
+                    # Create highly specific task for this individual function
+                    task_description = (
+                        f"In the file `{file_path}`, implement the `{function_name}` function. "
+                        f"Function signature: `{function_signature}`. "
+                        f"Functionality: {function_description}"
+                    )
+                    
+                    self.event_bus.dispatch(
+                        Event(event_type="ADD_TASK", payload={
+                            "description": task_description,
+                            "spec": {
+                                "file_path": file_path,
+                                "function_name": function_name,
+                                "signature": function_signature,
+                                "return_type": function_spec.get("return_type", "None"),
+                                "description": function_description
+                            }
+                        })
+                    )
+                    total_tasks += 1
 
             # Send a confirmation message back to the user
-            confirmation_prompt = "Excellent! I've drafted a plan and added it to Mission Control. Take a look and let me know when you're ready to start building. You can dispatch them all at once or we can refine the plan further."
+            confirmation_prompt = f"🔥 Phoenix Initiative Activated! I've created a granular blueprint with {total_tasks} precise tasks. Each specialist will implement individual methods and functions according to the spec. Ready for validation-driven development!"
             self._stream_generation(confirmation_prompt, "lead_companion_agent")
 
         except Exception as e:
             logger.error(f"Error during architect consultation: {e}", exc_info=True)
-            self._handle_error("The Architect specialist encountered an error while drafting the plan.")
+            self._handle_error("The Architect specialist encountered an error while drafting the blueprint.")
 
     def _execute_engineer_consultation(self, arguments: dict):
         """

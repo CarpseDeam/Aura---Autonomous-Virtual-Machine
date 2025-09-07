@@ -40,9 +40,12 @@ class WorkspaceService:
 
     def _register_event_handlers(self):
         """Register event handlers for workspace operations."""
+        # Phoenix Initiative: Subscribe to validation events instead of direct CODE_GENERATED
+        self.event_bus.subscribe("VALIDATION_SUCCESSFUL", self._handle_validation_successful)
+        # Legacy: Keep CODE_GENERATED for non-spec tasks
         self.event_bus.subscribe("CODE_GENERATED", self._handle_code_generated)
         self.event_bus.subscribe("IMPORT_PROJECT_REQUESTED", self._handle_import_project_requested)
-        logger.info("WorkspaceService subscribed to CODE_GENERATED and IMPORT_PROJECT_REQUESTED events")
+        logger.info("WorkspaceService subscribed to validation and import events")
 
     def set_active_project(self, project_name: str):
         """
@@ -261,3 +264,46 @@ class WorkspaceService:
                 event_type="PROJECT_IMPORT_ERROR",
                 payload={"error": str(e)}
             ))
+
+    def _handle_validation_successful(self, event: Event):
+        """
+        Phoenix Initiative: Handle VALIDATION_SUCCESSFUL events by saving validated code.
+        Only code that passes the Quality Gate gets saved to the workspace.
+        
+        Args:
+            event: Event containing validated code and file path
+        """
+        file_path = event.payload.get("file_path")
+        validated_code = event.payload.get("validated_code")
+        task_id = event.payload.get("task_id")
+        
+        if not file_path or not validated_code:
+            logger.warning("VALIDATION_SUCCESSFUL event missing file_path or validated_code payload")
+            return
+        
+        if not self.active_project:
+            logger.warning("No active project set, cannot save validated code")
+            return
+        
+        try:
+            # Extract just the filename if it's a full path
+            if os.path.sep in file_path:
+                filename = os.path.basename(file_path)
+            else:
+                filename = file_path
+            
+            self.save_code_to_project(filename, validated_code)
+            logger.info(f"✅ Phoenix Initiative: Saved validated code for task {task_id} to {filename}")
+            
+            # Dispatch a special event indicating validated code was saved
+            self.event_bus.dispatch(Event(
+                event_type="VALIDATED_CODE_SAVED",
+                payload={
+                    "task_id": task_id,
+                    "file_path": file_path,
+                    "project_name": self.active_project
+                }
+            ))
+            
+        except Exception as e:
+            logger.error(f"Failed to save validated code for task {task_id}: {e}")

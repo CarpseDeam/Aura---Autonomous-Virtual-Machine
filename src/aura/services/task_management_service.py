@@ -23,7 +23,11 @@ class TaskManagementService:
         """Subscribe to events that modify the task list."""
         self.event_bus.subscribe("ADD_TASK", self.handle_add_task)
         self.event_bus.subscribe("DISPATCH_ALL_TASKS", self.handle_dispatch_all_tasks)
-        # Subscribe to the completion event to trigger the next task
+        # Phoenix Initiative: Subscribe to validation events
+        self.event_bus.subscribe("VALIDATE_CODE", self.handle_validation_started)
+        self.event_bus.subscribe("VALIDATION_SUCCESSFUL", self.handle_validation_successful)
+        self.event_bus.subscribe("VALIDATION_FAILED", self.handle_validation_failed)
+        # Legacy: Subscribe to direct completion for non-spec tasks
         self.event_bus.subscribe("CODE_GENERATED", self.handle_task_completed)
 
     def get_task_by_id(self, task_id: str) -> Optional[Task]:
@@ -39,15 +43,23 @@ class TaskManagementService:
     def handle_add_task(self, event: Event):
         """
         Handles the ADD_TASK event by creating a new task.
+        Phoenix Initiative: Enhanced to include specification data.
         """
         description = event.payload.get("description")
         if not description:
             logger.warning("ADD_TASK event received with no description.")
             return
 
-        new_task = Task(description=description)
+        # Phoenix Initiative: Check for specification data
+        spec = event.payload.get("spec")
+        new_task = Task(description=description, spec=spec)
         self.tasks.append(new_task)
-        logger.info(f"New task added: '{description}'")
+        
+        if spec:
+            logger.info(f"🔥 Phoenix Task added with spec: '{description}'")
+        else:
+            logger.info(f"📋 Legacy Task added: '{description}'")
+        
         self._dispatch_task_list_update()
 
     def handle_dispatch_all_tasks(self, event: Event):
@@ -113,6 +125,59 @@ class TaskManagementService:
             payload={"tasks": tasks_payload}
         )
         self.event_bus.dispatch(update_event)
+
+    def handle_validation_started(self, event: Event):
+        """
+        Phoenix Initiative: Handle VALIDATE_CODE event by updating task status to VALIDATING.
+        """
+        task_id = event.payload.get("task_id")
+        if not task_id:
+            return
+            
+        task = self.get_task_by_id(task_id)
+        if task:
+            task.status = TaskStatus.VALIDATING
+            logger.info(f"🔍 Task {task_id} moved to VALIDATING state")
+            self._dispatch_task_list_update()
+
+    def handle_validation_successful(self, event: Event):
+        """
+        Phoenix Initiative: Handle VALIDATION_SUCCESSFUL event - task passed quality gate.
+        """
+        task_id = event.payload.get("task_id")
+        if not task_id:
+            return
+            
+        task = self.get_task_by_id(task_id)
+        if task:
+            task.status = TaskStatus.VALIDATION_PASSED
+            task.validation_error = None  # Clear any previous errors
+            logger.info(f"✅ Task {task_id} PASSED validation")
+            self._dispatch_task_list_update()
+            
+            # Move to next task in the sequence
+            self._dispatch_next_task()
+
+    def handle_validation_failed(self, event: Event):
+        """
+        Phoenix Initiative: Handle VALIDATION_FAILED event - task failed quality gate.
+        """
+        task_id = event.payload.get("task_id")
+        error_message = event.payload.get("error_message", "Unknown validation error")
+        
+        if not task_id:
+            return
+            
+        task = self.get_task_by_id(task_id)
+        if task:
+            task.status = TaskStatus.VALIDATION_FAILED
+            task.validation_error = error_message
+            logger.warning(f"❌ Task {task_id} FAILED validation: {error_message}")
+            self._dispatch_task_list_update()
+            
+            # Continue with next task even if this one failed
+            # TODO: In future, might want different behavior (retry, stop, etc.)
+            self._dispatch_next_task()
 
     def add_temporary_task(self, task: Task):
         """
