@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         self.code_viewer_window = None # Will be set by AuraApp
         self.settings_window = None  # To hold the settings window instance
         self.setWindowTitle("Aura - Command Deck")
-        self.setGeometry(100, 100, 900, 700)
+        self.setGeometry(100, 100, 675, 805)
 
         self._set_window_icon()
         self.setStyleSheet(self.AURA_STYLESHEET)

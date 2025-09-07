@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea
 from PySide6.QtCore import Qt, Signal, QObject
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
@@ -57,6 +57,9 @@ class TaskLogWindow(QWidget):
         QPushButton#dispatch_button:hover {
             background-color: #FFA726; /* Lighter Amber */
         }
+        QScrollArea {
+            border: none;
+        }
     """
 
     def __init__(self, event_bus: EventBus, parent=None):
@@ -88,6 +91,13 @@ class TaskLogWindow(QWidget):
         self.task_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.task_list_container.setStyleSheet("border: none;")
 
+        # Create a scroll area for the task list
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(self.task_list_container)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
         self.task_input = QLineEdit()
         self.task_input.setObjectName("task_input")
         self.task_input.setPlaceholderText("Add a new task...")
@@ -98,7 +108,7 @@ class TaskLogWindow(QWidget):
         self.dispatch_button.clicked.connect(self._dispatch_all_tasks)
 
         self.main_layout.addWidget(title_label)
-        self.main_layout.addWidget(self.task_list_container, 1)
+        self.main_layout.addWidget(scroll_area, 1)
         self.main_layout.addWidget(self.task_input)
         self.main_layout.addWidget(self.dispatch_button)
 
