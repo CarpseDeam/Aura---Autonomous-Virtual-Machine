@@ -8,6 +8,7 @@ from src.aura.models.events import Event
 from src.aura.config import ASSETS_DIR
 from src.ui.widgets.chat_input import ChatInputTextEdit
 from src.ui.windows.settings_window import SettingsWindow
+from src.ui.widgets.knight_rider_widget import ThinkingIndicator
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +134,15 @@ class MainWindow(QMainWindow):
         self.chat_display.setObjectName("chat_display")
         self.chat_display.setReadOnly(True)
 
+        # Add thinking indicator
+        self.thinking_indicator = ThinkingIndicator()
+        
         input_container = self._create_input_area()
 
         main_layout.addWidget(top_bar)
         main_layout.addWidget(banner_widget)
         main_layout.addWidget(self.chat_display, 1)
+        main_layout.addWidget(self.thinking_indicator)
         main_layout.addWidget(input_container)
 
     def _create_top_bar(self):
@@ -206,6 +211,10 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("MODEL_STREAM_ENDED", lambda event: self.signaller.stream_ended.emit())
         self.event_bus.subscribe("MODEL_ERROR", lambda event: self.signaller.error_received.emit(
             event.payload.get("message", "Unknown error")))
+        
+        # Subscribe to specific thinking states
+        self.event_bus.subscribe("DISPATCH_TASK", self._handle_task_dispatch)
+        self.event_bus.subscribe("CODE_GENERATED", self._handle_code_generated)
 
     def _start_new_session(self):
         """Dispatches an event to start a new session and resets the UI."""
@@ -265,6 +274,9 @@ class MainWindow(QMainWindow):
         self.chat_display.append(f"<div style='padding-left: 15px;'>{user_text.replace(os.linesep, '<br>')}</div>")
         self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
 
+        # Start thinking animation
+        self.thinking_indicator.start_thinking("AURA is analyzing your request...")
+
         event = Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text})
         self.event_bus.dispatch(event)
 
@@ -272,6 +284,8 @@ class MainWindow(QMainWindow):
         """Appends a chunk of text from the model to the display."""
         if not self.is_streaming_response:
             self.is_streaming_response = True
+            # Stop thinking animation when first chunk arrives
+            self.thinking_indicator.stop_thinking()
             self.chat_display.append(f"<br><span style='color: #00FFFF;'>[AURA]</span>")
             self.chat_display.insertHtml("<div style='padding-left: 15px;'>")
 
@@ -290,8 +304,21 @@ class MainWindow(QMainWindow):
 
     def _handle_model_error(self, error_message: str):
         """Displays an error message in the chat."""
+        # Stop thinking animation on error
+        self.thinking_indicator.stop_thinking()
         self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] {error_message}</span>")
         self._handle_stream_end()
+
+    def _handle_task_dispatch(self, event):
+        """Handle task dispatch events to show engineering thinking state."""
+        if self.thinking_indicator.knight_rider.is_animating:
+            self.thinking_indicator.set_thinking_message("AURA is engineering your solution...")
+
+    def _handle_code_generated(self, event):
+        """Handle code generation completion."""
+        file_path = event.payload.get("file_path", "file")
+        if self.thinking_indicator.knight_rider.is_animating:
+            self.thinking_indicator.set_thinking_message(f"AURA completed: {file_path}")
 
     def _update_child_window_positions(self):
         """Updates the position of all attached child windows."""
