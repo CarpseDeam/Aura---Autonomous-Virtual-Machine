@@ -56,7 +56,7 @@ class TaskManagementService:
         self.tasks.append(new_task)
         
         if spec:
-            logger.info(f"🔥 Phoenix Task added with spec: '{description}'")
+            logger.info(f"Phoenix Task added with spec: '{description}'")
         else:
             logger.info(f"📋 Legacy Task added: '{description}'")
         
