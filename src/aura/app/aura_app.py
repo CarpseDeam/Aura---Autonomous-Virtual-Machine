@@ -11,6 +11,7 @@ from src.aura.services.conversation_management_service import ConversationManage
 from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
+from src.aura.services.validation_service import ValidationService
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
 from src.aura.models.events import Event
@@ -44,6 +45,8 @@ class AuraApp:
         self.ast_service = ASTService(self.event_bus)
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR, self.ast_service)
         self.context_retrieval_service = ContextRetrievalService(self.ast_service)
+        # Phoenix Initiative: Initialize ValidationService for Quality Gate
+        self.validation_service = ValidationService(self.event_bus)
         self.llm_service = LLMService(
             self.event_bus,
             self.prompt_manager,

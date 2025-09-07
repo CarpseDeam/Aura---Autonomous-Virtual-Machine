@@ -1,5 +1,7 @@
 import logging
 import os
+from collections import deque
+from html import escape
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication, QPushButton, QFileDialog
 from PySide6.QtGui import QFont, QTextCursor, QIcon
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QSize
@@ -88,6 +90,31 @@ class MainWindow(QMainWindow):
         .system-status {
             color: #FFB74D;
         }
+        /* Aura Command Deck status styles */
+        .status-success {
+            color: #39FF14;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 13px;
+            margin: 2px 0;
+        }
+        .status-in-progress {
+            color: #FFB74D;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 13px;
+            margin: 2px 0;
+        }
+        .status-error {
+            color: #FF4444;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 13px;
+            margin: 2px 0;
+        }
+        .status-info {
+            color: #64B5F6;
+            font-family: "JetBrains Mono", monospace;
+            font-size: 13px;
+            margin: 2px 0;
+        }
     """
 
     BOOT_SEQUENCE = [
@@ -117,7 +144,15 @@ class MainWindow(QMainWindow):
         self.is_booting = True
         self.is_streaming_response = False
         self.signaller = Signaller()
-
+        
+        # Aura Command Deck: Animated Terminal System
+        self.status_message_queue = deque()  # Queue for status updates
+        self.current_status_message = ""  # Currently being typed
+        self.current_status_class = ""  # CSS class for current message
+        self.current_char_index = 0  # Character position in current message
+        self.status_typing_timer = QTimer()
+        self.STATUS_TYPING_SPEED = 15  # milliseconds between characters
+        
         self._init_ui()
         self._register_event_handlers()
         self._start_boot_sequence()
@@ -243,6 +278,13 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("PROJECT_ACTIVATED", self._handle_project_activated)
         self.event_bus.subscribe("PROJECT_IMPORTED", self._handle_project_imported)
         self.event_bus.subscribe("PROJECT_IMPORT_ERROR", self._handle_project_import_error)
+        
+        # Aura Command Deck: Subscribe to workflow status updates
+        self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
+        
+        # Setup typing animation timer
+        self.status_typing_timer.timeout.connect(self._type_next_status_char)
+        self.status_typing_timer.setSingleShot(False)
 
     def _start_new_session(self):
         """Dispatches an event to start a new session and resets the UI."""
@@ -492,3 +534,91 @@ class MainWindow(QMainWindow):
         """Handle project import error events."""
         error = event.payload.get("error", "Unknown error")
         self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] Project import failed: {error}</span>")
+
+    # ═══════════════════════════════════════════════════════════════════════════════════════
+    # AURA COMMAND DECK: ANIMATED TERMINAL SYSTEM
+    # ═══════════════════════════════════════════════════════════════════════════════════════
+    
+    def _handle_workflow_status_update(self, event):
+        """
+        Aura Command Deck: Handle incoming workflow status updates by queuing them for animation.
+        """
+        message = event.payload.get("message", "")
+        status = event.payload.get("status", "info")
+        
+        if message:
+            # Add to queue for animated typing
+            self.status_message_queue.append((message, status))
+            
+            # Start typing animation if not already running
+            if not self.status_typing_timer.isActive():
+                self._start_next_status_message()
+    
+    def _start_next_status_message(self):
+        """
+        Aura Command Deck: Start typing the next message in the queue.
+        """
+        if not self.status_message_queue:
+            return
+            
+        # Get next message from queue
+        message, status = self.status_message_queue.popleft()
+        self.current_status_message = message
+        self.current_status_class = f"status-{status}"
+        self.current_char_index = 0
+        
+        # Map status to icon
+        status_icons = {
+            "success": "🟢",
+            "in-progress": "🟡", 
+            "error": "🔴",
+            "info": "🔵"
+        }
+        icon = status_icons.get(status, "⚪")
+        
+        # Insert the initial HTML container with icon
+        cursor = self.chat_display.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertHtml(f'<div class="{self.current_status_class}">{escape(icon)} ')
+        self.chat_display.setTextCursor(cursor)
+        
+        # Start the character-by-character typing
+        self.status_typing_timer.start(self.STATUS_TYPING_SPEED)
+    
+    def _type_next_status_char(self):
+        """
+        Aura Command Deck: Type the next character of the current status message.
+        This is the core animation method that creates the hacker terminal effect.
+        """
+        if self.current_char_index >= len(self.current_status_message):
+            # Current message is complete
+            cursor = self.chat_display.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            cursor.insertHtml('</div>')
+            self.chat_display.setTextCursor(cursor)
+            
+            # Auto-scroll to bottom to keep status updates visible
+            scrollbar = self.chat_display.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+            
+            self.status_typing_timer.stop()
+            
+            # Start next message if queue has more
+            if self.status_message_queue:
+                self._start_next_status_message()
+            return
+        
+        # Type the next character
+        char = self.current_status_message[self.current_char_index]
+        escaped_char = escape(char)  # Handle HTML special characters safely
+        
+        cursor = self.chat_display.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertHtml(escaped_char)
+        self.chat_display.setTextCursor(cursor)
+        
+        # Auto-scroll to keep typing visible
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        
+        self.current_char_index += 1
