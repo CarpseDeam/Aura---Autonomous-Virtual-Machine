@@ -117,3 +117,4 @@ logs/
 /user_settings.json
 /workspace/
 /CLAUDE.md
+/.claude/
