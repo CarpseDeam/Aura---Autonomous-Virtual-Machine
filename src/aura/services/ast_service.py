@@ -4,6 +4,10 @@ import logging
 from typing import List, Dict, Set
 from pathlib import Path
 
+# Application-specific imports
+from src.aura.app.event_bus import EventBus
+from src.aura.models.events import Event
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,10 +93,12 @@ class ASTService:
     for Retrieval-Augmented Generation (RAG) system for code.
     """
 
-    def __init__(self):
+    def __init__(self, event_bus: EventBus):
+        self.event_bus = event_bus
         self.project_index: Dict[str, Dict] = {}
         self.project_root: str = ""
-        logger.info("ASTService initialized.")
+        self._register_event_handlers()
+        logger.info("ASTService initialized with event-driven dynamic updates.")
 
     def index_project(self, project_path: str) -> None:
         """
@@ -161,6 +167,49 @@ class ASTService:
             'total_functions': len(analyzer.functions),
             'total_classes': len(analyzer.classes)
         }
+
+    def _register_event_handlers(self):
+        """Register event handlers for dynamic index updates."""
+        self.event_bus.subscribe("CODE_GENERATED", self.update_index_for_file)
+        logger.info("ASTService subscribed to CODE_GENERATED events for dynamic updates")
+
+    def update_index_for_file(self, event: Event):
+        """
+        Dynamically update the AST index for a specific file when new code is generated.
+        This ensures the knowledge graph stays perfectly synchronized with code changes.
+        
+        Args:
+            event: Event containing file_path and code payload
+        """
+        file_path = event.payload.get("file_path")
+        code = event.payload.get("code")
+        
+        if not file_path or not code:
+            logger.warning("CODE_GENERATED event missing file_path or code payload")
+            return
+        
+        logger.info(f"Dynamic update requested for: {file_path}")
+        
+        try:
+            # Parse the new source code into an AST tree
+            tree = ast.parse(code)
+            
+            # Analyze the AST to extract structured information
+            analysis = self._analyze_ast(tree, file_path)
+            
+            # Update the master index with the new analysis
+            # This handles both new files and updates to existing files
+            normalized_path = self._normalize_path(file_path)
+            self.project_index[normalized_path] = analysis
+            
+            logger.info(f"AST index successfully updated for: {file_path}")
+            logger.debug(f"Updated analysis: {analysis['total_functions']} functions, "
+                        f"{analysis['total_classes']} classes, {analysis['total_imports']} imports")
+            
+        except SyntaxError as e:
+            logger.error(f"Syntax error in generated code for {file_path}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to update AST index for {file_path}: {str(e)}")    
 
     def get_relevant_context(self, target_file: str) -> List[str]:
         """

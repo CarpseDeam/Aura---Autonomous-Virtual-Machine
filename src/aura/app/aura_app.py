@@ -35,7 +35,7 @@ class AuraApp:
         self.prompt_manager = PromptManager()
         self.task_management_service = TaskManagementService(self.event_bus)
         self.conversation_management_service = ConversationManagementService(self.event_bus)
-        self.ast_service = ASTService()
+        self.ast_service = ASTService(self.event_bus)
         self.llm_service = LLMService(
             self.event_bus,
             self.prompt_manager,

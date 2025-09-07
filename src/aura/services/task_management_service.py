@@ -74,3 +74,11 @@ class TaskManagementService:
             payload={"tasks": tasks_payload}
         )
         self.event_bus.dispatch(update_event)
+
+    def add_temporary_task(self, task: Task):
+        """
+        Adds a single, direct-dispatch task to the list.
+        Used for fast-lane refinement tasks that bypass the full planning process.
+        """
+        self.tasks.append(task)
+        logger.info(f"Temporary task added for direct dispatch: '{task.description}'")

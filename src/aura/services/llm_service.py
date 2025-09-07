@@ -13,6 +13,7 @@ from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.ast_service import ASTService
+from src.aura.models.task import Task
 from src.providers.gemini_provider import GeminiProvider
 from src.providers.ollama_provider import OllamaProvider
 
@@ -248,6 +249,8 @@ class LLMService:
 
             if tool_name == "consult_architect":
                 self._execute_architect_consultation(arguments.get("user_request"))
+            elif tool_name == "consult_engineer":
+                self._execute_engineer_consultation(arguments)
             else:
                 self._handle_error(f"Received unknown tool call: {tool_name}")
 
@@ -290,6 +293,40 @@ class LLMService:
         except Exception as e:
             logger.error(f"Error during architect consultation: {e}", exc_info=True)
             self._handle_error("The Architect specialist encountered an error while drafting the plan.")
+
+    def _execute_engineer_consultation(self, arguments: dict):
+        """
+        Executes a direct engineer consultation for fast-lane refinement tasks.
+        This bypasses the full planning process for small, iterative changes.
+        """
+        task_description = arguments.get("task_description")
+        if not task_description:
+            logger.error("Engineer consultation received without task_description")
+            self._handle_error("I need a clear task description to work with the engineer.")
+            return
+
+        logger.info(f"Direct engineer consultation: {task_description}")
+
+        try:
+            # Create a new Task object directly from the description
+            new_task = Task(description=task_description)
+            
+            # Add this temporary task to TaskManagementService so handle_dispatch_task can find it
+            self.task_management_service.add_temporary_task(new_task)
+            
+            # Dispatch the task directly to the engineer, bypassing Mission Control
+            self.event_bus.dispatch(Event(
+                event_type="DISPATCH_TASK",
+                payload={"task_id": new_task.id}
+            ))
+            
+            # Send confirmation to the user
+            confirmation_prompt = "Perfect! I'm sending this refinement task directly to our engineer. This will be completed quickly using our fast-lane process."
+            self._stream_generation(confirmation_prompt, "lead_companion_agent")
+            
+        except Exception as e:
+            logger.error(f"Error during engineer consultation: {e}", exc_info=True)
+            self._handle_error("I encountered an error while setting up the engineer consultation.")
 
     def _stream_generation(self, prompt: str, agent_name: str):
         """The main generation method that dispatches a request to the correct provider."""
