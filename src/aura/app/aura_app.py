@@ -29,6 +29,8 @@ class AuraApp:
 
         logging.info("Initializing AuraApp...")
         self.app = QApplication(sys.argv)
+        self.app.setOrganizationName("Aura")
+        self.app.setApplicationName("Autonomous Virtual Machine")
 
         self._load_fonts()
 

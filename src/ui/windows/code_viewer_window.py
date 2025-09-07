@@ -2,7 +2,7 @@ import logging
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QSplitter,
                                QTreeWidget, QTreeWidgetItem, QTabWidget, QTextEdit, QApplication)
-from PySide6.QtCore import Qt, Signal, QObject, Slot
+from PySide6.QtCore import Qt, Signal, QObject, Slot, QSettings, QByteArray
 from src.aura.app.event_bus import EventBus
 from src.ui.widgets.syntax_highlighter import PythonSyntaxHighlighter
 
@@ -77,11 +77,11 @@ class CodeViewerWindow(QWidget):
 
         self.setWindowTitle("Code Viewer")
         self.setWindowFlags(Qt.WindowType.Tool)
-        self.setGeometry(100, 100, 500, 700)
         self.setStyleSheet(self.CODE_VIEWER_STYLESHEET)
 
         self._init_ui()
         self._register_event_handlers()
+        self._load_settings()
 
     def _init_ui(self):
         """Initializes the user interface."""
@@ -93,7 +93,7 @@ class CodeViewerWindow(QWidget):
         title_label.setObjectName("title_label")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.file_tree = QTreeWidget()
         self.file_tree.setHeaderHidden(True)
@@ -103,12 +103,35 @@ class CodeViewerWindow(QWidget):
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
 
-        splitter.addWidget(self.file_tree)
-        splitter.addWidget(self.tab_widget)
-        splitter.setSizes([150, 350])  # Initial size distribution
+        self.splitter.addWidget(self.file_tree)
+        self.splitter.addWidget(self.tab_widget)
 
         layout.addWidget(title_label)
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
+
+    def _load_settings(self):
+        """Loads window geometry and splitter state from settings."""
+        settings = QSettings()
+        geometry = settings.value("code_viewer/geometry")
+        if isinstance(geometry, QByteArray):
+            self.restoreGeometry(geometry)
+        else:
+            # Default geometry if no settings are found
+            self.setGeometry(100, 100, 500, 700)
+
+        splitter_state = settings.value("code_viewer/splitterState")
+        if isinstance(splitter_state, QByteArray):
+            self.splitter.restoreState(splitter_state)
+        else:
+            # Default splitter sizes
+            self.splitter.setSizes([150, 350])
+
+    def closeEvent(self, event):
+        """Saves window geometry and splitter state on close."""
+        settings = QSettings()
+        settings.setValue("code_viewer/geometry", self.saveGeometry())
+        settings.setValue("code_viewer/splitterState", self.splitter.saveState())
+        super().closeEvent(event)
 
     def _register_event_handlers(self):
         """Subscribes to relevant events from the event bus."""
