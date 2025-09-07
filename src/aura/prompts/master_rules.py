@@ -51,3 +51,11 @@ WORKSPACE_SANDBOX_RULE = """
 - All file paths in your plans and code must be relative to the project root and begin with `workspace/`.
 - Any plan or code that violates this rule is invalid and must be rejected. Example of a valid path: `workspace/my_project/main.py`.
 """
+
+# Rule for correct import paths
+WORKSPACE_IMPORT_RULE = """
+**LAW: WORKSPACE-RELATIVE IMPORTS**
+- All import statements in the code you generate MUST be relative to the workspace root.
+- You are strictly FORBIDDEN from using `src.` in any import path.
+- For example, if the project structure is `workspace/utils/helpers.py`, the correct import is `from utils.helpers import ...`, NOT `from src.workspace.utils.helpers import ...` or `from workspace.utils.helpers import ...`.
+"""
