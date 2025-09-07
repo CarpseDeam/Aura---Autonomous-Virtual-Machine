@@ -58,7 +58,9 @@ class GeminiProvider(LLMProvider):
         prompt: str,
         config: Dict[str, Any]
     ) -> Generator[str, None, None]:
-        """Streams a chat response from the Gemini API."""
+        """
+        Streams a chat response from the Gemini API character by character.
+        """
         if not self.configured:
             yield "ERROR: GeminiProvider is not configured. Please check your API key."
             return
@@ -73,7 +75,8 @@ class GeminiProvider(LLMProvider):
             response_stream = model.generate_content(prompt, stream=True)
 
             for chunk in response_stream:
-                yield chunk.text
+                for char in chunk.text:
+                    yield char
 
         except Exception as e:
             logger.error(f"Error during Gemini stream: {e}", exc_info=True)
@@ -85,7 +88,9 @@ class GeminiProvider(LLMProvider):
         messages: List[Dict[str, str]],
         config: Dict[str, Any]
     ) -> Generator[str, None, None]:
-        """Streams a chat response using structured messages with the Gemini API."""
+        """
+        Streams a chat response using structured messages with the Gemini API character by character.
+        """
         if not self.configured:
             yield "ERROR: GeminiProvider is not configured. Please check your API key."
             return
@@ -131,7 +136,8 @@ class GeminiProvider(LLMProvider):
                     response_stream = model.generate_content("Please respond", stream=True)
 
             for chunk in response_stream:
-                yield chunk.text
+                for char in chunk.text:
+                    yield char
 
         except Exception as e:
             logger.error(f"Error during Gemini structured stream: {e}", exc_info=True)

@@ -10,7 +10,7 @@ class TaskWidgetItem(QWidget):
             background-color: #000000;
             border: 1px solid #4a4a4a;
             border-radius: 5px;
-            padding: 8px;
+            padding: 10px; /* Increased padding for better spacing */
         }
     """
 

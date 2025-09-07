@@ -67,6 +67,11 @@ class ValidationService:
                 payload={"message": f"Validation successful for {filename}", "status": "success"}
             ))
             self._dispatch_validation_successful(task_id, file_path, generated_code)
+            # Dispatch CODE_GENERATED event for the CodeViewerWindow to update
+            self.event_bus.dispatch(Event(
+                event_type="CODE_GENERATED",
+                payload={"file_path": file_path, "code": generated_code}
+            ))
         else:
             logger.warning(f"❌ Quality Gate: Validation FAILED for task {task_id}: {'; '.join(validation_errors)}")
             # Aura Command Deck: Show validation failure
@@ -111,7 +116,8 @@ class ValidationService:
         return is_valid, errors
 
     def _validate_class_method(self, spec: Dict[str, Any], generated_code: str) -> List[str]:
-        """Validate that a class method is properly implemented according to spec."""
+        """
+        Validate that a class method is properly implemented according to spec."""
         errors = []
         
         class_name = spec.get("class_name", "")
@@ -145,7 +151,8 @@ class ValidationService:
         return errors
 
     def _validate_function(self, spec: Dict[str, Any], generated_code: str) -> List[str]:
-        """Validate that a standalone function is properly implemented according to spec."""
+        """
+        Validate that a standalone function is properly implemented according to spec."""
         errors = []
         
         function_name = spec.get("function_name", "")
@@ -171,7 +178,8 @@ class ValidationService:
         return errors
 
     def _dispatch_validation_successful(self, task_id: str, file_path: str, validated_code: str):
-        """Dispatch validation successful event."""
+        """
+        Dispatch validation successful event."""
         self.event_bus.dispatch(Event(
             event_type="VALIDATION_SUCCESSFUL",
             payload={
@@ -182,7 +190,8 @@ class ValidationService:
         ))
 
     def _dispatch_validation_failed(self, task_id: str, file_path: str, error_message: str):
-        """Dispatch validation failed event."""
+        """
+        Dispatch validation failed event."""
         self.event_bus.dispatch(Event(
             event_type="VALIDATION_FAILED",
             payload={

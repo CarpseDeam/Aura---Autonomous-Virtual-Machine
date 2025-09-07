@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QSplitter,
 from PySide6.QtCore import Qt, Signal, QObject, Slot, QSettings, QByteArray
 from src.aura.app.event_bus import EventBus
 from src.ui.widgets.syntax_highlighter import PythonSyntaxHighlighter
+from src.aura.services.ast_service import ASTService
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 class CodeViewerSignaller(QObject):
     """A signaller to safely update the UI from other threads."""
     code_generated = Signal(dict)
+    project_activated = Signal(dict)
 
 
 class CodeViewerWindow(QWidget):
@@ -67,10 +69,11 @@ class CodeViewerWindow(QWidget):
         }
     """
 
-    def __init__(self, event_bus: EventBus, parent=None):
+    def __init__(self, event_bus: EventBus, ast_service: ASTService, parent=None):
         """Initializes the CodeViewerWindow."""
         super().__init__(parent)
         self.event_bus = event_bus
+        self.ast_service = ast_service
         self.signaller = CodeViewerSignaller()
         self.open_tabs = {}  # Maps file_path to its editor widget
         self.tree_items = {} # Maps a full path to its tree widget item for quick lookup
@@ -140,6 +143,11 @@ class CodeViewerWindow(QWidget):
             "CODE_GENERATED",
             lambda event: self.signaller.code_generated.emit(event.payload)
         )
+        self.signaller.project_activated.connect(self._on_project_activated)
+        self.event_bus.subscribe(
+            "PROJECT_ACTIVATED",
+            lambda event: self.signaller.project_activated.emit(event.payload)
+        )
 
     def _add_path_to_tree(self, file_path: str):
         """Adds a file path to the tree, creating parent directories as needed."""
@@ -191,6 +199,20 @@ class CodeViewerWindow(QWidget):
             self.tab_widget.setCurrentIndex(tab_index)
             self.tab_widget.setTabToolTip(tab_index, file_path)
 
+    @Slot(dict)
+    def _on_project_activated(self, payload: dict):
+        """
+        Handles the PROJECT_ACTIVATED signal to populate the file tree with existing files.
+        """
+        logger.info(f"Project activated: {payload.get('project_name')}. Populating file tree.")
+        # Clear existing tree items before repopulating
+        self.file_tree.clear()
+        self.tree_items.clear()
+
+        indexed_files = self.ast_service.get_indexed_file_paths()
+        for file_path in indexed_files:
+            self._add_path_to_tree(file_path)
+
     @Slot(QTreeWidgetItem, int)
     def _on_file_tree_item_clicked(self, item: QTreeWidgetItem, column: int):
         """Handles clicks on the file tree to open/focus tabs."""
@@ -202,7 +224,9 @@ class CodeViewerWindow(QWidget):
 
     @Slot(int)
     def _close_tab(self, index: int):
-        """Closes a tab and removes it from our tracking dictionary."""
+        """
+        Closes a tab and removes it from our tracking dictionary.
+        """
         widget = self.tab_widget.widget(index)
         if widget:
             file_path_to_remove = None

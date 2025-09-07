@@ -57,7 +57,7 @@ class AuraApp:
         )
         self.main_window = MainWindow(self.event_bus)
         self.task_log_window = TaskLogWindow(self.event_bus)
-        self.code_viewer_window = CodeViewerWindow(self.event_bus)
+        self.code_viewer_window = CodeViewerWindow(self.event_bus, self.ast_service)
 
         # Give the main window references to the side windows for positioning
         self.main_window.task_log_window = self.task_log_window

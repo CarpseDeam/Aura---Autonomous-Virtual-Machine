@@ -33,7 +33,9 @@ class ASTAnalyzer(ast.NodeVisitor):
         self.classes = []
 
     def visit_Import(self, node: ast.Import):
-        """Extract regular import statements."""
+        """
+        Extract regular import statements.
+        """
         for alias in node.names:
             self.imports.append({
                 'type': 'import',
@@ -44,7 +46,9 @@ class ASTAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
-        """Extract from ... import ... statements."""
+        """
+        Extract from ... import ... statements.
+        """
         module = node.module or ''
         level = node.level  # Number of dots for relative imports
         
@@ -60,7 +64,9 @@ class ASTAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
-        """Extract function definitions."""
+        """
+        Extract function definitions.
+        """
         args = [arg.arg for arg in node.args.args]
         self.functions.append({
             'name': node.name,
@@ -71,7 +77,9 @@ class ASTAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
-        """Extract async function definitions."""
+        """
+        Extract async function definitions.
+        """
         args = [arg.arg for arg in node.args.args]
         self.functions.append({
             'name': node.name,
@@ -82,7 +90,9 @@ class ASTAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef):
-        """Extract class definitions."""
+        """
+        Extract class definitions.
+        """
         bases = []
         for base in node.bases:
             if isinstance(base, ast.Name):
@@ -192,7 +202,9 @@ class ASTService:
         }
 
     def _register_event_handlers(self):
-        """Register event handlers for dynamic index updates."""
+        """
+        Register event handlers for dynamic index updates.
+        """
         self.event_bus.subscribe("CODE_GENERATED", self.update_index_for_file)
         logger.info("ASTService subscribed to CODE_GENERATED events for dynamic updates")
 
@@ -233,6 +245,12 @@ class ASTService:
             logger.error(f"Syntax error in generated code for {file_path}: {str(e)}")
         except Exception as e:
             logger.error(f"Failed to update AST index for {file_path}: {str(e)}")    
+
+    def get_indexed_file_paths(self) -> List[str]:
+        """
+        Returns a list of all file paths currently in the AST project index.
+        """
+        return list(self.project_index.keys())
 
     def get_relevant_context(self, target_file: str) -> List[str]:
         """
@@ -454,7 +472,9 @@ class ASTService:
         }
 
     def _initialize_semantic_search(self):
-        """Initialize the semantic search components if dependencies are available."""
+        """
+        Initialize the semantic search components if dependencies are available.
+        """
         if not SEMANTIC_SEARCH_AVAILABLE:
             logger.warning("Semantic search dependencies not available. Continuing without semantic capabilities.")
             return
@@ -475,7 +495,9 @@ class ASTService:
             self._semantic_enabled = False
 
     def _build_semantic_index(self):
-        """Build the semantic index from all parsed classes and functions."""
+        """
+        Build the semantic index from all parsed classes and functions.
+        """
         if not self._semantic_enabled:
             return
         
