@@ -8,8 +8,9 @@ from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.conversation_management_service import ConversationManagementService
+from src.aura.services.ast_service import ASTService
 from src.aura.prompts.prompt_manager import PromptManager
-from src.aura.config import ASSETS_DIR
+from src.aura.config import ASSETS_DIR, ROOT_DIR
 from src.aura.models.events import Event
 from src.ui.windows.main_window import MainWindow
 from src.ui.windows.task_log_window import TaskLogWindow
@@ -34,11 +35,13 @@ class AuraApp:
         self.prompt_manager = PromptManager()
         self.task_management_service = TaskManagementService(self.event_bus)
         self.conversation_management_service = ConversationManagementService(self.event_bus)
+        self.ast_service = ASTService()
         self.llm_service = LLMService(
             self.event_bus,
             self.prompt_manager,
             self.task_management_service,
-            self.conversation_management_service
+            self.conversation_management_service,
+            self.ast_service
         )
         self.main_window = MainWindow(self.event_bus)
         self.task_log_window = TaskLogWindow(self.event_bus)
@@ -49,6 +52,7 @@ class AuraApp:
         self.main_window.code_viewer_window = self.code_viewer_window
 
         self._register_event_handlers()
+        self._initialize_ast_service()
         logging.info("AuraApp initialized successfully.")
 
     def _load_fonts(self):
@@ -63,6 +67,17 @@ class AuraApp:
                 logging.error(f"Failed to load font from {font_path}.")
         else:
             logging.warning(f"Font file not found at {font_path}. Using default.")
+
+    def _initialize_ast_service(self):
+        """Initialize the AST service by indexing the current project."""
+        try:
+            logging.info("Initializing AST service with project indexing...")
+            self.ast_service.index_project(str(ROOT_DIR))
+            stats = self.ast_service.get_project_stats()
+            logging.info(f"AST indexing complete: {stats['total_files']} files, "
+                        f"{stats['total_functions']} functions, {stats['total_classes']} classes")
+        except Exception as e:
+            logging.error(f"Failed to initialize AST service: {e}")
 
     def _register_event_handlers(self):
         """Register all event handlers for the application."""

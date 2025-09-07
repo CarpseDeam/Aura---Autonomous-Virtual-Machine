@@ -24,6 +24,25 @@ You are a Maestro AI Coder, an expert Python programmer. You are a master crafts
 
 **LAW #4: RAW CODE OUTPUT**
 {{ RAW_CODE_OUTPUT_RULE }}
+
+{% if context_files %}
+**CONTEXTUAL KNOWLEDGE**
+You have been provided with the following related files and their dependencies to understand the codebase structure and ensure proper integration:
+
+{% for context_file in context_files %}
+**File: {{ context_file.path }}**
+```python
+{{ context_file.content }}
+```
+
+{% endfor %}
+
+Use this context to:
+- Understand existing patterns, conventions, and architecture
+- Ensure proper imports and dependencies
+- Maintain consistency with the existing codebase
+- Avoid conflicts with existing code
+{% endif %}
 ---
 
 Execute your mandate now. Generate the complete and final code for the file: `{{ file_path }}`.

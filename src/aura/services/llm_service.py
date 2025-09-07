@@ -12,6 +12,7 @@ from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.task_management_service import TaskManagementService
+from src.aura.services.ast_service import ASTService
 from src.providers.gemini_provider import GeminiProvider
 from src.providers.ollama_provider import OllamaProvider
 
@@ -29,13 +30,15 @@ class LLMService:
             event_bus: EventBus,
             prompt_manager: PromptManager,
             task_management_service: TaskManagementService,
-            conversation_management_service: ConversationManagementService
+            conversation_management_service: ConversationManagementService,
+            ast_service: ASTService
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
         self.prompt_manager = prompt_manager
         self.task_management_service = task_management_service
         self.conversation_management_service = conversation_management_service
+        self.ast_service = ast_service
 
         self.agent_config = {}
         self.providers = {}
@@ -121,7 +124,7 @@ class LLMService:
         thread.start()
 
     def handle_dispatch_task(self, event: Event):
-        """Handles dispatched tasks by routing them to the engineer agent."""
+        """Handles dispatched tasks by routing them to the engineer agent with AST-powered context."""
         task_id = event.payload.get("task_id")
         if not task_id:
             self._handle_error("Dispatch event received with no task_id.")
@@ -139,16 +142,36 @@ class LLMService:
             logger.warning(f"Could not extract file path from task: '{task.description}'. Using a default.")
             file_path = "generated/default.py"
 
+        # Get relevant context using AST service
+        context_files = self.ast_service.get_relevant_context(file_path)
+        context_data = []
+        
+        for context_file in context_files:
+            try:
+                full_path = os.path.join(self.ast_service.project_root, context_file) if self.ast_service.project_root else context_file
+                if os.path.exists(full_path):
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    context_data.append({
+                        'path': context_file,
+                        'content': content
+                    })
+                    logger.debug(f"Added context file: {context_file}")
+            except Exception as e:
+                logger.warning(f"Failed to read context file {context_file}: {e}")
+                continue
+
         prompt = self.prompt_manager.render(
             "generate_code.jinja2",
             task_description=task.description,
-            file_path=file_path
+            file_path=file_path,
+            context_files=context_data
         )
         if not prompt:
             self._handle_error("Failed to render the engineer prompt.")
             return
 
-        # We will now run the code generation in a thread to avoid blocking the UI.
+        # Run the code generation in a thread to avoid blocking the UI
         thread = threading.Thread(target=self._generate_and_dispatch_code, args=(prompt, "engineer_agent", file_path))
         thread.start()
 
