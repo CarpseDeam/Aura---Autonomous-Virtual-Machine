@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel
-from src.aura.models.task import Task
+from src.aura.models.task import Task, TaskStatus
 
 class TaskWidgetItem(QWidget):
     """
@@ -25,8 +25,15 @@ class TaskWidgetItem(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        description_label = QLabel(f"○ {self.task.description}")
-        description_label.setStyleSheet("border: none; padding: 0;")
+        if self.task.status == TaskStatus.COMPLETED:
+            description_label = QLabel(f"✓ {self.task.description}")
+            description_label.setStyleSheet(
+                "border: none; padding: 0; text-decoration: line-through; color: grey;"
+            )
+        else:
+            description_label = QLabel(f"○ {self.task.description}")
+            description_label.setStyleSheet("border: none; padding: 0;")
+        
         description_label.setWordWrap(True)
 
         layout.addWidget(description_label)

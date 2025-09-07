@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButt
 from PySide6.QtCore import Qt, Signal, QObject
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
-from src.aura.models.task import Task
+from src.aura.models.task import Task, TaskStatus
 from src.ui.widgets.task_widget_item import TaskWidgetItem
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class TaskLogWindow(QWidget):
             background-color: #000000;
             color: #dcdcdc;
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
-            border: 1px solid #FFB74D; /* Amber */
+            border: 1px solid #4a4a4a; /* Subtle Grey */
             border-radius: 5px;
         }
         QLabel#mission_control_label {
@@ -44,7 +44,7 @@ class TaskLogWindow(QWidget):
             border-radius: 5px;
         }
         QLineEdit#task_input:focus {
-            border: 1px solid #FFB74D; /* Amber */
+            border: 1px solid #4a4a4a; /* Subtle Grey */
         }
         QPushButton#dispatch_button {
             background-color: #FFB74D; /* Amber */
@@ -155,6 +155,9 @@ class TaskLogWindow(QWidget):
             placeholder.setStyleSheet("border: none;")
             self.task_list_layout.addWidget(placeholder)
         else:
+            # Sort tasks to move completed ones to the bottom
+            tasks.sort(key=lambda t: t['status'] == TaskStatus.COMPLETED.value)
+
             for task_data in tasks:
                 task = Task(**task_data)
                 task_widget = TaskWidgetItem(task)

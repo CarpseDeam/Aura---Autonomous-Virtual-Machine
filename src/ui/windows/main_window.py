@@ -45,8 +45,8 @@ class MainWindow(QMainWindow):
             padding-bottom: 10px;
         }
         QTextEdit#chat_display {
-            background-color: #000000;
-            border-top: 2px solid #FFB74D;
+            background-color: #2c2c2c;
+            border-top: 1px solid #4a4a4a;
             border-bottom: 1px solid #4a4a4a;
             color: #dcdcdc; /* Light Grey */
             font-size: 14px;
@@ -61,12 +61,12 @@ class MainWindow(QMainWindow):
             max-height: 80px; /* Control the height */
         }
         QTextEdit#chat_input:focus {
-            border: 1px solid #FFB74D; /* Amber */
+            border: 1px solid #4a4a4a; /* Subtle Grey */
         }
         QPushButton#top_bar_button {
             background-color: #2c2c2c;
-            border: 1px solid #FFB74D; /* Amber */
-            color: #FFB74D;
+            border: 1px solid #4a4a4a; /* Subtle Grey */
+            color: #dcdcdc;
             font-size: 14px;
             font-weight: bold;
             padding: 8px 12px;

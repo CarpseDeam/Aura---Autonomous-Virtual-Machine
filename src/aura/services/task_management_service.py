@@ -68,8 +68,8 @@ class TaskManagementService:
 
         if in_progress_task:
             logger.info(f"Task '{in_progress_task.id}' completed.")
-            # Remove the completed task from the list
-            self.tasks.remove(in_progress_task)
+            # Instead of removing the task, update its status to COMPLETED.
+            in_progress_task.status = TaskStatus.COMPLETED
             self._dispatch_task_list_update()
             
             # Dispatch the next task in the sequence
