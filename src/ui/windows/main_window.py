@@ -146,6 +146,10 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(top_bar_widget)
         layout.setContentsMargins(0, 0, 0, 10) # Add some padding below
 
+        btn_new_session = QPushButton("New Session")
+        btn_new_session.setObjectName("top_bar_button")
+        btn_new_session.clicked.connect(self._start_new_session)
+
         btn_code_workspace = QPushButton("Code Workspace")
         btn_code_workspace.setObjectName("top_bar_button")
         btn_code_workspace.clicked.connect(self._open_code_workspace)
@@ -154,6 +158,7 @@ class MainWindow(QMainWindow):
         btn_configure_agents.setObjectName("top_bar_button")
         btn_configure_agents.clicked.connect(self._open_settings_dialog)
 
+        layout.addWidget(btn_new_session)
         layout.addStretch()
         layout.addWidget(btn_code_workspace)
         layout.addWidget(btn_configure_agents)
@@ -201,6 +206,11 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("MODEL_STREAM_ENDED", lambda event: self.signaller.stream_ended.emit())
         self.event_bus.subscribe("MODEL_ERROR", lambda event: self.signaller.error_received.emit(
             event.payload.get("message", "Unknown error")))
+
+    def _start_new_session(self):
+        """Dispatches an event to start a new session and resets the UI."""
+        self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
+        self._start_boot_sequence()
 
     def _open_settings_dialog(self):
         """Opens the settings dialog, creating it if it doesn't exist."""
