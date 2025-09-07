@@ -45,8 +45,8 @@ class MainWindow(QMainWindow):
             padding-bottom: 10px;
         }
         QTextEdit#chat_display {
-            background-color: #2c2c2c;
-            border-top: 1px solid #4a4a4a;
+            background-color: #000000;
+            border-top: 2px solid #FFB74D;
             border-bottom: 1px solid #4a4a4a;
             color: #dcdcdc; /* Light Grey */
             font-size: 14px;
@@ -75,6 +75,18 @@ class MainWindow(QMainWindow):
         }
         QPushButton#top_bar_button:hover {
             background-color: #3a3a3a;
+        }
+        /* System message styles */
+        .system-message {
+            color: #39FF14;
+            font-weight: bold;
+        }
+        .system-category {
+            color: #00FFFF;
+            font-weight: bold;
+        }
+        .system-status {
+            color: #FFB74D;
         }
     """
 
@@ -215,6 +227,12 @@ class MainWindow(QMainWindow):
         # Subscribe to specific thinking states
         self.event_bus.subscribe("DISPATCH_TASK", self._handle_task_dispatch)
         self.event_bus.subscribe("CODE_GENERATED", self._handle_code_generated)
+        
+        # Subscribe to workflow status events
+        self.event_bus.subscribe("AGENT_STARTED", self._handle_agent_started)
+        self.event_bus.subscribe("AGENT_COMPLETED", self._handle_agent_completed)
+        self.event_bus.subscribe("TASK_COMPLETED", self._handle_task_completed)
+        self.event_bus.subscribe("FILE_GENERATED", self._handle_file_generated)
 
     def _start_new_session(self):
         """Dispatches an event to start a new session and resets the UI."""
@@ -313,12 +331,56 @@ class MainWindow(QMainWindow):
         """Handle task dispatch events to show engineering thinking state."""
         if self.thinking_indicator.knight_rider.is_animating:
             self.thinking_indicator.set_thinking_message("AURA is engineering your solution...")
+        
+        # Display system message for task dispatch
+        task_description = event.payload.get("task_description", "Task")
+        self._display_system_message("SYSTEM", f"Task dispatched: {task_description}")
+
+    def _handle_agent_started(self, event):
+        """Handle agent startup events."""
+        agent_name = event.payload.get("agent_name", "Unknown Agent")
+        self._display_system_message("KERNEL", f"{agent_name.upper()} ONLINE")
+
+    def _handle_agent_completed(self, event):
+        """Handle agent completion events."""
+        agent_name = event.payload.get("agent_name", "Unknown Agent")
+        status = event.payload.get("status", "completed")
+        self._display_system_message("KERNEL", f"{agent_name.upper()} task {status.upper()}")
+
+    def _handle_task_completed(self, event):
+        """Handle task completion events."""
+        task_description = event.payload.get("task_description", "Task")
+        self._display_system_message("SYSTEM", f"Task completed: {task_description}")
+
+    def _handle_file_generated(self, event):
+        """Handle file generation events."""
+        file_path = event.payload.get("file_path", "unknown")
+        operation = event.payload.get("operation", "generated")
+        self._display_system_message("NEURAL", f"File {operation}: {file_path}")
 
     def _handle_code_generated(self, event):
         """Handle code generation completion."""
         file_path = event.payload.get("file_path", "file")
         if self.thinking_indicator.knight_rider.is_animating:
             self.thinking_indicator.set_thinking_message(f"AURA completed: {file_path}")
+        
+        # Display system message
+        self._display_system_message("NEURAL", f"Code generation complete: {file_path}")
+
+    def _display_system_message(self, category: str, message: str):
+        """Display a system message in the terminal style."""
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        system_html = f"""
+        <div style="margin: 8px 0; font-family: 'JetBrains Mono', monospace;">
+            <span style="color: #39FF14; font-weight: bold;">[{category}]</span> 
+            <span style="color: #FFB74D;">{message}</span>
+        </div>
+        """
+        
+        self.chat_display.append(system_html)
+        self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
 
     def _update_child_window_positions(self):
         """Updates the position of all attached child windows."""
