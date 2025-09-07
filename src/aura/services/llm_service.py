@@ -3,6 +3,7 @@ import logging
 import threading
 import json
 import copy
+import re
 from typing import Dict
 
 # Application-specific imports
@@ -116,6 +117,70 @@ class LLMService:
         provider = self.providers.get(provider_name)
         return provider, model_name, config
 
+    def _extract_file_path(self, task_description: str) -> str:
+        """
+        Intelligently extracts file path from task description.
+        Handles various formats and searches for valid Python files.
+        """
+        # Pattern 1: Look for explicit file paths in backticks
+        backtick_match = re.search(r'`([^`]+\.py)`', task_description)
+        if backtick_match:
+            return backtick_match.group(1)
+        
+        # Pattern 2: Look for file paths without backticks (workspace/*.py, src/*.py, etc.)
+        file_path_pattern = r'\b(?:workspace|src|app|lib|modules?|components?)/[^\s]+\.py\b'
+        file_match = re.search(file_path_pattern, task_description, re.IGNORECASE)
+        if file_match:
+            return file_match.group(0)
+        
+        # Pattern 3: Look for bare .py files
+        py_file_match = re.search(r'\b\w+\.py\b', task_description)
+        if py_file_match:
+            return f"workspace/{py_file_match.group(0)}"
+        
+        # Pattern 4: Search for class/function names and try to find their files using AST service
+        class_function_pattern = r'\b(?:class\s+)?(\w+)(?:\s*\(|\s*:|\s+class|\s+function)'
+        class_func_match = re.search(class_function_pattern, task_description, re.IGNORECASE)
+        
+        if class_func_match:
+            symbol_name = class_func_match.group(1)
+            # Try to find the file containing this symbol using AST service
+            try:
+                if hasattr(self.ast_service, 'find_symbol_file'):
+                    symbol_file = self.ast_service.find_symbol_file(symbol_name)
+                    if symbol_file:
+                        return symbol_file
+            except Exception as e:
+                logger.debug(f"Failed to find file for symbol '{symbol_name}': {e}")
+        
+        # Pattern 5: Look for common Python keywords that might indicate file types
+        if re.search(r'\b(?:main|app|server|client|model|view|controller|service|util|helper)\b', task_description, re.IGNORECASE):
+            main_match = re.search(r'\b(main|app|server|client|model|view|controller|service|util|helper)\b', task_description, re.IGNORECASE)
+            if main_match:
+                return f"workspace/{main_match.group(1).lower()}.py"
+        
+        # Default fallback
+        logger.warning(f"Could not extract file path from task: '{task_description}'. Using default.")
+        return "workspace/generated.py"
+
+    def _sanitize_code(self, code: str) -> str:
+        """
+        Removes markdown fences and language identifiers from generated code.
+        """
+        # Remove opening markdown fence with optional language identifier
+        code = re.sub(r'^```\w*\s*\n?', '', code, flags=re.MULTILINE)
+        
+        # Remove closing markdown fence
+        code = re.sub(r'\n?```\s*$', '', code, flags=re.MULTILINE)
+        
+        # Clean up any remaining triple backticks
+        code = code.replace('```', '')
+        
+        # Strip leading/trailing whitespace
+        code = code.strip()
+        
+        return code
+
     def handle_user_message(self, event: Event):
         """Handles user messages by routing them through the lead companion's cognitive loop."""
         prompt = event.payload.get("text")
@@ -137,11 +202,7 @@ class LLMService:
             return
 
         logger.info(f"Engineer Agent activated for task: '{task.description}'")
-        try:
-            file_path = task.description.split('`')[1]
-        except IndexError:
-            logger.warning(f"Could not extract file path from task: '{task.description}'. Using a default.")
-            file_path = "generated/default.py"
+        file_path = self._extract_file_path(task.description)
 
         # Get relevant context using AST service
         context_files = self.ast_service.get_relevant_context(file_path)
@@ -192,10 +253,13 @@ class LLMService:
                 self._handle_error(full_code)
                 return
 
+            # Sanitize the code to remove markdown fences
+            sanitized_code = self._sanitize_code(full_code)
+
             # Dispatch the completed code to the Code Viewer
             code_generated_event = Event(
                 event_type="CODE_GENERATED",
-                payload={"file_path": file_path, "code": full_code}
+                payload={"file_path": file_path, "code": sanitized_code}
             )
             self.event_bus.dispatch(code_generated_event)
             logger.info(f"Successfully generated and dispatched code for '{file_path}'.")
