@@ -1,6 +1,6 @@
 import logging
 import os
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication, QPushButton
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication, QPushButton, QFileDialog
 from PySide6.QtGui import QFont, QTextCursor, QIcon
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QSize
 from src.aura.app.event_bus import EventBus
@@ -171,6 +171,10 @@ class MainWindow(QMainWindow):
         btn_code_workspace.setObjectName("top_bar_button")
         btn_code_workspace.clicked.connect(self._open_code_workspace)
 
+        btn_import_project = QPushButton("Import Project...")
+        btn_import_project.setObjectName("top_bar_button")
+        btn_import_project.clicked.connect(self._import_project)
+
         btn_configure_agents = QPushButton("Configure Agents")
         btn_configure_agents.setObjectName("top_bar_button")
         btn_configure_agents.clicked.connect(self._open_settings_dialog)
@@ -178,6 +182,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(btn_new_session)
         layout.addStretch()
         layout.addWidget(btn_code_workspace)
+        layout.addWidget(btn_import_project)
         layout.addWidget(btn_configure_agents)
 
         return top_bar_widget
@@ -233,6 +238,11 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("AGENT_COMPLETED", self._handle_agent_completed)
         self.event_bus.subscribe("TASK_COMPLETED", self._handle_task_completed)
         self.event_bus.subscribe("FILE_GENERATED", self._handle_file_generated)
+        
+        # Subscribe to workspace events
+        self.event_bus.subscribe("PROJECT_ACTIVATED", self._handle_project_activated)
+        self.event_bus.subscribe("PROJECT_IMPORTED", self._handle_project_imported)
+        self.event_bus.subscribe("PROJECT_IMPORT_ERROR", self._handle_project_import_error)
 
     def _start_new_session(self):
         """Dispatches an event to start a new session and resets the UI."""
@@ -250,6 +260,29 @@ class MainWindow(QMainWindow):
         if self.code_viewer_window:
             self.code_viewer_window.show()
             QTimer.singleShot(0, self._update_code_viewer_position)
+
+    def _import_project(self):
+        """Opens a file dialog to import an external project."""
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setWindowTitle("Import Project - Select Directory")
+        
+        if dialog.exec():
+            selected_dirs = dialog.selectedFiles()
+            if selected_dirs:
+                project_path = selected_dirs[0]
+                logger.info(f"User selected project for import: {project_path}")
+                
+                # Dispatch import request event
+                self.event_bus.dispatch(Event(
+                    event_type="IMPORT_PROJECT_REQUESTED",
+                    payload={"path": project_path}
+                ))
+                
+                # Show system message
+                self._display_system_message("WORKSPACE", f"Importing project from: {project_path}")
+        else:
+            logger.debug("User cancelled project import dialog")
 
     def _start_boot_sequence(self):
         """Starts the boot sequence animation."""
@@ -442,3 +475,20 @@ class MainWindow(QMainWindow):
         """Ensure the entire application quits when the main window is closed."""
         QApplication.quit()
         super().closeEvent(event)
+
+    def _handle_project_activated(self, event):
+        """Handle project activation events."""
+        project_name = event.payload.get("project_name", "Unknown")
+        project_path = event.payload.get("project_path", "")
+        self._display_system_message("WORKSPACE", f"Project '{project_name}' activated and indexed")
+
+    def _handle_project_imported(self, event):
+        """Handle successful project import events."""
+        project_name = event.payload.get("project_name", "Unknown")
+        source_path = event.payload.get("source_path", "")
+        self._display_system_message("WORKSPACE", f"Project '{project_name}' imported successfully from {source_path}")
+
+    def _handle_project_import_error(self, event):
+        """Handle project import error events."""
+        error = event.payload.get("error", "Unknown error")
+        self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] Project import failed: {error}</span>")

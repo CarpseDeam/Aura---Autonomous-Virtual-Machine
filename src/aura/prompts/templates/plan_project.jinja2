@@ -6,14 +6,16 @@
 
 **OUTPUT FORMAT: MANDATORY**
 - Your entire response MUST be a single, raw JSON object. Do not include any text, explanations, or markdown formatting before or after the JSON.
-- The JSON object must have a single root key: `"plan"`.
-- The value of `"plan"` must be a list of task objects.
+- The JSON object must have two root keys: `"project_name"` and `"plan"`.
+- The `"project_name"` value must be a short, descriptive name for the project (e.g., "todo_app", "user_auth_system", "data_processor").
+- The `"plan"` value must be a list of task objects.
 - Each task object in the list must have one key: `"description"`, which contains a clear, concise string describing the task.
 - Prefix file paths or key components with backticks (`). Example: "Create the main application entrypoint in `main.py`."
 
 **EXAMPLE JSON OUTPUT:**
 ```json
 {
+  "project_name": "user_management_system",
   "plan": [
     {
       "description": "Set up the basic project structure with folders `src/` and `tests/`."

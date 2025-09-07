@@ -14,6 +14,7 @@ from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
+from src.aura.services.workspace_service import WorkspaceService
 from src.aura.models.task import Task
 from src.providers.gemini_provider import GeminiProvider
 from src.providers.ollama_provider import OllamaProvider
@@ -33,7 +34,8 @@ class LLMService:
             prompt_manager: PromptManager,
             task_management_service: TaskManagementService,
             conversation_management_service: ConversationManagementService,
-            context_retrieval_service: ContextRetrievalService
+            context_retrieval_service: ContextRetrievalService,
+            workspace_service: WorkspaceService
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
@@ -41,6 +43,7 @@ class LLMService:
         self.task_management_service = task_management_service
         self.conversation_management_service = conversation_management_service
         self.context_retrieval_service = context_retrieval_service
+        self.workspace_service = workspace_service
 
         self.agent_config = {}
         self.providers = {}
@@ -359,10 +362,23 @@ class LLMService:
 
             # Clean up potential markdown backticks from the response
             plan_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
+            project_name = plan_data.get("project_name")
             tasks = plan_data.get("plan", [])
+
+            if not project_name:
+                self._handle_error("The Architect returned a plan without a project_name.")
+                return
 
             if not tasks:
                 self._handle_error("The Architect returned an empty plan.")
+                return
+
+            # Set active project (triggers Prime Directive: automatic re-indexing)
+            try:
+                self.workspace_service.set_active_project(project_name)
+                logger.info(f"Project '{project_name}' activated and indexed successfully")
+            except Exception as e:
+                self._handle_error(f"Failed to activate project '{project_name}': {e}")
                 return
 
             # Add all the planned tasks to Mission Control!
