@@ -58,7 +58,7 @@ class TaskManagementService:
         if spec:
             logger.info(f"Phoenix Task added with spec: '{description}'")
         else:
-            logger.info(f"📋 Legacy Task added: '{description}'")
+            logger.info(f"Legacy Task added: '{description}'")
         
         self._dispatch_task_list_update()
 
@@ -137,7 +137,7 @@ class TaskManagementService:
         task = self.get_task_by_id(task_id)
         if task:
             task.status = TaskStatus.VALIDATING
-            logger.info(f"🔍 Task {task_id} moved to VALIDATING state")
+            logger.info(f"Task {task_id} moved to VALIDATING state")
             self._dispatch_task_list_update()
 
     def handle_validation_successful(self, event: Event):
@@ -152,7 +152,7 @@ class TaskManagementService:
         if task:
             task.status = TaskStatus.VALIDATION_PASSED
             task.validation_error = None  # Clear any previous errors
-            logger.info(f"✅ Task {task_id} PASSED validation")
+            logger.info(f"Task {task_id} PASSED validation")
             self._dispatch_task_list_update()
             
             # Move to next task in the sequence
@@ -172,7 +172,7 @@ class TaskManagementService:
         if task:
             task.status = TaskStatus.VALIDATION_FAILED
             task.validation_error = error_message
-            logger.warning(f"❌ Task {task_id} FAILED validation: {error_message}")
+            logger.warning(f"Task {task_id} FAILED validation: {error_message}")
             self._dispatch_task_list_update()
             
             # Continue with next task even if this one failed

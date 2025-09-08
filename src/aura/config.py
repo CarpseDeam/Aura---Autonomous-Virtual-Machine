@@ -32,4 +32,10 @@ AGENT_CONFIG = {
         "temperature": 0.1,
         "top_p": 1.0,
     }
+    ,
+    "research_agent": {
+        "model": "gemini-2.5-flash",
+        "temperature": 0.2,
+        "top_p": 0.9,
+    }
 }

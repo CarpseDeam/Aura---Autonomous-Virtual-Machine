@@ -293,7 +293,7 @@ class WorkspaceService:
                 filename = file_path
             
             self.save_code_to_project(filename, validated_code)
-            logger.info(f"✅ Phoenix Initiative: Saved validated code for task {task_id} to {filename}")
+            logger.info(f"Phoenix Initiative: Saved validated code for task {task_id} to {filename}")
             
             # Aura Command Deck: Show file save
             # Count lines for status message

@@ -4,7 +4,7 @@ import threading
 import json
 import copy
 import re
-from typing import Dict
+from typing import Dict, Optional
 
 # Application-specific imports
 from src.aura.app.event_bus import EventBus
@@ -15,6 +15,7 @@ from src.aura.services.conversation_management_service import ConversationManage
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
+from src.aura.services.research_service import ResearchService
 from src.aura.models.task import Task
 from src.providers.gemini_provider import GeminiProvider
 from src.providers.ollama_provider import OllamaProvider
@@ -35,7 +36,8 @@ class LLMService:
             task_management_service: TaskManagementService,
             conversation_management_service: ConversationManagementService,
             context_retrieval_service: ContextRetrievalService,
-            workspace_service: WorkspaceService
+            workspace_service: WorkspaceService,
+            research_service: Optional[ResearchService] = None
     ):
         """Initializes the LLMService."""
         self.event_bus = event_bus
@@ -52,6 +54,9 @@ class LLMService:
         self._load_providers()
         self._load_agent_configurations()
         self._register_event_handlers()
+
+        # Initialize ResearchService with a fast-model callback if not provided
+        self.research_service = research_service or ResearchService(self._run_research_llm)
 
     def _load_providers(self):
         """Initializes providers and builds a map of models to their provider."""
@@ -119,6 +124,24 @@ class LLMService:
 
         provider = self.providers.get(provider_name)
         return provider, model_name, config
+
+    def _run_research_llm(self, prompt: str) -> str:
+        """
+        Helper for ResearchService: runs a fast model and returns the full response.
+        """
+        provider, model_name, config = self._get_provider_for_agent("research_agent")
+        if not provider or not model_name:
+            logger.error("Research agent is not configured; falling back to architect agent for summarization.")
+            provider, model_name, config = self._get_provider_for_agent("architect_agent")
+            if not provider or not model_name:
+                return ""
+
+        try:
+            response_stream = provider.stream_chat(model_name, prompt, config)
+            return "".join(list(response_stream))
+        except Exception as e:
+            logger.error(f"Error during research LLM call: {e}")
+            return ""
 
     def _extract_file_path(self, task_description: str) -> str:
         """
@@ -405,7 +428,7 @@ class LLMService:
                 payload={"message": f"Generating code for {filename}...", "status": "in-progress"}
             ))
 
-            logger.info(f"🔧 Engineer: Generating code for '{file_path}' with agent '{agent_name}'.")
+            logger.info(f"Engineer: Generating code for '{file_path}' with agent '{agent_name}'.")
             response_stream = provider.stream_chat(model_name, prompt, config)
             full_code = "".join(list(response_stream))
 
@@ -419,7 +442,7 @@ class LLMService:
             # Phoenix Initiative: Route through Quality Gate instead of direct dispatch
             if task and hasattr(task, 'spec') and task.spec:
                 # This is a spec-driven task - send to ValidationService
-                logger.info(f"🚦 Phoenix Initiative: Routing task {task.id} through Quality Gate")
+                logger.info(f"Phoenix Initiative: Routing task {task.id} through Quality Gate")
                 validation_event = Event(
                     event_type="VALIDATE_CODE",
                     payload={
@@ -432,7 +455,7 @@ class LLMService:
                 self.event_bus.dispatch(validation_event)
             else:
                 # Legacy path: Direct dispatch for non-spec tasks
-                logger.info(f"📋 Legacy: Direct dispatch for non-spec task in '{file_path}'")
+                logger.info(f"Legacy: Direct dispatch for non-spec task in '{file_path}'")
                 code_generated_event = Event(
                     event_type="CODE_GENERATED",
                     payload={"file_path": file_path, "code": sanitized_code}
@@ -545,19 +568,60 @@ class LLMService:
             )
 
     def _execute_architect_consultation(self, user_request: str):
-        """Invokes the Architect agent to generate a validated blueprint."""
+        """
+        Invokes the Architect agent using a research-then-design sequence.
+
+        Sequence:
+        1) Ask Architect for next action. Architect must request research.
+        2) Run ResearchService, obtain dossier.
+        3) Provide dossier back to Architect to generate the blueprint.
+        """
         provider, model_name, config = self._get_provider_for_agent("architect_agent")
         if not provider or not model_name:
             self._handle_error("Architect agent is not configured.")
             return
 
         try:
+            # Step 1: Architect initial action (expect research request)
             prompt = self.prompt_manager.render("plan_project.jinja2", user_request=user_request)
             response_stream = provider.stream_chat(model_name, prompt, config)
-            full_response = "".join(list(response_stream))
+            first_response = "".join(list(response_stream))
 
-            # Clean and parse JSON
-            blueprint_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
+            # Try to interpret as a research tool request
+            dossier = None
+            blueprint_data = None
+            try:
+                clean_json = first_response.strip().replace("```json", "").replace("```", "")
+                data = json.loads(clean_json)
+                if isinstance(data, dict) and data.get("tool_name") == "request_research":
+                    topic = (data.get("arguments") or {}).get("topic") or user_request
+                    # Notify UI
+                    self.event_bus.dispatch(Event(
+                        event_type="WORKFLOW_STATUS_UPDATE",
+                        payload={"message": f"Researching topic: {topic}", "status": "in-progress"}
+                    ))
+                    dossier = self.research_service.research(topic)
+                else:
+                    # Architect returned a blueprint directly (backward compatibility)
+                    blueprint_data = data
+            except json.JSONDecodeError:
+                # Non-JSON response; attempt to parse as blueprint anyway later
+                pass
+
+            # Step 2: If research was requested, provide dossier and request final blueprint
+            if dossier is not None and blueprint_data is None:
+                prompt2 = self.prompt_manager.render(
+                    "plan_project.jinja2",
+                    user_request=user_request,
+                    research_dossier=dossier
+                )
+                response_stream2 = provider.stream_chat(model_name, prompt2, config)
+                full_response = "".join(list(response_stream2))
+                # Clean and parse JSON
+                blueprint_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
+            elif blueprint_data is None:
+                # If we reach here, treat first response as blueprint JSON
+                blueprint_data = json.loads(first_response.strip().replace("```json", "").replace("```", ""))
 
             # CRITICAL: Validate technology constraints
             is_valid, error_msg = self._validate_blueprint_technologies(blueprint_data, user_request)
@@ -566,7 +630,7 @@ class LLMService:
                 return
                 # Send error message to chat
                 self._stream_generation(
-                    f"❌ Blueprint validation failed: {error_msg}\nPlease try again with clearer technology constraints.",
+                    f"Blueprint validation failed: {error_msg}\nPlease try again with clearer technology constraints.",
                     "lead_companion_agent"
                 )
                 return
@@ -596,7 +660,7 @@ class LLMService:
                 return
 
             # Log successful validation
-            logger.info(f"✅ Blueprint validated successfully. Technologies: {technologies}")
+            logger.info(f"Blueprint validated successfully. Technologies: {technologies}")
 
             # Set active project (triggers Prime Directive: automatic re-indexing)
             try:
@@ -692,9 +756,10 @@ class LLMService:
                 payload={"chunk": task_list_html}
             ))
 
-            # Send a confirmation message back to the user
-            confirmation_prompt = f"\n\n🔥 Phoenix Initiative Activated! I've created a granular blueprint with {total_tasks} precise tasks. Use the **Dispatch All Tasks** button to begin the build process!"
-            self._stream_generation(confirmation_prompt, "lead_companion_agent")
+            # Send a professional confirmation message directly to the UI
+            confirmation_message = f"Blueprint processed successfully. {total_tasks} tasks have been generated. Ready for dispatch."
+            self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": confirmation_message}))
+            self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED"))
 
         except Exception as e:
             logger.error(f"Error during architect consultation: {e}", exc_info=True)
@@ -773,7 +838,7 @@ class LLMService:
         html_parts.append(f"""
         <div style="margin: 15px 0; padding: 15px; border-left: 4px solid #FFB74D; background-color: rgba(255, 183, 77, 0.1);">
             <div style="color: #FFB74D; font-weight: bold; font-size: 16px; margin-bottom: 10px;">
-                📋 PROJECT BLUEPRINT
+                PROJECT BLUEPRINT
             </div>
             <div style="color: #dcdcdc; font-size: 14px; margin-bottom: 15px;">
                 Generated {total_tasks} precision tasks across {len(blueprint)} files
@@ -788,7 +853,7 @@ class LLMService:
             html_parts.append(f"""
             <div style="margin: 8px 0;">
                 <div style="color: #64B5F6; font-weight: bold; font-size: 14px;">
-                    📁 {file_name}
+                    {file_name}
                 </div>
             """)
 
@@ -800,7 +865,7 @@ class LLMService:
                 if methods:
                     html_parts.append(f"""
                     <div style="margin-left: 15px; color: #39FF14;">
-                        🔧 {class_name} class ({len(methods)} methods)
+                        {class_name} class ({len(methods)} methods)
                     </div>
                     """)
 
@@ -827,7 +892,7 @@ class LLMService:
                     func_name = func.get("name", "unknown")
                     html_parts.append(f"""
                     <div style="margin-left: 15px; color: #FF69B4;">
-                        ⚙️ {func_name}() function
+                        {func_name}() function
                     </div>
                     """)
                     task_counter += 1
@@ -838,7 +903,7 @@ class LLMService:
         html_parts.append("""
             <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #4a4a4a;">
                 <div style="color: #FFB74D; font-size: 13px;">
-                    ✨ Ready for dispatch - Each task will be validated through the Phoenix Quality Gate
+                    Ready for dispatch - Each task will be validated through the Phoenix Quality Gate
                 </div>
             </div>
         </div>

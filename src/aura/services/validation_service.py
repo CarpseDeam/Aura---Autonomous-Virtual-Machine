@@ -40,7 +40,7 @@ class ValidationService:
             self._dispatch_validation_failed(task_id, file_path, "Missing specification or generated code")
             return
 
-        logger.info(f"🔍 Quality Gate: Validating code for task {task_id} in file {file_path}")
+        logger.info(f"Quality Gate: Validating code for task {task_id} in file {file_path}")
         
         # Aura Command Deck: Show validation start
         filename = file_path.split('/')[-1] if '/' in file_path else file_path
@@ -60,7 +60,7 @@ class ValidationService:
         is_valid, validation_errors = self.validate_code(spec, generated_code)
         
         if is_valid:
-            logger.info(f"✅ Quality Gate: Validation PASSED for task {task_id}")
+            logger.info(f"Quality Gate: Validation PASSED for task {task_id}")
             # Aura Command Deck: Show validation success
             self.event_bus.dispatch(Event(
                 event_type="WORKFLOW_STATUS_UPDATE",
@@ -73,7 +73,7 @@ class ValidationService:
                 payload={"file_path": file_path, "code": generated_code}
             ))
         else:
-            logger.warning(f"❌ Quality Gate: Validation FAILED for task {task_id}: {'; '.join(validation_errors)}")
+            logger.warning(f"Quality Gate: Validation FAILED for task {task_id}: {'; '.join(validation_errors)}")
             # Aura Command Deck: Show validation failure
             self.event_bus.dispatch(Event(
                 event_type="WORKFLOW_STATUS_UPDATE",
@@ -107,10 +107,10 @@ class ValidationService:
         # Validation Strategy 2: AST-based validation for syntax correctness
         try:
             ast.parse(generated_code)
-            logger.debug("✅ AST validation passed - code is syntactically valid")
+            logger.debug("AST validation passed - code is syntactically valid")
         except SyntaxError as e:
             errors.append(f"Syntax error in generated code: {str(e)}")
-            logger.error(f"❌ AST validation failed: {str(e)}")
+            logger.error(f"AST validation failed: {str(e)}")
         
         is_valid = len(errors) == 0
         return is_valid, errors
