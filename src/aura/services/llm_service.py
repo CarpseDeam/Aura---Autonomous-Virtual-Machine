@@ -216,33 +216,134 @@ class LLMService:
 
     def _validate_blueprint_technologies(self, blueprint_data: dict, user_request: str) -> tuple[bool, str]:
         """
-        Validate that the blueprint uses the technologies requested by the user.
+        Validate the Master Blueprint against technologies explicitly mentioned in the user request.
 
-        Args:
-            blueprint_data: The parsed blueprint JSON
-            user_request: The original user request
-
-        Returns:
-            Tuple of (is_valid, error_message)
+        New behavior:
+        - Extract requested technologies from `user_request` (e.g., "Pygame").
+        - Extract used technologies from each file's `imports_required` in the blueprint.
+        - Compare with simple alias matching; fail fast with concise details if mismatched.
         """
-        # Check if blueprint has validation_check field
-        validation = blueprint_data.get("validation_check", {})
-        if not validation.get("match", False):
-            requested = validation.get("user_requested", [])
-            used = validation.get("blueprint_uses", [])
-            return False, f"Technology mismatch! User requested {requested} but blueprint uses {used}"
+        # 1) Extract requested technologies
+        request_text = (user_request or "").lower()
+        tech_patterns = {
+            "pygame": r"\bpygame\b",
+            "flask": r"\bflask\b",
+            "django": r"\bdjango\b",
+            "fastapi": r"\bfastapi\b",
+            "pyside6": r"\bpyside6\b",
+            "pyqt": r"\bpyqt5?\b",
+            "qt": r"\bqt\b",
+            "tkinter": r"\btkinter\b",
+            "requests": r"\brequests\b",
+            "numpy": r"\bnumpy\b",
+            "pandas": r"\bpandas\b",
+            "torch": r"\btorch\b|\bpytorch\b",
+            "transformers": r"\btransformers\b",
+            "sentence-transformers": r"\bsentence[-_ ]transformers\b",
+            "faiss": r"\bfaiss(?:[-_ ]?cpu)?\b",
+            "pydantic": r"\bpydantic\b",
+            "jinja2": r"\bjinja2\b",
+            "google-generativeai": r"\bgoogle[- ]?generativeai\b|\bgenerativeai\b",
+            "ollama": r"\bollama\b",
+            "tcod": r"\btcod\b",
+        }
+        requested_techs = {name for name, pat in tech_patterns.items() if re.search(pat, request_text, re.IGNORECASE)}
 
-        # Additional validation - check for common substitutions
-        blueprint_str = json.dumps(blueprint_data).lower()
-        request_lower = user_request.lower()
+        # No explicit technology constraint -> nothing to enforce
+        if not requested_techs:
+            return True, ""
 
-        # Check for tcod substitution when pygame was requested
-        if "pygame" in request_lower and "tcod" in blueprint_str:
-            return False, "Blueprint illegally substituted tcod for Pygame!"
+        # 2) Extract used technologies from blueprint imports
+        def normalize_module(mod: str) -> str:
+            m = (mod or "").strip()
+            # Take top-level module token, drop aliasing and dots
+            top = m.split()[0]
+            top = top.split(",")[0]
+            top = top.split("as")[0]
+            top = top.split(".")[0]
+            return top.strip().lower()
 
-        # Check for django substitution when flask was requested
-        if "flask" in request_lower and "django" in blueprint_str:
-            return False, "Blueprint illegally substituted Django for Flask!"
+        def canonical_tech_from_module(module: str) -> str | None:
+            module = module.lower()
+            mapping = {
+                "pygame": "pygame",
+                "flask": "flask",
+                "django": "django",
+                "fastapi": "fastapi",
+                "pyside6": "pyside6",
+                "pyqt5": "pyqt",
+                "pyqt": "pyqt",
+                "tkinter": "tkinter",
+                "requests": "requests",
+                "numpy": "numpy",
+                "pandas": "pandas",
+                "torch": "torch",
+                "transformers": "transformers",
+                "sentence_transformers": "sentence-transformers",
+                "faiss": "faiss",
+                "faiss_cpu": "faiss",
+                "pydantic": "pydantic",
+                "jinja2": "jinja2",
+                "google.generativeai": "google-generativeai",
+                "generativeai": "google-generativeai",
+                "ollama": "ollama",
+                "tcod": "tcod",
+            }
+            if module in mapping:
+                return mapping[module]
+            first = module.split(".")[0]
+            return mapping.get(first)
+
+        used_techs: set[str] = set()
+        blueprint = blueprint_data.get("blueprint")
+        files_list = blueprint_data.get("files")
+
+        def add_from_imports(imports: list):
+            for imp in imports or []:
+                line = (imp or "").strip()
+                modules = []
+                if line.startswith("from "):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        modules.append(parts[1])
+                elif line.startswith("import "):
+                    after = line[len("import "):]
+                    for token in after.split(","):
+                        modules.append(token.strip())
+                for mod in modules:
+                    tech = canonical_tech_from_module(normalize_module(mod))
+                    if tech:
+                        used_techs.add(tech)
+
+        if isinstance(blueprint, dict):
+            for _, spec in blueprint.items():
+                if isinstance(spec, dict):
+                    add_from_imports(spec.get("imports_required", []))
+        elif isinstance(files_list, list):
+            for f in files_list:
+                add_from_imports((f or {}).get("imports_required", []))
+
+        # 3) Compare with basic aliasing rules
+        def matches(req: str, used: set[str]) -> bool:
+            alias_map = {
+                "qt": {"pyside6", "pyqt", "qt"},
+                "torch": {"torch", "pytorch"},
+                "pytorch": {"torch", "pytorch"},
+                "sentence-transformers": {"sentence-transformers"},
+                "faiss": {"faiss"},
+                "google-generativeai": {"google-generativeai"},
+            }
+            if req in alias_map:
+                return len(alias_map[req].intersection(used)) > 0
+            return req in used
+
+        missing = [r for r in sorted(requested_techs) if not matches(r, used_techs)]
+        if missing:
+            details = (
+                f"Requested technologies not found in imports: {missing}. "
+                f"Imports indicate usage: {sorted(used_techs) if used_techs else 'none'}"
+            )
+            return False, details
 
         return True, ""
 
@@ -461,7 +562,8 @@ class LLMService:
             # CRITICAL: Validate technology constraints
             is_valid, error_msg = self._validate_blueprint_technologies(blueprint_data, user_request)
             if not is_valid:
-                self._handle_error(error_msg)
+                self._handle_error(f"Blueprint validation failed: {error_msg}")
+                return
                 # Send error message to chat
                 self._stream_generation(
                     f"❌ Blueprint validation failed: {error_msg}\nPlease try again with clearer technology constraints.",
