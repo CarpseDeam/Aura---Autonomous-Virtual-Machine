@@ -6,6 +6,12 @@ Your entire output must be a single JSON object. Do not generate any code, expla
 **Master Blueprint Schema:**
 The JSON object must contain a comprehensive plan detailing every single file, every class, and the exact signatures for every public method and function within the application. It must be structured to be the single source of truth for the entire project.
 
+**CRITICAL LAW: REQUIRED TECHNOLOGY IMPORTS (HARD STOP IF VIOLATED)**
+- You MUST identify the primary technologies/frameworks explicitly requested by the user (e.g., "Pygame", "Flask", "FastAPI").
+- For every file that uses a requested technology, you MUST include an `imports_required` array listing the exact Python import lines needed for that file.
+- These import lines MUST reference the exact requested technology (no substitutions or alternates). Example: if the user mentions "Pygame", your plan MUST include `"import pygame"` in `imports_required` for the relevant files. If the user mentions "Flask", include `"from flask import Flask"` (and any other required Flask imports) where appropriate.
+- This is a system-failure-level requirement. If the correct import lines for the requested technology are not present in `imports_required`, the blueprint will be rejected and the build will be aborted.
+
 **Example Structure:**
 ```json
 {
@@ -14,6 +20,10 @@ The JSON object must contain a comprehensive plan detailing every single file, e
     {
       "file_path": "src/main.py",
       "description": "The main entry point of the application.",
+      "imports_required": [
+        "import pygame",
+        "from typing import Optional"
+      ],
       "classes": [],
       "functions": [
         {
@@ -26,6 +36,9 @@ The JSON object must contain a comprehensive plan detailing every single file, e
     {
       "file_path": "src/services/data_service.py",
       "description": "A service for handling data operations.",
+      "imports_required": [
+        "import json"
+      ],
       "classes": [
         {
           "name": "DataService",

@@ -1,9 +1,14 @@
 import logging
-import os
 import html
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication, QPushButton, QFileDialog
+from typing import List, Optional
+
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout,
+    QApplication, QPushButton, QFileDialog
+)
 from PySide6.QtGui import QFont, QTextCursor, QIcon
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QSize
+from PySide6.QtCore import Qt, QTimer, Signal, QObject
+
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.config import ASSETS_DIR
@@ -11,27 +16,170 @@ from src.ui.widgets.chat_input import ChatInputTextEdit
 from src.ui.windows.settings_window import SettingsWindow
 from src.ui.widgets.knight_rider_widget import ThinkingIndicator
 
+
 logger = logging.getLogger(__name__)
 
 
-# Helper class to run Qt signals from non-GUI threads
 class Signaller(QObject):
     chunk_received = Signal(str)
     stream_ended = Signal()
     error_received = Signal(str)
 
 
+class TypewriterTerminal(QObject):
+    """Typewriter engine that renders lines with a blinking block cursor."""
+
+    def __init__(self, text_edit: QTextEdit, parent=None):
+        super().__init__(parent)
+        self.text_edit = text_edit
+        self.queue: List[dict] = []  # {open_html, text, close_html}
+        self.current: Optional[dict] = None
+        self.char_index = 0
+
+        self.typing_timer = QTimer(self)
+        self.typing_timer.setInterval(12)
+        self.typing_timer.timeout.connect(self._on_type_tick)
+
+        self.cursor_visible = False
+        self.cursor_timer = QTimer(self)
+        self.cursor_timer.setInterval(500)
+        self.cursor_timer.timeout.connect(self._toggle_cursor)
+
+        self.streaming_open = False
+        self.streaming_close_html = ""
+
+    def start(self):
+        if not self.cursor_timer.isActive():
+            self.cursor_timer.start()
+
+    def _remove_cursor_if_present(self):
+        cursor = self.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.movePosition(QTextCursor.Left, QTextCursor.KeepAnchor, 1)
+        if cursor.selectedText() == "█":
+            cursor.removeSelectedText()
+            self.cursor_visible = False
+
+    def _append_html(self, html_str: str):
+        self._remove_cursor_if_present()
+        self.text_edit.moveCursor(QTextCursor.End)
+        self.text_edit.insertHtml(html_str)
+        self._ensure_cursor()
+
+    def _append_text_escaped(self, text: str):
+        self._remove_cursor_if_present()
+        self.text_edit.moveCursor(QTextCursor.End)
+        self.text_edit.insertHtml(text)
+        self._ensure_cursor()
+
+    def _ensure_cursor(self):
+        if not self.cursor_visible:
+            self.text_edit.insertPlainText("█")
+            self.cursor_visible = True
+        self.text_edit.moveCursor(QTextCursor.End)
+        self.text_edit.ensureCursorVisible()
+
+    def _toggle_cursor(self):
+        self._remove_cursor_if_present()
+        if not self.cursor_visible:
+            self.text_edit.insertPlainText("█")
+            self.cursor_visible = True
+        else:
+            self.cursor_visible = False
+        self.text_edit.moveCursor(QTextCursor.End)
+
+    def queue_line(self, text: str, color: str, level: int = 0):
+        indent = 20 * max(level, 0)
+        open_html = (
+            f"<div style='margin: 2px 0 2px {indent}px; color: {color};"
+            f" font-family: \"JetBrains Mono\", monospace; font-size: 13px;'>"
+            f"<span style='color: {color};'>●</span> "
+        )
+        close_html = "</div><br/>"
+        self._queue_segment(open_html, text, close_html)
+
+    def open_stream_block(self, color: str, level: int = 0):
+        if self.streaming_open:
+            return
+        indent = 20 * max(level, 0)
+        open_html = (
+            f"<div style='margin: 2px 0 2px {indent}px; color: {color};"
+            f" font-family: \"JetBrains Mono\", monospace; font-size: 13px;'>"
+        )
+        self._append_html(open_html)
+        self.streaming_open = True
+        self.streaming_close_html = "</div>"
+
+    def append_stream_text(self, text: str):
+        if not text:
+            return
+        self._queue_segment(None, text, None)
+
+    def close_stream_block(self):
+        if self.streaming_open:
+            if not self.typing_timer.isActive():
+                self._append_html(self.streaming_close_html + "<br/>")
+            else:
+                self._queue_segment(None, "", self.streaming_close_html + "<br/>")
+            self.streaming_open = False
+            self.streaming_close_html = ""
+
+    def _queue_segment(self, open_html: Optional[str], text: str, close_html: Optional[str]):
+        escaped = html.escape(text)
+        self.queue.append({
+            "open_html": open_html,
+            "text": escaped,
+            "close_html": close_html,
+        })
+        if not self.typing_timer.isActive():
+            self._advance_queue()
+            self.typing_timer.start()
+        self.start()
+
+    def _advance_queue(self):
+        if not self.queue:
+            self.current = None
+            self.char_index = 0
+            self.typing_timer.stop()
+            self._ensure_cursor()
+            return
+        self.current = self.queue.pop(0)
+        self.char_index = 0
+        if self.current.get("open_html"):
+            self._append_html(self.current["open_html"])
+
+    def _on_type_tick(self):
+        if not self.current:
+            self._advance_queue()
+            return
+
+        text = self.current.get("text", "")
+        if self.char_index < len(text):
+            ch = text[self.char_index]
+            if ch == "\n":
+                self._append_text_escaped("<br>")
+            else:
+                self._append_text_escaped(ch)
+            self.char_index += 1
+            return
+
+        if self.current.get("close_html"):
+            self._append_html(self.current["close_html"])
+        self._advance_queue()
+
+
 class MainWindow(QMainWindow):
+    """Main window with a Modern Retro Terminal log and typewriter output."""
+
+    AURA_ASCII_BANNER = """
+        █████╗ ██╗   ██╗██████╗  █████╗
+       ██╔══██╗██║   ██║██╔══██╗██╔══██╗
+       ███████║██║   ██║██████╔╝███████║
+       ██╔══██║██║   ██║██╔══██╗██╔══██║
+       ██║  ██║╚██████╔╝██║  ██║██║  ██║
+       ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
+      A U T O N O M O U S  V I R T U A L  M A C H I N E
     """
-    The main window for the AURA application, serving as the command deck.
-    """
-    AURA_ASCII_BANNER = """█████╗ ██╗   ██╗██████╗  █████╗ 
-██╔══██╗██║   ██║██╔══██╗██╔══██╗
-███████║██║   ██║██████╔╝███████║
-██╔══██║██║   ██║██╔══██╗██╔══██║
-██║  ██║╚██████╔╝██║  ██║██║  ██║
-╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-    A U T O N O M O U S   V I R T U A L   M A C H I N E"""
 
     AURA_STYLESHEET = """
         QMainWindow, QWidget {
@@ -40,7 +188,7 @@ class MainWindow(QMainWindow):
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
         }
         QLabel#aura_banner {
-            color: #FFB74D; /* Amber */
+            color: #FFB74D;
             font-weight: bold;
             font-size: 10px;
             padding-bottom: 10px;
@@ -49,24 +197,22 @@ class MainWindow(QMainWindow):
             background-color: #000000;
             border-top: 1px solid #4a4a4a;
             border-bottom: none;
-            color: #dcdcdc; /* Light Grey */
+            color: #dcdcdc;
             font-size: 14px;
         }
         QTextEdit#chat_input {
             background-color: #2c2c2c;
-            border: 1px solid #4a4a4a; /* Subtle Grey */
+            border: 1px solid #4a4a4a;
             color: #dcdcdc;
             font-size: 14px;
             padding: 8px;
             border-radius: 5px;
-            max-height: 80px; /* Control the height */
+            max-height: 80px;
         }
-        QTextEdit#chat_input:focus {
-            border: 1px solid #4a4a4a; /* Subtle Grey */
-        }
+        QTextEdit#chat_input:focus { border: 1px solid #4a4a4a; }
         QPushButton#top_bar_button {
             background-color: #2c2c2c;
-            border: 1px solid #4a4a4a; /* Subtle Grey */
+            border: 1px solid #4a4a4a;
             color: #dcdcdc;
             font-size: 14px;
             font-weight: bold;
@@ -74,126 +220,75 @@ class MainWindow(QMainWindow):
             border-radius: 5px;
             min-width: 150px;
         }
-        QPushButton#top_bar_button:hover {
-            background-color: #3a3a3a;
-        }
-        /* System message styles */
-        .system-message {
-            color: #39FF14;
-            font-weight: bold;
-        }
-        .system-category {
-            color: #00FFFF;
-            font-weight: bold;
-        }
-        .system-status {
-            color: #FFB74D;
-        }
-        /* Aura Command Deck status styles */
-        .status-parent {
-            font-family: "JetBrains Mono", monospace;
-            font-size: 13px;
-            margin: 4px 0 2px 0; /* Top, Right, Bottom, Left */
-        }
-        .status-child {
-            font-family: "JetBrains Mono", monospace;
-            color: #a0a0a0; /* Lighter grey for details */
-            font-size: 12px;
-            margin: 0 0 2px 25px; /* Indent child */
-        }
-        pre.code-snippet {
-            background-color: #1a1a1a;
-            border: 1px solid #3a3a3a;
-            border-radius: 4px;
-            padding: 8px;
-            margin: 5px 0 5px 25px; /* Indent with parent */
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        code {
-            font-family: "JetBrains Mono", monospace;
-            font-size: 12px;
-            color: #dcdcdc;
-        }
+        QPushButton#top_bar_button:hover { background-color: #3a3a3a; }
     """
 
     BOOT_SEQUENCE = [
-        {"delay": 200, "text": "[SYSTEM] 09:25:51"},
-        {"delay": 150, "text": "AURA Command Deck Initialized"},
-        {"delay": 100, "text": ""},
-        {"delay": 80, "text": "Status: READY"},
-        {"delay": 80, "text": "System: Online"},
-        {"delay": 80, "text": "Mode: Interactive"},
-        {"delay": 250, "text": ""},
-        {"delay": 100, "text": "Enter your commands or describe what you want to build..."},
+        {"text": "[SYSTEM] AURA Command Deck Initialized"},
+        {"text": "Status: READY"},
+        {"text": "System: Online"},
+        {"text": "Mode: Interactive"},
+        {"text": "Enter your commands..."},
     ]
 
     def __init__(self, event_bus: EventBus):
-        """Initializes the MainWindow."""
         super().__init__()
         self.event_bus = event_bus
-        self.code_viewer_window = None # Will be set by AuraApp
-        self.settings_window = None  # To hold the settings window instance
+        self.code_viewer_window = None
+        self.settings_window = None
         self.setWindowTitle("Aura - Command Deck")
-        self.setGeometry(100, 100, 675, 805)
+        self.setGeometry(100, 100, 700, 820)
 
-        self._set_window_icon()
         self.setStyleSheet(self.AURA_STYLESHEET)
+        self._set_window_icon()
 
-        self.is_booting = True
         self.is_streaming_response = False
         self.signaller = Signaller()
-        
-        # Aura Command Deck: Real-time status system
-        
-        # Mission Control: Task dispatching
-        self.dispatch_button = None  # Will be initialized in _create_input_area
-        self.tasks_available = False  # Track if tasks are available for dispatch
-        
+        self.dispatch_button = None
+        self.tasks_available = False
+
         self._init_ui()
         self._register_event_handlers()
         self._start_boot_sequence()
 
     def _set_window_icon(self):
-        """Sets the main window icon."""
         icon_path = ASSETS_DIR / "aura_gear_icon.ico"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
-        else:
-            logger.warning(f"Window icon not found at {icon_path}.")
 
     def _init_ui(self):
-        """Initializes the user interface of the main window."""
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
 
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
-
-        top_bar = self._create_top_bar()
-        banner_widget = self._create_banner()
+        banner_label = QLabel(self.AURA_ASCII_BANNER)
+        banner_label.setObjectName("aura_banner")
+        banner_label.setFont(QFont("JetBrains Mono", 10))
+        banner_label.setAlignment(Qt.AlignCenter)
 
         self.chat_display = QTextEdit()
         self.chat_display.setObjectName("chat_display")
         self.chat_display.setReadOnly(True)
 
-        # Add thinking indicator
         self.thinking_indicator = ThinkingIndicator()
-        
+
         input_container = self._create_input_area()
 
-        main_layout.addWidget(top_bar)
-        main_layout.addWidget(banner_widget)
-        main_layout.addWidget(self.chat_display, 1)
-        main_layout.addWidget(self.thinking_indicator)
-        main_layout.addWidget(input_container)
+        layout.addWidget(self._create_top_bar())
+        layout.addWidget(banner_label)
+        layout.addWidget(self.chat_display, 1)
+        layout.addWidget(self.thinking_indicator)
+        layout.addWidget(input_container)
+
+        self.typewriter = TypewriterTerminal(self.chat_display, self)
+        self.typewriter.start()
 
     def _create_top_bar(self):
-        """Creates the dedicated top bar for controls."""
-        top_bar_widget = QWidget()
-        layout = QHBoxLayout(top_bar_widget)
-        layout.setContentsMargins(0, 0, 0, 10) # Add some padding below
+        widget = QWidget()
+        hl = QHBoxLayout(widget)
+        hl.setContentsMargins(0, 0, 0, 10)
 
         btn_new_session = QPushButton("New Session")
         btn_new_session.setObjectName("top_bar_button")
@@ -211,449 +306,258 @@ class MainWindow(QMainWindow):
         btn_configure_agents.setObjectName("top_bar_button")
         btn_configure_agents.clicked.connect(self._open_settings_dialog)
 
-        layout.addWidget(btn_new_session)
-        layout.addStretch()
-        layout.addWidget(btn_code_workspace)
-        layout.addWidget(btn_import_project)
-        layout.addWidget(btn_configure_agents)
-
-        return top_bar_widget
-
-    def _create_banner(self):
-        """Creates the widget for the AURA ASCII banner."""
-        banner_widget = QWidget()
-        layout = QHBoxLayout(banner_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        banner_label = QLabel(self.AURA_ASCII_BANNER)
-        banner_label.setObjectName("aura_banner")
-        banner_label.setFont(QFont("JetBrains Mono", 10))
-        banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        layout.addWidget(banner_label)
-        return banner_widget
+        hl.addWidget(btn_new_session)
+        hl.addStretch()
+        hl.addWidget(btn_code_workspace)
+        hl.addWidget(btn_import_project)
+        hl.addWidget(btn_configure_agents)
+        return widget
 
     def _create_input_area(self):
-        """Creates the bottom input area with chat input and dispatch button."""
-        input_container = QWidget()
-        input_layout = QHBoxLayout(input_container)
-        input_layout.setContentsMargins(0, 0, 0, 0)
-        input_layout.setSpacing(10)
+        container = QWidget()
+        hl = QHBoxLayout(container)
+        hl.setContentsMargins(0, 0, 0, 0)
 
         self.chat_input = ChatInputTextEdit()
         self.chat_input.setObjectName("chat_input")
-        self.chat_input.setPlaceholderText("Describe what you want to build...")
+        self.chat_input.setPlaceholderText("Type here. Shift+Enter for newline. Enter to send.")
         self.chat_input.sendMessage.connect(self._send_message)
-        self.chat_input.setEnabled(False)
 
-        # Mission Control: Dispatch All Tasks button
-        self.dispatch_button = QPushButton("⚡ Dispatch All Tasks")
-        self.dispatch_button.setObjectName("dispatch_button")
-        self.dispatch_button.setEnabled(False)  # Disabled by default
+        self.dispatch_button = QPushButton("Dispatch All Tasks")
+        self.dispatch_button.setObjectName("top_bar_button")
         self.dispatch_button.clicked.connect(self._dispatch_all_tasks)
-        self.dispatch_button.setFixedWidth(200)
-        self.dispatch_button.setStyleSheet("""
-            QPushButton#dispatch_button {
-                background-color: #2c2c2c;
-                border: 1px solid #4a4a4a;
-                color: #dcdcdc;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 10px 15px;
-                border-radius: 5px;
-                font-family: "JetBrains Mono", monospace;
-            }
-            QPushButton#dispatch_button:hover:enabled {
-                background-color: #3a3a3a;
-                border-color: #FFB74D;
-            }
-            QPushButton#dispatch_button:enabled {
-                color: #FFB74D;
-                border-color: #FFB74D;
-            }
-            QPushButton#dispatch_button:disabled {
-                color: #666666;
-                border-color: #333333;
-                background-color: #1a1a1a;
-            }
-        """)
+        self.dispatch_button.setEnabled(False)
 
-        input_layout.addWidget(self.chat_input, 1)
-        input_layout.addWidget(self.dispatch_button)
-
-        return input_container
+        hl.addWidget(self.chat_input, 1)
+        hl.addWidget(self.dispatch_button)
+        return container
 
     def _register_event_handlers(self):
-        """Connects UI signals to the event bus."""
         self.signaller.chunk_received.connect(self._handle_model_chunk)
         self.signaller.stream_ended.connect(self._handle_stream_end)
         self.signaller.error_received.connect(self._handle_model_error)
-        self.event_bus.subscribe("MODEL_CHUNK_RECEIVED",
-                                 lambda event: self.signaller.chunk_received.emit(event.payload.get("chunk", "")))
-        self.event_bus.subscribe("MODEL_STREAM_ENDED", lambda event: self.signaller.stream_ended.emit())
-        self.event_bus.subscribe("MODEL_ERROR", lambda event: self.signaller.error_received.emit(
-            event.payload.get("message", "Unknown error")))
-        
-        # Subscribe to specific thinking states
+
+        self.event_bus.subscribe("MODEL_CHUNK_RECEIVED", lambda e: self.signaller.chunk_received.emit(e.payload.get("chunk", "")))
+        self.event_bus.subscribe("MODEL_STREAM_ENDED", lambda e: self.signaller.stream_ended.emit())
+        self.event_bus.subscribe("MODEL_ERROR", lambda e: self.signaller.error_received.emit(e.payload.get("message", "Unknown error")))
+
         self.event_bus.subscribe("DISPATCH_TASK", self._handle_task_dispatch)
         self.event_bus.subscribe("CODE_GENERATED", self._handle_code_generated)
-        
-        # Subscribe to workflow status events
-        self.event_bus.subscribe("AGENT_STARTED", self._handle_agent_started)
-        self.event_bus.subscribe("AGENT_COMPLETED", self._handle_agent_completed)
-        self.event_bus.subscribe("TASK_COMPLETED", self._handle_task_completed)
-        self.event_bus.subscribe("FILE_GENERATED", self._handle_file_generated)
-        
-        # Subscribe to workspace events
+        self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
+        self.event_bus.subscribe("TASK_LIST_UPDATED", self._handle_task_list_updated)
+
         self.event_bus.subscribe("PROJECT_ACTIVATED", self._handle_project_activated)
         self.event_bus.subscribe("PROJECT_IMPORTED", self._handle_project_imported)
         self.event_bus.subscribe("PROJECT_IMPORT_ERROR", self._handle_project_import_error)
-        
-        # Aura Command Deck: Subscribe to workflow status updates
-        self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
-        
-        # Mission Control: Subscribe to task events for dispatch button management
-        self.event_bus.subscribe("TASK_LIST_UPDATED", self._handle_task_list_updated)
+
+    # Boot
+    def _start_boot_sequence(self):
+        self.chat_display.clear()
+        for item in self.BOOT_SEQUENCE:
+            text = item.get("text", "")
+            if text:
+                self.typewriter.queue_line(text, color="#FFB74D", level=0)
+        self.typewriter.start()
 
     def _start_new_session(self):
-        """Dispatches an event to start a new session and resets the UI."""
         self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
         self._start_boot_sequence()
 
+    # Actions
     def _open_settings_dialog(self):
-        """Opens the settings dialog, creating it if it doesn't exist."""
         if self.settings_window is None:
             self.settings_window = SettingsWindow(self.event_bus)
         self.settings_window.show()
 
     def _open_code_workspace(self):
-        """Opens the code viewer window."""
         if self.code_viewer_window:
             self.code_viewer_window.show()
             QTimer.singleShot(0, self._update_code_viewer_position)
 
     def _import_project(self):
-        """Opens a file dialog to import an external project."""
         dialog = QFileDialog(self)
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setWindowTitle("Import Project - Select Directory")
-        
         if dialog.exec():
             selected_dirs = dialog.selectedFiles()
             if selected_dirs:
                 project_path = selected_dirs[0]
                 logger.info(f"User selected project for import: {project_path}")
-                
-                # Dispatch import request event
-                self.event_bus.dispatch(Event(
-                    event_type="IMPORT_PROJECT_REQUESTED",
-                    payload={"path": project_path}
-                ))
-                
-                # Show system message
+                self.event_bus.dispatch(Event(event_type="IMPORT_PROJECT_REQUESTED", payload={"path": project_path}))
                 self._display_system_message("WORKSPACE", f"Importing project from: {project_path}")
-        else:
-            logger.debug("User cancelled project import dialog")
 
-    def _start_boot_sequence(self):
-        """Starts the boot sequence animation."""
-        self.chat_display.clear()
-        self.current_boot_step = 0
-        self.boot_timer = QTimer(self)
-        self.boot_timer.timeout.connect(self._update_boot_sequence)
-        self.boot_timer.start(50) # Start faster
-
-    def _update_boot_sequence(self):
-        """Updates the boot sequence display with the next line."""
-        if self.current_boot_step < len(self.BOOT_SEQUENCE):
-            line_info = self.BOOT_SEQUENCE[self.current_boot_step]
-            self.chat_display.append(f"<span style='color: #39FF14;'>{line_info['text']}</span>")
-            self.chat_display.moveCursor(QTextCursor.End)
-            self.chat_display.ensureCursorVisible()
-            self.current_boot_step += 1
-            if self.current_boot_step < len(self.BOOT_SEQUENCE):
-                self.boot_timer.setInterval(self.BOOT_SEQUENCE[self.current_boot_step]["delay"])
-            else:
-                self._end_boot_sequence()
-        else:
-            self._end_boot_sequence()
-
-    def _end_boot_sequence(self):
-        """Finalizes the boot sequence."""
-        self.boot_timer.stop()
-        self.is_booting = False
-        self.chat_input.setEnabled(True)
-        self.chat_input.setFocus()
-
+    # Input/Output
     def _send_message(self):
-        """Sends the user's message from the input box."""
         user_text = self.chat_input.toPlainText().strip()
         if not user_text:
             return
-
         self.chat_input.clear()
         self.chat_input.setEnabled(False)
 
-        self.chat_display.append(f"<br><span style='color: #FFB74D;'>[USER]</span>")
-        self.chat_display.append(f"<div style='padding-left: 15px;'>{user_text.replace(os.linesep, '<br>')}</div>")
-        self.chat_display.moveCursor(QTextCursor.End)
-        self.chat_display.ensureCursorVisible()
+        # User parent + child
+        self.typewriter.queue_line("[USER]", color="#64B5F6", level=0)
+        self.typewriter.queue_line(user_text, color="#dcdcdc", level=1)
+        self.typewriter.start()
 
-        # Start thinking animation
-        self.thinking_indicator.start_thinking("AURA is analyzing your request...")
-
-        event = Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text})
-        self.event_bus.dispatch(event)
+        self.thinking_indicator.start_thinking("Analyzing your request...")
+        self.event_bus.dispatch(Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text}))
 
     def _handle_model_chunk(self, chunk: str):
-        """Appends a chunk of text from the model to the display."""
         if not self.is_streaming_response:
             self.is_streaming_response = True
-            # Stop thinking animation when first chunk arrives
             self.thinking_indicator.stop_thinking()
-            self.chat_display.append(f"<br><span style='color: #00FFFF;'>[AURA]</span>")
-            self.chat_display.insertHtml("<div style='padding-left: 15px;'>")
-
-        safe_chunk = chunk.replace('\n', '<br>')
-        self.chat_display.insertHtml(safe_chunk)
-        self.chat_display.moveCursor(QTextCursor.End)
-        self.chat_display.ensureCursorVisible()
+            self.typewriter.queue_line("[AURA]", color="#FFB74D", level=0)
+            self.typewriter.open_stream_block(color="#dcdcdc", level=1)
+        self.typewriter.append_stream_text(chunk)
+        self.typewriter.start()
 
     def _handle_stream_end(self):
-        """Called when the model is finished sending chunks."""
         if self.is_streaming_response:
-            self.chat_display.insertHtml("</div>")
+            self.typewriter.close_stream_block()
         self.is_streaming_response = False
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
-        self.chat_display.moveCursor(QTextCursor.End)
-        self.chat_display.ensureCursorVisible()
+        self.typewriter.start()
 
     def _handle_model_error(self, error_message: str):
-        """Displays an error message in the chat."""
-        # Stop thinking animation on error
         self.thinking_indicator.stop_thinking()
-        self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] {error_message}</span>")
+        self.typewriter.queue_line(f"[ERROR] {error_message}", color="#FF4444", level=0)
         self._handle_stream_end()
 
+    # Workflow/system events
     def _handle_task_dispatch(self, event):
-        """Handle task dispatch events to show engineering thinking state."""
         if self.thinking_indicator.knight_rider.is_animating:
-            self.thinking_indicator.set_thinking_message("AURA is engineering your solution...")
-        
-        # Display system message for task dispatch
-        task_description = event.payload.get("task_description", "Task")
-        self._display_system_message("SYSTEM", f"Task dispatched: {task_description}")
+            self.thinking_indicator.set_thinking_message("Engineering your solution...")
+        desc = event.payload.get("task_description", "Task")
+        self._display_system_message("SYSTEM", f"Task dispatched: {desc}")
 
     def _handle_agent_started(self, event):
-        """Handle agent startup events."""
-        agent_name = event.payload.get("agent_name", "Unknown Agent")
+        agent_name = event.payload.get("agent_name", "Agent")
         self._display_system_message("KERNEL", f"{agent_name.upper()} ONLINE")
 
     def _handle_agent_completed(self, event):
-        """Handle agent completion events."""
-        agent_name = event.payload.get("agent_name", "Unknown Agent")
+        agent_name = event.payload.get("agent_name", "Agent")
         status = event.payload.get("status", "completed")
         self._display_system_message("KERNEL", f"{agent_name.upper()} task {status.upper()}")
 
     def _handle_task_completed(self, event):
-        """Handle task completion events."""
-        task_description = event.payload.get("task_description", "Task")
-        self._display_system_message("SYSTEM", f"Task completed: {task_description}")
+        desc = event.payload.get("task_description", "Task")
+        self._display_system_message("SYSTEM", f"Task completed: {desc}")
 
     def _handle_file_generated(self, event):
-        """Handle file generation events."""
         file_path = event.payload.get("file_path", "unknown")
         operation = event.payload.get("operation", "generated")
         self._display_system_message("NEURAL", f"File {operation}: {file_path}")
 
     def _handle_code_generated(self, event):
-        """Handle code generation completion."""
         file_path = event.payload.get("file_path", "file")
         if self.thinking_indicator.knight_rider.is_animating:
-            self.thinking_indicator.set_thinking_message(f"AURA completed: {file_path}")
-        
-        # Display system message
+            self.thinking_indicator.set_thinking_message(f"Completed: {file_path}")
         self._display_system_message("NEURAL", f"Code generation complete: {file_path}")
 
     def _display_system_message(self, category: str, message: str):
-        """Display a system message in the terminal style."""
-        import datetime
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        
-        system_html = f"""
-        <div style="margin: 8px 0; font-family: 'JetBrains Mono', monospace;">
-            <span style="color: #39FF14; font-weight: bold;">[{category}]</span> 
-            <span style="color: #FFB74D;">{message}</span>
-        </div>
-        """
-        
-        self.chat_display.append(system_html)
-        self.chat_display.moveCursor(QTextCursor.End)
-        self.chat_display.ensureCursorVisible()
+        color_map = {
+            "SYSTEM": "#FFB74D",  # amber
+            "KERNEL": "#39FF14",  # green
+            "NEURAL": "#64B5F6",  # blue
+            "WORKSPACE": "#64B5F6",
+            "ERROR": "#FF4444",
+        }
+        color = color_map.get(category.upper(), "#FFB74D")
+        self.typewriter.queue_line(f"[{category}] {message}", color=color, level=0)
+        self.typewriter.start()
 
+    def _handle_workflow_status_update(self, event):
+        message = event.payload.get("message", "")
+        status = event.payload.get("status", "info")
+        details = event.payload.get("details")  # optional list[str]
+        code_snippet = event.payload.get("code_snippet")  # optional str
+        if not message:
+            return
+        palette = {
+            "success": "#39FF14",
+            "in-progress": "#FFB74D",
+            "error": "#FF4444",
+            "info": "#64B5F6",
+        }
+        color = palette.get(status, palette["info"])
+        # Parent command line
+        self.typewriter.queue_line(message, color=color, level=0)
+        # Optional code snippet as indented child lines (kept simple for clarity)
+        if code_snippet:
+            for line in code_snippet.splitlines():
+                self.typewriter.queue_line(line, color="#dcdcdc", level=1)
+        # Optional detail lines
+        if details:
+            for d in details:
+                self.typewriter.queue_line(d, color="#a0a0a0", level=1)
+        self.typewriter.start()
+
+    # Mission Control: dispatch
+    def _dispatch_all_tasks(self):
+        if not self.tasks_available:
+            return
+        self.dispatch_button.setEnabled(False)
+        self.dispatch_button.setText("Building...")
+        self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
+        logger.info("Mission Control: All tasks dispatched for execution")
+        self.typewriter.queue_line("MISSION CONTROL: Build sequence initiated", color="#FFB74D", level=0)
+        self.typewriter.start()
+
+    def _handle_task_list_updated(self, event):
+        tasks = event.payload.get("tasks", [])
+        pending = [t for t in tasks if t.get("status") == "PENDING"]
+        has_pending = len(pending) > 0
+        if has_pending != self.tasks_available:
+            self.tasks_available = has_pending
+            if self.dispatch_button:
+                self.dispatch_button.setEnabled(has_pending)
+                if has_pending:
+                    self.dispatch_button.setText(f"Dispatch {len(pending)} Tasks")
+                else:
+                    self.dispatch_button.setText("Dispatch All Tasks")
+
+    # Workspace events
+    def _handle_project_activated(self, event):
+        project_name = event.payload.get("project_name", "Unknown")
+        self._display_system_message("WORKSPACE", f"Project '{project_name}' activated and indexed")
+
+    def _handle_project_imported(self, event):
+        project_name = event.payload.get("project_name", "Unknown")
+        source_path = event.payload.get("source_path", "")
+        self._display_system_message("WORKSPACE", f"Project '{project_name}' imported from {source_path}")
+
+    def _handle_project_import_error(self, event):
+        error = event.payload.get("error", "Unknown error")
+        self.typewriter.queue_line(f"[ERROR] Project import failed: {error}", color="#FF4444", level=0)
+        self.typewriter.start()
+
+    # Child window positioning
     def _update_child_window_positions(self):
-        """Updates the position of all attached child windows."""
         self._update_code_viewer_position()
 
     def _update_code_viewer_position(self):
-        """Updates the position of the code viewer window to be pinned to the right of the main window."""
         if not self.isVisible() or not self.code_viewer_window or not self.code_viewer_window.isVisible():
             return
-
-        main_window_pos = self.pos()
-        main_window_width = self.width()
-        gap = 8  # A small gap between windows
-
-        new_x = main_window_pos.x() + main_window_width + gap
-        new_y = main_window_pos.y()
-
+        main_pos = self.pos()
+        new_x = main_pos.x() + self.width() + 8
+        new_y = main_pos.y()
         self.code_viewer_window.move(new_x, new_y)
         self.code_viewer_window.resize(self.code_viewer_window.width(), self.height())
 
     def moveEvent(self, event):
-        """Override moveEvent to move child windows along with the main window."""
         super().moveEvent(event)
         self._update_child_window_positions()
 
     def resizeEvent(self, event):
-        """Override resizeEvent to adjust child windows' position and height."""
         super().resizeEvent(event)
         self._update_child_window_positions()
 
     def showEvent(self, event):
-        """Override showEvent to position child windows when the main window is first shown."""
         super().showEvent(event)
         QTimer.singleShot(0, self._update_child_window_positions)
 
     def closeEvent(self, event):
-        """Ensure the entire application quits when the main window is closed."""
         QApplication.quit()
         super().closeEvent(event)
 
-    def _handle_project_activated(self, event):
-        """Handle project activation events."""
-        project_name = event.payload.get("project_name", "Unknown")
-        project_path = event.payload.get("project_path", "")
-        self._display_system_message("WORKSPACE", f"Project '{project_name}' activated and indexed")
-
-    def _handle_project_imported(self, event):
-        """Handle successful project import events."""
-        project_name = event.payload.get("project_name", "Unknown")
-        source_path = event.payload.get("source_path", "")
-        self._display_system_message("WORKSPACE", f"Project '{project_name}' imported successfully from {source_path}")
-
-    def _handle_project_import_error(self, event):
-        """Handle project import error events."""
-        error = event.payload.get("error", "Unknown error")
-        self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] Project import failed: {error}</span>")
-
-    # ═══════════════════════════════════════════════════════════════════════════════════════
-    # AURA COMMAND DECK: HIERARCHICAL LOG SYSTEM
-    # ═══════════════════════════════════════════════════════════════════════════════════════
-    
-    def _handle_workflow_status_update(self, event):
-        """
-        Aura Command Deck: Handle incoming workflow status updates with a hierarchical log display.
-        """
-        message = event.payload.get("message", "")
-        status = event.payload.get("status", "info")
-        details = event.payload.get("details")  # Can be None or a list of strings
-        code_snippet = event.payload.get("code_snippet") # Can be None or a string
-
-        if not message:
-            return
-
-        # 1. Define status icon and color
-        status_config = {
-            "success": {"icon": "🟢", "color": "#39FF14"},
-            "in-progress": {"icon": "🟡", "color": "#FFB74D"},
-            "error": {"icon": "🔴", "color": "#FF4444"},
-            "info": {"icon": "🔵", "color": "#64B5F6"}
-        }
-        config = status_config.get(status, status_config["info"])
-        icon = config["icon"]
-        color = config["color"]
-
-        # 2. Build the parent action item
-        # Use a container div to group all parts of the event and manage spacing
-        final_html_parts = ['<div style="margin-bottom: 5px;">']
-
-        parent_html = f'''
-        <div class="status-parent" style="color: {color};">
-            {icon} {html.escape(message)}
-        </div>
-        '''
-        final_html_parts.append(parent_html)
-
-        # 3. Build the optional code snippet
-        if code_snippet:
-            escaped_code = html.escape(code_snippet)
-            code_html = f'''
-            <pre class="code-snippet"><code>{escaped_code}</code></pre>
-            '''
-            final_html_parts.append(code_html)
-
-        # 4. Build the optional child detail items
-        if details:
-            details_list = []
-            for detail in details:
-                escaped_detail = html.escape(detail)
-                details_list.append(f'<div class="status-child">└&nbsp;{escaped_detail}</div>')
-            details_html = "".join(details_list)
-            final_html_parts.append(details_html)
-        
-        final_html_parts.append('</div>')
-
-        # 5. Combine all parts and append to the display
-        final_html = "".join(final_html_parts)
-        self.chat_display.append(final_html)
-
-        # 6. Auto-scroll to keep the latest status visible
-        scrollbar = self.chat_display.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-    
-
-    # ═══════════════════════════════════════════════════════════════════════════════════════
-    # MISSION CONTROL: TASK DISPATCH SYSTEM
-    # ═══════════════════════════════════════════════════════════════════════════════════════
-    
-    def _dispatch_all_tasks(self):
-        """
-        Mission Control: Dispatch all pending tasks to begin the build process.
-        """
-        if not self.tasks_available:
-            return
-            
-        # Disable the button to prevent multiple dispatches
-        self.dispatch_button.setEnabled(False)
-        self.dispatch_button.setText("🚀 Building...")
-        
-        # Dispatch the build command
-        self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
-        
-        logger.info("Mission Control: All tasks dispatched for execution")
-        
-        # Add status message to show build started
-        self.chat_display.append(f'<div style="color: #FFB74D; font-family: JetBrains Mono; font-size: 13px; margin: 8px 0;">🚀 <strong>MISSION CONTROL:</strong> Build sequence initiated</div>')
-        self.chat_display.moveCursor(QTextCursor.End)
-
-    def _handle_task_list_updated(self, event):
-        """
-        Mission Control: Handle task list updates to manage dispatch button state.
-        """
-        tasks = event.payload.get("tasks", [])
-        pending_tasks = [task for task in tasks if task.get("status") == "PENDING"]
-        
-        # Enable dispatch button if there are pending tasks
-        has_pending_tasks = len(pending_tasks) > 0
-        
-        if has_pending_tasks != self.tasks_available:
-            self.tasks_available = has_pending_tasks
-            
-            if self.dispatch_button:
-                self.dispatch_button.setEnabled(has_pending_tasks)
-                if has_pending_tasks:
-                    self.dispatch_button.setText(f"⚡ Dispatch {len(pending_tasks)} Tasks")
-                else:
-                    self.dispatch_button.setText("⚡ Dispatch All Tasks")

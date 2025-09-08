@@ -572,14 +572,26 @@ class LLMService:
                 return
 
             project_name = blueprint_data.get("project_name")
-            blueprint = blueprint_data.get("blueprint", {})
+            # New blueprint format: list of file objects under "files"
+            blueprint_files = blueprint_data.get("files", [])
             technologies = blueprint_data.get("technologies_used", [])
+
+            # Backward compatibility: support legacy dict under "blueprint"
+            legacy_blueprint = blueprint_data.get("blueprint")
+            if not blueprint_files and isinstance(legacy_blueprint, dict):
+                # Convert legacy dict to list format for internal processing
+                converted_list = []
+                for fp, spec in legacy_blueprint.items():
+                    spec_copy = dict(spec) if isinstance(spec, dict) else {}
+                    spec_copy.setdefault("file_path", fp)
+                    converted_list.append(spec_copy)
+                blueprint_files = converted_list
 
             if not project_name:
                 self._handle_error("The Architect returned a blueprint without a project_name.")
                 return
 
-            if not blueprint:
+            if not blueprint_files:
                 self._handle_error("The Architect returned an empty blueprint.")
                 return
 
@@ -597,7 +609,8 @@ class LLMService:
             # Multi-Specialist Execution with imports
             total_tasks = 0
 
-            for file_path, file_spec in blueprint.items():
+            for file_spec in blueprint_files:
+                file_path = file_spec.get("file_path") or "workspace/generated.py"
                 # Get the required imports for this file
                 imports_required = file_spec.get("imports_required", [])
 
@@ -664,7 +677,14 @@ class LLMService:
                     total_tasks += 1
 
             # Mission Control: Display the task list in the chat window
-            task_list_html = self._format_task_list_for_chat(blueprint, total_tasks)
+            # _format_task_list_for_chat expects a dict mapping file_path -> spec
+            # Build a view dict from the files list for display purposes
+            blueprint_view = {}
+            for fs in blueprint_files:
+                fp = fs.get("file_path")
+                if fp:
+                    blueprint_view[fp] = fs
+            task_list_html = self._format_task_list_for_chat(blueprint_view, total_tasks)
 
             # Send the formatted task list to the chat display
             self.event_bus.dispatch(Event(
