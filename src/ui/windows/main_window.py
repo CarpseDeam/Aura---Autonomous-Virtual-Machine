@@ -1,5 +1,6 @@
 import logging
 import os
+import html
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication, QPushButton, QFileDialog
 from PySide6.QtGui import QFont, QTextCursor, QIcon
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QSize
@@ -89,29 +90,30 @@ class MainWindow(QMainWindow):
             color: #FFB74D;
         }
         /* Aura Command Deck status styles */
-        .status-success {
-            color: #39FF14;
+        .status-parent {
             font-family: "JetBrains Mono", monospace;
             font-size: 13px;
-            margin: 2px 0;
+            margin: 4px 0 2px 0; /* Top, Right, Bottom, Left */
         }
-        .status-in-progress {
-            color: #FFB74D;
+        .status-child {
             font-family: "JetBrains Mono", monospace;
-            font-size: 13px;
-            margin: 2px 0;
+            color: #a0a0a0; /* Lighter grey for details */
+            font-size: 12px;
+            margin: 0 0 2px 25px; /* Indent child */
         }
-        .status-error {
-            color: #FF4444;
-            font-family: "JetBrains Mono", monospace;
-            font-size: 13px;
-            margin: 2px 0;
+        pre.code-snippet {
+            background-color: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            padding: 8px;
+            margin: 5px 0 5px 25px; /* Indent with parent */
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
-        .status-info {
-            color: #64B5F6;
+        code {
             font-family: "JetBrains Mono", monospace;
-            font-size: 13px;
-            margin: 2px 0;
+            font-size: 12px;
+            color: #dcdcdc;
         }
     """
 
@@ -547,42 +549,69 @@ class MainWindow(QMainWindow):
         self.chat_display.append(f"<span style='color: #FF0000;'>[ERROR] Project import failed: {error}</span>")
 
     # ═══════════════════════════════════════════════════════════════════════════════════════
-    # AURA COMMAND DECK: ANIMATED TERMINAL SYSTEM
+    # AURA COMMAND DECK: HIERARCHICAL LOG SYSTEM
     # ═══════════════════════════════════════════════════════════════════════════════════════
     
     def _handle_workflow_status_update(self, event):
         """
-        Aura Command Deck: Handle incoming workflow status updates with clean, fast line display.
+        Aura Command Deck: Handle incoming workflow status updates with a hierarchical log display.
         """
         message = event.payload.get("message", "")
         status = event.payload.get("status", "info")
-        
-        if message:
-            # Map status to icon and color
-            status_config = {
-                "success": {"icon": "🟢", "color": "#39FF14"},
-                "in-progress": {"icon": "🟡", "color": "#FFB74D"}, 
-                "error": {"icon": "🔴", "color": "#FF4444"},
-                "info": {"icon": "🔵", "color": "#64B5F6"}
-            }
-            
-            config = status_config.get(status, status_config["info"])
-            icon = config["icon"]
-            color = config["color"]
-            
-            # Create clean status line HTML
-            status_html = f'''
-            <div style="color: {color}; font-family: 'JetBrains Mono', monospace; font-size: 13px; margin: 2px 0; padding: 2px 0;">
-                {icon} {message}
-            </div>
+        details = event.payload.get("details")  # Can be None or a list of strings
+        code_snippet = event.payload.get("code_snippet") # Can be None or a string
+
+        if not message:
+            return
+
+        # 1. Define status icon and color
+        status_config = {
+            "success": {"icon": "🟢", "color": "#39FF14"},
+            "in-progress": {"icon": "🟡", "color": "#FFB74D"},
+            "error": {"icon": "🔴", "color": "#FF4444"},
+            "info": {"icon": "🔵", "color": "#64B5F6"}
+        }
+        config = status_config.get(status, status_config["info"])
+        icon = config["icon"]
+        color = config["color"]
+
+        # 2. Build the parent action item
+        # Use a container div to group all parts of the event and manage spacing
+        final_html_parts = ['<div style="margin-bottom: 5px;">']
+
+        parent_html = f'''
+        <div class="status-parent" style="color: {color};">
+            {icon} {html.escape(message)}
+        </div>
+        '''
+        final_html_parts.append(parent_html)
+
+        # 3. Build the optional code snippet
+        if code_snippet:
+            escaped_code = html.escape(code_snippet)
+            code_html = f'''
+            <pre class="code-snippet"><code>{escaped_code}</code></pre>
             '''
-            
-            # Append immediately to chat display
-            self.chat_display.append(status_html.strip())
-            
-            # Auto-scroll to bottom to keep status updates visible
-            scrollbar = self.chat_display.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())
+            final_html_parts.append(code_html)
+
+        # 4. Build the optional child detail items
+        if details:
+            details_list = []
+            for detail in details:
+                escaped_detail = html.escape(detail)
+                details_list.append(f'<div class="status-child">└&nbsp;{escaped_detail}</div>')
+            details_html = "".join(details_list)
+            final_html_parts.append(details_html)
+        
+        final_html_parts.append('</div>')
+
+        # 5. Combine all parts and append to the display
+        final_html = "".join(final_html_parts)
+        self.chat_display.append(final_html)
+
+        # 6. Auto-scroll to keep the latest status visible
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
     
 
     # ═══════════════════════════════════════════════════════════════════════════════════════
