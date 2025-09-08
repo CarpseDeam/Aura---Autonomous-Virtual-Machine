@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout,
     QApplication, QPushButton, QFileDialog
 )
-from PySide6.QtGui import QFont, QTextCursor, QIcon
+from PySide6.QtGui import QFont, QTextCursor, QIcon, QColor, QTextCharFormat
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 
 from src.aura.app.event_bus import EventBus
@@ -47,6 +47,17 @@ class TypewriterTerminal(QObject):
 
         self.streaming_open = False
         self.streaming_close_html = ""
+        # Category color map for non-HTML typewriter coloring
+        self.category_colors = {
+            "KERNEL": "#64B5F6",   # futuristic blue
+            "SYSTEM": "#66BB6A",   # informative green
+            "NEURAL": "#FFB74D",   # amber/orange
+            "SUCCESS": "#39FF14",  # bright green
+            "ERROR": "#FF4444",    # alert red
+            "WORKSPACE": "#64B5F6",
+            "USER": "#64B5F6",
+            "DEFAULT": "#dcdcdc",
+        }
 
     def start(self):
         if not self.cursor_timer.isActive():
@@ -125,11 +136,24 @@ class TypewriterTerminal(QObject):
             self.streaming_close_html = ""
 
     def _queue_segment(self, open_html: Optional[str], text: str, close_html: Optional[str]):
-        escaped = html.escape(text)
+        # HTML mode segment (used for streaming blocks)
         self.queue.append({
+            "mode": "html",
             "open_html": open_html,
-            "text": escaped,
+            "text": text,
             "close_html": close_html,
+        })
+        if not self.typing_timer.isActive():
+            self._advance_queue()
+            self.typing_timer.start()
+        self.start()
+
+    def _queue_plain_segment(self, text: str, color_hex: str):
+        """Queue a plain-text segment (no HTML), colored by category."""
+        self.queue.append({
+            "mode": "plain",
+            "text": text,
+            "color": color_hex,
         })
         if not self.typing_timer.isActive():
             self._advance_queue()
@@ -156,16 +180,51 @@ class TypewriterTerminal(QObject):
         text = self.current.get("text", "")
         if self.char_index < len(text):
             ch = text[self.char_index]
-            if ch == "\n":
-                self._append_text_escaped("<br>")
+            mode = self.current.get("mode")
+            if mode == "plain":
+                # Insert raw text with QTextCharFormat color; no HTML entities
+                color_hex = self.current.get("color", "#dcdcdc")
+                self._remove_cursor_if_present()
+                cursor = self.text_edit.textCursor()
+                cursor.movePosition(QTextCursor.End)
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(color_hex))
+                if ch == "\n":
+                    cursor.insertText("\n")
+                else:
+                    cursor.insertText(ch, fmt)
+                self._ensure_cursor()
             else:
-                self._append_text_escaped(ch)
+                # HTML stream: escape per character
+                if ch == "\n":
+                    out = "<br>"
+                elif ch == " ":
+                    out = "&nbsp;"
+                elif ch == "<":
+                    out = "&lt;"
+                elif ch == ">":
+                    out = "&gt;"
+                elif ch == "&":
+                    out = "&amp;"
+                else:
+                    out = ch
+                self._append_text_escaped(out)
             self.char_index += 1
             return
 
         if self.current.get("close_html"):
             self._append_html(self.current["close_html"])
         self._advance_queue()
+
+    # Backward- and forward-compatible queue_line:
+    # - New form: queue_line(message, category)
+    # - Legacy form: queue_line(text, color, level=0)
+    def queue_line(self, message: str, category: str, level: int = 0):
+        color = category
+        if not (isinstance(category, str) and category.startswith("#")):
+            color = self.category_colors.get((category or "").upper(), self.category_colors["DEFAULT"])
+        text = message if message.endswith("\n") else message + "\n"
+        self._queue_plain_segment(text, color)
 
 
 class MainWindow(QMainWindow):
@@ -343,12 +402,14 @@ class MainWindow(QMainWindow):
 
         self.event_bus.subscribe("DISPATCH_TASK", self._handle_task_dispatch)
         self.event_bus.subscribe("CODE_GENERATED", self._handle_code_generated)
+        # Legacy UI status updates are deprecated in favor of MainWindow-driven narrative logging
         self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
         self.event_bus.subscribe("TASK_LIST_UPDATED", self._handle_task_list_updated)
 
         self.event_bus.subscribe("PROJECT_ACTIVATED", self._handle_project_activated)
         self.event_bus.subscribe("PROJECT_IMPORTED", self._handle_project_imported)
         self.event_bus.subscribe("PROJECT_IMPORT_ERROR", self._handle_project_import_error)
+        self.event_bus.subscribe("VALIDATED_CODE_SAVED", self._handle_validated_code_saved)
 
     # Boot
     def _start_boot_sequence(self):
@@ -356,7 +417,7 @@ class MainWindow(QMainWindow):
         for item in self.BOOT_SEQUENCE:
             text = item.get("text", "")
             if text:
-                self.typewriter.queue_line(text, color="#FFB74D", level=0)
+                self.typewriter.queue_line(text, "NEURAL")
         self.typewriter.start()
 
     def _start_new_session(self):
@@ -395,8 +456,8 @@ class MainWindow(QMainWindow):
         self.chat_input.setEnabled(False)
 
         # User parent + child
-        self.typewriter.queue_line("[USER]", color="#64B5F6", level=0)
-        self.typewriter.queue_line(user_text, color="#dcdcdc", level=1)
+        self.typewriter.queue_line("[USER]", "KERNEL")
+        self.typewriter.queue_line(user_text, "DEFAULT")
         self.typewriter.start()
 
         self.thinking_indicator.start_thinking("Analyzing your request...")
@@ -406,7 +467,7 @@ class MainWindow(QMainWindow):
         if not self.is_streaming_response:
             self.is_streaming_response = True
             self.thinking_indicator.stop_thinking()
-            self.typewriter.queue_line("[AURA]", color="#FFB74D", level=0)
+            self.typewriter.queue_line("[AURA]", "NEURAL")
             self.typewriter.open_stream_block(color="#dcdcdc", level=1)
         self.typewriter.append_stream_text(chunk)
         self.typewriter.start()
@@ -421,7 +482,7 @@ class MainWindow(QMainWindow):
 
     def _handle_model_error(self, error_message: str):
         self.thinking_indicator.stop_thinking()
-        self.typewriter.queue_line(f"[ERROR] {error_message}", color="#FF4444", level=0)
+        self.typewriter.queue_line(f"[ERROR] {error_message}", "ERROR")
         self._handle_stream_end()
 
     # Workflow/system events
@@ -456,15 +517,7 @@ class MainWindow(QMainWindow):
         self._display_system_message("NEURAL", f"Code generation complete: {file_path}")
 
     def _display_system_message(self, category: str, message: str):
-        color_map = {
-            "SYSTEM": "#FFB74D",  # amber
-            "KERNEL": "#39FF14",  # green
-            "NEURAL": "#64B5F6",  # blue
-            "WORKSPACE": "#64B5F6",
-            "ERROR": "#FF4444",
-        }
-        color = color_map.get(category.upper(), "#FFB74D")
-        self.typewriter.queue_line(f"[{category}] {message}", color=color, level=0)
+        self.typewriter.queue_line(f"[{category}] {message}", category)
         self.typewriter.start()
 
     def _handle_workflow_status_update(self, event):
@@ -480,17 +533,24 @@ class MainWindow(QMainWindow):
             "error": "#FF4444",
             "info": "#64B5F6",
         }
-        color = palette.get(status, palette["info"])
+        # Map status to categories for any legacy events that still arrive
+        status_to_category = {
+            "success": "SUCCESS",
+            "in-progress": "SYSTEM",
+            "error": "ERROR",
+            "info": "SYSTEM",
+        }
+        category = status_to_category.get(status, "SYSTEM")
         # Parent command line
-        self.typewriter.queue_line(message, color=color, level=0)
+        self.typewriter.queue_line(message, category)
         # Optional code snippet as indented child lines (kept simple for clarity)
         if code_snippet:
             for line in code_snippet.splitlines():
-                self.typewriter.queue_line(line, color="#dcdcdc", level=1)
+                self.typewriter.queue_line(line, "DEFAULT")
         # Optional detail lines
         if details:
             for d in details:
-                self.typewriter.queue_line(d, color="#a0a0a0", level=1)
+                self.typewriter.queue_line(d, "DEFAULT")
         self.typewriter.start()
 
     # Mission Control: dispatch
@@ -501,7 +561,7 @@ class MainWindow(QMainWindow):
         self.dispatch_button.setText("Building...")
         self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
         logger.info("Mission Control: All tasks dispatched for execution")
-        self.typewriter.queue_line("MISSION CONTROL: Build sequence initiated", color="#FFB74D", level=0)
+        self.typewriter.queue_line("[SYSTEM] Build sequence initiated. Executing blueprint...", "SYSTEM")
         self.typewriter.start()
 
     def _handle_task_list_updated(self, event):
@@ -529,7 +589,17 @@ class MainWindow(QMainWindow):
 
     def _handle_project_import_error(self, event):
         error = event.payload.get("error", "Unknown error")
-        self.typewriter.queue_line(f"[ERROR] Project import failed: {error}", color="#FF4444", level=0)
+        self.typewriter.queue_line(f"[ERROR] Project import failed: {error}", "ERROR")
+        self.typewriter.start()
+
+    def _handle_validated_code_saved(self, event):
+        file_path = event.payload.get("file_path", "unknown")
+        line_count = event.payload.get("line_count")
+        if line_count is None:
+            # Fallback: do not attempt to read file from disk here; just omit count
+            self.typewriter.queue_line(f"[SUCCESS] Saved {file_path}", "SUCCESS")
+        else:
+            self.typewriter.queue_line(f"[SUCCESS] Wrote {line_count} lines to {file_path}", "SUCCESS")
         self.typewriter.start()
 
     # Child window positioning
@@ -560,4 +630,3 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         QApplication.quit()
         super().closeEvent(event)
-

@@ -295,21 +295,14 @@ class WorkspaceService:
             self.save_code_to_project(filename, validated_code)
             logger.info(f"Phoenix Initiative: Saved validated code for task {task_id} to {filename}")
             
-            # Aura Command Deck: Show file save
-            # Count lines for status message
-            line_count = len(validated_code.strip().split('\n')) if validated_code.strip() else 0
-            self.event_bus.dispatch(Event(
-                event_type="WORKFLOW_STATUS_UPDATE",
-                payload={"message": f"Wrote {line_count} lines to {filename}", "status": "success"}
-            ))
-            
             # Dispatch a special event indicating validated code was saved
             self.event_bus.dispatch(Event(
                 event_type="VALIDATED_CODE_SAVED",
                 payload={
                     "task_id": task_id,
                     "file_path": file_path,
-                    "project_name": self.active_project
+                    "project_name": self.active_project,
+                    "line_count": len(validated_code.strip().split('\n')) if validated_code.strip() else 0
                 }
             ))
             

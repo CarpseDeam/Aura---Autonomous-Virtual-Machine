@@ -421,12 +421,8 @@ class LLMService:
             return
 
         try:
-            # Aura Command Deck: Show code generation start
+            # Code generation start (internal logging only)
             filename = file_path.split('/')[-1] if '/' in file_path else file_path
-            self.event_bus.dispatch(Event(
-                event_type="WORKFLOW_STATUS_UPDATE",
-                payload={"message": f"Generating code for {filename}...", "status": "in-progress"}
-            ))
 
             logger.info(f"Engineer: Generating code for '{file_path}' with agent '{agent_name}'.")
             response_stream = provider.stream_chat(model_name, prompt, config)
@@ -543,18 +539,8 @@ class LLMService:
             logger.info(f"Lead Companion requested tool: '{tool_name}' with args: {arguments}")
 
             if tool_name == "consult_architect":
-                # Aura Command Deck: Show architect engagement
-                self.event_bus.dispatch(Event(
-                    event_type="WORKFLOW_STATUS_UPDATE",
-                    payload={"message": "Engaging Architect Agent for project planning...", "status": "info"}
-                ))
                 self._execute_architect_consultation(arguments.get("user_request"))
             elif tool_name == "consult_engineer":
-                # Aura Command Deck: Show engineer engagement
-                self.event_bus.dispatch(Event(
-                    event_type="WORKFLOW_STATUS_UPDATE",
-                    payload={"message": "Engaging Engineer Agent for code refinement...", "status": "info"}
-                ))
                 self._execute_engineer_consultation(arguments)
             else:
                 self._handle_error(f"Received unknown tool call: {tool_name}")
@@ -595,11 +581,6 @@ class LLMService:
                 data = json.loads(clean_json)
                 if isinstance(data, dict) and data.get("tool_name") == "request_research":
                     topic = (data.get("arguments") or {}).get("topic") or user_request
-                    # Notify UI
-                    self.event_bus.dispatch(Event(
-                        event_type="WORKFLOW_STATUS_UPDATE",
-                        payload={"message": f"Researching topic: {topic}", "status": "in-progress"}
-                    ))
                     dossier = self.research_service.research(topic)
                 else:
                     # Architect returned a blueprint directly (backward compatibility)

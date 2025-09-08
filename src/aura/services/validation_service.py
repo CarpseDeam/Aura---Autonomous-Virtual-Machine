@@ -42,30 +42,14 @@ class ValidationService:
 
         logger.info(f"Quality Gate: Validating code for task {task_id} in file {file_path}")
         
-        # Aura Command Deck: Show validation start
+        # Prepare filename for internal logging
         filename = file_path.split('/')[-1] if '/' in file_path else file_path
-        if "class_name" in spec and "method_name" in spec:
-            validation_message = f"Validating {spec['class_name']}.{spec['method_name']} in {filename}..."
-        elif "function_name" in spec:
-            validation_message = f"Validating {spec['function_name']} in {filename}..."
-        else:
-            validation_message = f"Validating code in {filename}..."
-            
-        self.event_bus.dispatch(Event(
-            event_type="WORKFLOW_STATUS_UPDATE",
-            payload={"message": validation_message, "status": "in-progress"}
-        ))
         
         # Perform the validation
         is_valid, validation_errors = self.validate_code(spec, generated_code)
         
         if is_valid:
             logger.info(f"Quality Gate: Validation PASSED for task {task_id}")
-            # Aura Command Deck: Show validation success
-            self.event_bus.dispatch(Event(
-                event_type="WORKFLOW_STATUS_UPDATE",
-                payload={"message": f"Validation successful for {filename}", "status": "success"}
-            ))
             self._dispatch_validation_successful(task_id, file_path, generated_code)
             # Dispatch CODE_GENERATED event for the CodeViewerWindow to update
             self.event_bus.dispatch(Event(
@@ -74,11 +58,6 @@ class ValidationService:
             ))
         else:
             logger.warning(f"Quality Gate: Validation FAILED for task {task_id}: {'; '.join(validation_errors)}")
-            # Aura Command Deck: Show validation failure
-            self.event_bus.dispatch(Event(
-                event_type="WORKFLOW_STATUS_UPDATE",
-                payload={"message": f"Validation failed: {'; '.join(validation_errors[:1])}", "status": "error"}
-            ))
             self._dispatch_validation_failed(task_id, file_path, "; ".join(validation_errors))
 
     def validate_code(self, spec: Dict[str, Any], generated_code: str) -> tuple[bool, List[str]]:
