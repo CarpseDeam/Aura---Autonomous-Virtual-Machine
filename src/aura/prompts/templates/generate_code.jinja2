@@ -17,9 +17,25 @@ You are a code generator. Your task is to write COMPLETE, WORKING Python code fo
 - If the spec says "pygame", use pygame. Never substitute.
 - Follow the framework's conventions and best practices
 
-## YOUR TASK
-- **File to generate**: `{{ file_path }}`
-- **Specification**: {{ task_description }}
+## YOUR TASK: Implement the following component in `{{ file_path }}`
+
+### BINDING SPECIFICATION (FROM BLUEPRINT)
+
+{% if spec.class_name %}
+- **Target Class:** `{{ spec.class_name }}`
+{% endif %}
+
+{% if spec.method_name %}
+- **Method to Implement:** `{{ spec.method_name }}`
+- **EXACT Method Signature:** `{{ spec.signature }}`
+- **Method Description:** {{ spec.description }}
+{% elif spec.function_name %}
+- **Function to Implement:** `{{ spec.function_name }}`
+- **EXACT Function Signature:** `{{ spec.signature }}`
+- **Function Description:** {{ spec.description }}
+{% endif %}
+
+- **Required Imports:** You MUST include the following imports: `{{ spec.imports_required | join(', ') }}`
 
 ## CODE REQUIREMENTS
 - Include proper docstrings for all classes and methods

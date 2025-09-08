@@ -48,8 +48,9 @@ class GeminiProvider(LLMProvider):
             logger.error(f"Could not fetch Gemini models from API: {e}")
             # Fallback to a hardcoded list on failure
             return [
-                "gemini-2.5-pro",
-                "gemini-2.5-flash",
+                "gemini-1.5-pro-latest",
+                "gemini-1.5-flash-latest",
+                "gemini-1.0-pro",
             ]
 
     def stream_chat(
@@ -75,8 +76,12 @@ class GeminiProvider(LLMProvider):
             response_stream = model.generate_content(prompt, stream=True)
 
             for chunk in response_stream:
-                for char in chunk.text:
-                    yield char
+                try:
+                    for char in chunk.text:
+                        yield char
+                except ValueError:
+                    # Ignore empty chunks, which can happen at the end of a stream.
+                    pass
 
         except Exception as e:
             logger.error(f"Error during Gemini stream: {e}", exc_info=True)
@@ -136,8 +141,12 @@ class GeminiProvider(LLMProvider):
                     response_stream = model.generate_content("Please respond", stream=True)
 
             for chunk in response_stream:
-                for char in chunk.text:
-                    yield char
+                try:
+                    for char in chunk.text:
+                        yield char
+                except ValueError:
+                    # Ignore empty chunks, which can happen at the end of a stream.
+                    pass
 
         except Exception as e:
             logger.error(f"Error during Gemini structured stream: {e}", exc_info=True)

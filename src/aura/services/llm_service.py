@@ -276,7 +276,8 @@ class LLMService:
             "generate_code.jinja2",
             task_description=task.description,
             file_path=file_path,
-            context_files=context_data
+            context_files=context_data,
+            spec=task.spec
         )
         if not prompt:
             self._handle_error("Failed to render the engineer prompt.")
