@@ -126,25 +126,25 @@ class LLMService:
         First tries explicit regex patterns, then uses ASTService intelligence for symbol lookup.
         """
         # Step 1: Try existing regex patterns to find explicit file path
-        
+
         # Pattern 1: Look for explicit file paths in backticks
         backtick_match = re.search(r'`([^`]+\.py)`', task_description)
         if backtick_match:
             return backtick_match.group(1)
-        
+
         # Pattern 2: Look for file paths without backticks (workspace/*.py, src/*.py, etc.)
         file_path_pattern = r'\b(?:workspace|src|app|lib|modules?|components?)/[^\s]+\.py\b'
         file_match = re.search(file_path_pattern, task_description, re.IGNORECASE)
         if file_match:
             return file_match.group(0)
-        
+
         # Pattern 3: Look for bare .py files
         py_file_match = re.search(r'\b\w+\.py\b', task_description)
         if py_file_match:
             return f"workspace/{py_file_match.group(0)}"
-        
+
         # Step 2: If explicit paths fail, attempt intelligent symbol lookup using ASTService
-        
+
         # Look for class or function names that might exist in the codebase
         # Pattern matches: "Player class", "Player(", "GameEngine:", "create_player function", etc.
         symbol_patterns = [
@@ -156,13 +156,13 @@ class LLMService:
             r'\bdef\s+([a-z_][a-zA-Z0-9_]*)\b',  # "def create_player"
             r'\b([A-Z][a-zA-Z0-9_]*)\b(?=\s+(?:methods|functionality|logic|implementation))',  # "Player methods"
         ]
-        
+
         for pattern in symbol_patterns:
             symbol_match = re.search(pattern, task_description, re.IGNORECASE)
             if symbol_match:
                 symbol_name = symbol_match.group(1)
                 logger.debug(f"Found potential symbol '{symbol_name}' in task description")
-                
+
                 # Query ASTService to find the file containing this symbol
                 try:
                     # First try searching for classes (typically capitalized symbols)
@@ -172,24 +172,26 @@ class LLMService:
                             found_file = class_results[0]['file']
                             logger.info(f"ASTService found class '{symbol_name}' in file: {found_file}")
                             return found_file
-                    
+
                     # Then try searching for functions (typically lowercase symbols)
                     function_results = self.context_retrieval_service.ast_service.search_functions(symbol_name)
                     if function_results and len(function_results) > 0:
                         found_file = function_results[0]['file']
                         logger.info(f"ASTService found function '{symbol_name}' in file: {found_file}")
                         return found_file
-                        
+
                 except Exception as e:
                     logger.debug(f"ASTService lookup failed for symbol '{symbol_name}': {e}")
                     continue
-        
+
         # Step 3: Look for common Python keywords that might indicate file types
-        if re.search(r'\b(?:main|app|server|client|model|view|controller|service|util|helper)\b', task_description, re.IGNORECASE):
-            main_match = re.search(r'\b(main|app|server|client|model|view|controller|service|util|helper)\b', task_description, re.IGNORECASE)
+        if re.search(r'\b(?:main|app|server|client|model|view|controller|service|util|helper)\b', task_description,
+                     re.IGNORECASE):
+            main_match = re.search(r'\b(main|app|server|client|model|view|controller|service|util|helper)\b',
+                                   task_description, re.IGNORECASE)
             if main_match:
                 return f"workspace/{main_match.group(1).lower()}.py"
-        
+
         # Step 4: Final fallback only if all intelligence fails
         logger.warning(f"Could not extract file path from task: '{task_description}'. Using default.")
         return "workspace/generated.py"
@@ -200,17 +202,49 @@ class LLMService:
         """
         # Remove opening markdown fence with optional language identifier
         code = re.sub(r'^```\w*\s*\n?', '', code, flags=re.MULTILINE)
-        
+
         # Remove closing markdown fence
         code = re.sub(r'\n?```\s*$', '', code, flags=re.MULTILINE)
-        
+
         # Clean up any remaining triple backticks
         code = code.replace('```', '')
-        
+
         # Strip leading/trailing whitespace
         code = code.strip()
-        
+
         return code
+
+    def _validate_blueprint_technologies(self, blueprint_data: dict, user_request: str) -> tuple[bool, str]:
+        """
+        Validate that the blueprint uses the technologies requested by the user.
+
+        Args:
+            blueprint_data: The parsed blueprint JSON
+            user_request: The original user request
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        # Check if blueprint has validation_check field
+        validation = blueprint_data.get("validation_check", {})
+        if not validation.get("match", False):
+            requested = validation.get("user_requested", [])
+            used = validation.get("blueprint_uses", [])
+            return False, f"Technology mismatch! User requested {requested} but blueprint uses {used}"
+
+        # Additional validation - check for common substitutions
+        blueprint_str = json.dumps(blueprint_data).lower()
+        request_lower = user_request.lower()
+
+        # Check for tcod substitution when pygame was requested
+        if "pygame" in request_lower and "tcod" in blueprint_str:
+            return False, "Blueprint illegally substituted tcod for Pygame!"
+
+        # Check for django substitution when flask was requested
+        if "flask" in request_lower and "django" in blueprint_str:
+            return False, "Blueprint illegally substituted Django for Flask!"
+
+        return True, ""
 
     def handle_user_message(self, event: Event):
         """Handles user messages by routing them through the lead companion's cognitive loop."""
@@ -250,7 +284,8 @@ class LLMService:
 
         # Run the code generation in a thread to avoid blocking the UI
         # Pass task info for Phoenix Initiative validation
-        thread = threading.Thread(target=self._generate_and_dispatch_code, args=(prompt, "engineer_agent", file_path, task))
+        thread = threading.Thread(target=self._generate_and_dispatch_code,
+                                  args=(prompt, "engineer_agent", file_path, task))
         thread.start()
 
     def _generate_and_dispatch_code(self, prompt: str, agent_name: str, file_path: str, task=None):
@@ -267,7 +302,7 @@ class LLMService:
                 event_type="WORKFLOW_STATUS_UPDATE",
                 payload={"message": f"Generating code for {filename}...", "status": "in-progress"}
             ))
-            
+
             logger.info(f"🔧 Engineer: Generating code for '{file_path}' with agent '{agent_name}'.")
             response_stream = provider.stream_chat(model_name, prompt, config)
             full_code = "".join(list(response_stream))
@@ -324,16 +359,16 @@ class LLMService:
         try:
             # Render only the system instructions from the template
             system_instructions = self.prompt_manager.render("lead_companion_master.jinja2", user_prompt="")
-            
+
             # Create structured messages with proper role separation
             messages = []
-            
+
             # Add system message
             messages.append({
                 "role": "system",
                 "content": system_instructions
             })
-            
+
             # Add conversation history with proper roles
             for message in history:
                 role = "user" if message["role"] == "user" else "assistant"
@@ -341,7 +376,7 @@ class LLMService:
                     "role": role,
                     "content": message["content"]
                 })
-            
+
             # Use structured messages if provider supports it, otherwise fallback to concatenated prompt
             if hasattr(provider, 'stream_chat_structured') and callable(getattr(provider, 'stream_chat_structured')):
                 response_stream = provider.stream_chat_structured(model_name, messages, config)
@@ -351,10 +386,10 @@ class LLMService:
                 for message in history:
                     role_prefix = "User: " if message["role"] == "user" else "Assistant: "
                     prompt_parts.append(f"{role_prefix}{message['content']}")
-                
+
                 fallback_prompt = "\n\n".join(prompt_parts)
                 response_stream = provider.stream_chat(model_name, fallback_prompt, config)
-            
+
             # Buffer the full response to check for tool calls
             full_response = "".join(list(response_stream))
 
@@ -392,7 +427,7 @@ class LLMService:
             elif tool_name == "consult_engineer":
                 # Aura Command Deck: Show engineer engagement
                 self.event_bus.dispatch(Event(
-                    event_type="WORKFLOW_STATUS_UPDATE", 
+                    event_type="WORKFLOW_STATUS_UPDATE",
                     payload={"message": "Engaging Engineer Agent for code refinement...", "status": "info"}
                 ))
                 self._execute_engineer_consultation(arguments)
@@ -408,7 +443,7 @@ class LLMService:
             )
 
     def _execute_architect_consultation(self, user_request: str):
-        """Invokes the Architect agent to generate a granular blueprint and orchestrates multi-specialist execution."""
+        """Invokes the Architect agent to generate a validated blueprint."""
         provider, model_name, config = self._get_provider_for_agent("architect_agent")
         if not provider or not model_name:
             self._handle_error("Architect agent is not configured.")
@@ -419,10 +454,23 @@ class LLMService:
             response_stream = provider.stream_chat(model_name, prompt, config)
             full_response = "".join(list(response_stream))
 
-            # Clean up potential markdown backticks from the response
+            # Clean and parse JSON
             blueprint_data = json.loads(full_response.strip().replace("```json", "").replace("```", ""))
+
+            # CRITICAL: Validate technology constraints
+            is_valid, error_msg = self._validate_blueprint_technologies(blueprint_data, user_request)
+            if not is_valid:
+                self._handle_error(error_msg)
+                # Send error message to chat
+                self._stream_generation(
+                    f"❌ Blueprint validation failed: {error_msg}\nPlease try again with clearer technology constraints.",
+                    "lead_companion_agent"
+                )
+                return
+
             project_name = blueprint_data.get("project_name")
             blueprint = blueprint_data.get("blueprint", {})
+            technologies = blueprint_data.get("technologies_used", [])
 
             if not project_name:
                 self._handle_error("The Architect returned a blueprint without a project_name.")
@@ -432,6 +480,9 @@ class LLMService:
                 self._handle_error("The Architect returned an empty blueprint.")
                 return
 
+            # Log successful validation
+            logger.info(f"✅ Blueprint validated successfully. Technologies: {technologies}")
+
             # Set active project (triggers Prime Directive: automatic re-indexing)
             try:
                 self.workspace_service.set_active_project(project_name)
@@ -440,27 +491,30 @@ class LLMService:
                 self._handle_error(f"Failed to activate project '{project_name}': {e}")
                 return
 
-            # Phoenix Initiative: Multi-Specialist Execution
-            # Parse the granular blueprint and create highly specific tasks for each symbol
+            # Multi-Specialist Execution with imports
             total_tasks = 0
-            
+
             for file_path, file_spec in blueprint.items():
+                # Get the required imports for this file
+                imports_required = file_spec.get("imports_required", [])
+
                 # Generate tasks for each class and its methods
                 for class_spec in file_spec.get("classes", []):
                     class_name = class_spec.get("name", "UnknownClass")
-                    
+
                     for method_spec in class_spec.get("methods", []):
                         method_name = method_spec.get("name", "unknown_method")
                         method_signature = method_spec.get("signature", "def unknown_method(self)")
                         method_description = method_spec.get("description", "No description provided")
-                        
+
                         # Create highly specific task for this individual method
                         task_description = (
                             f"In the file `{file_path}`, implement the `{method_name}` method for the `{class_name}` class. "
                             f"Method signature: `{method_signature}`. "
-                            f"Functionality: {method_description}"
+                            f"Functionality: {method_description}. "
+                            f"Required imports: {', '.join(imports_required)}"
                         )
-                        
+
                         self.event_bus.dispatch(
                             Event(event_type="ADD_TASK", payload={
                                 "description": task_description,
@@ -470,25 +524,27 @@ class LLMService:
                                     "method_name": method_name,
                                     "signature": method_signature,
                                     "return_type": method_spec.get("return_type", "None"),
-                                    "description": method_description
+                                    "description": method_description,
+                                    "imports_required": imports_required
                                 }
                             })
                         )
                         total_tasks += 1
-                
+
                 # Generate tasks for standalone functions
                 for function_spec in file_spec.get("functions", []):
                     function_name = function_spec.get("name", "unknown_function")
                     function_signature = function_spec.get("signature", "def unknown_function()")
                     function_description = function_spec.get("description", "No description provided")
-                    
+
                     # Create highly specific task for this individual function
                     task_description = (
                         f"In the file `{file_path}`, implement the `{function_name}` function. "
                         f"Function signature: `{function_signature}`. "
-                        f"Functionality: {function_description}"
+                        f"Functionality: {function_description}. "
+                        f"Required imports: {', '.join(imports_required)}"
                     )
-                    
+
                     self.event_bus.dispatch(
                         Event(event_type="ADD_TASK", payload={
                             "description": task_description,
@@ -497,7 +553,8 @@ class LLMService:
                                 "function_name": function_name,
                                 "signature": function_signature,
                                 "return_type": function_spec.get("return_type", "None"),
-                                "description": function_description
+                                "description": function_description,
+                                "imports_required": imports_required
                             }
                         })
                     )
@@ -505,13 +562,13 @@ class LLMService:
 
             # Mission Control: Display the task list in the chat window
             task_list_html = self._format_task_list_for_chat(blueprint, total_tasks)
-            
+
             # Send the formatted task list to the chat display
             self.event_bus.dispatch(Event(
-                event_type="MODEL_CHUNK_RECEIVED", 
+                event_type="MODEL_CHUNK_RECEIVED",
                 payload={"chunk": task_list_html}
             ))
-            
+
             # Send a confirmation message back to the user
             confirmation_prompt = f"\n\n🔥 Phoenix Initiative Activated! I've created a granular blueprint with {total_tasks} precise tasks. Use the **Dispatch All Tasks** button to begin the build process!"
             self._stream_generation(confirmation_prompt, "lead_companion_agent")
@@ -536,20 +593,20 @@ class LLMService:
         try:
             # Create a new Task object directly from the description
             new_task = Task(description=task_description)
-            
+
             # Add this temporary task to TaskManagementService so handle_dispatch_task can find it
             self.task_management_service.add_temporary_task(new_task)
-            
+
             # Dispatch the task directly to the engineer, bypassing Mission Control
             self.event_bus.dispatch(Event(
                 event_type="DISPATCH_TASK",
                 payload={"task_id": new_task.id}
             ))
-            
+
             # Send confirmation to the user
             confirmation_prompt = "Perfect! I'm sending this refinement task directly to our engineer. This will be completed quickly using our fast-lane process."
             self._stream_generation(confirmation_prompt, "lead_companion_agent")
-            
+
         except Exception as e:
             logger.error(f"Error during engineer consultation: {e}", exc_info=True)
             self._handle_error("I encountered an error while setting up the engineer consultation.")
@@ -588,7 +645,7 @@ class LLMService:
         Mission Control: Format the architect's blueprint as HTML for the chat display.
         """
         html_parts = []
-        
+
         # Header
         html_parts.append(f"""
         <div style="margin: 15px 0; padding: 15px; border-left: 4px solid #FFB74D; background-color: rgba(255, 183, 77, 0.1);">
@@ -599,31 +656,31 @@ class LLMService:
                 Generated {total_tasks} precision tasks across {len(blueprint)} files
             </div>
         """)
-        
+
         # Task list
         task_counter = 1
         for file_path, file_spec in blueprint.items():
             file_name = file_path.split('/')[-1] if '/' in file_path else file_path
-            
+
             html_parts.append(f"""
             <div style="margin: 8px 0;">
                 <div style="color: #64B5F6; font-weight: bold; font-size: 14px;">
                     📁 {file_name}
                 </div>
             """)
-            
+
             # Classes and methods
             for class_spec in file_spec.get("classes", []):
                 class_name = class_spec.get("name", "UnknownClass")
                 methods = class_spec.get("methods", [])
-                
+
                 if methods:
                     html_parts.append(f"""
                     <div style="margin-left: 15px; color: #39FF14;">
                         🔧 {class_name} class ({len(methods)} methods)
                     </div>
                     """)
-                    
+
                     for method in methods[:3]:  # Show first 3 methods to avoid clutter
                         method_name = method.get("name", "unknown")
                         html_parts.append(f"""
@@ -632,14 +689,14 @@ class LLMService:
                         </div>
                         """)
                         task_counter += 1
-                    
+
                     if len(methods) > 3:
                         html_parts.append(f"""
                         <div style="margin-left: 30px; color: #666666; font-size: 12px; font-style: italic;">
                             + {len(methods) - 3} more methods...
                         </div>
                         """)
-            
+
             # Standalone functions
             functions = file_spec.get("functions", [])
             if functions:
@@ -651,9 +708,9 @@ class LLMService:
                     </div>
                     """)
                     task_counter += 1
-                    
+
             html_parts.append("</div>")
-        
+
         # Footer
         html_parts.append("""
             <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #4a4a4a;">
@@ -663,7 +720,7 @@ class LLMService:
             </div>
         </div>
         """)
-        
+
         return "".join(html_parts)
 
     def _handle_request_available_models(self, event: Event):
