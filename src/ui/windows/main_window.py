@@ -1,7 +1,5 @@
 import logging
 import os
-from collections import deque
-from html import escape
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout, QApplication, QPushButton, QFileDialog
 from PySide6.QtGui import QFont, QTextCursor, QIcon
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QSize
@@ -132,7 +130,6 @@ class MainWindow(QMainWindow):
         """Initializes the MainWindow."""
         super().__init__()
         self.event_bus = event_bus
-        self.task_log_window = None  # Will be set by AuraApp
         self.code_viewer_window = None # Will be set by AuraApp
         self.settings_window = None  # To hold the settings window instance
         self.setWindowTitle("Aura - Command Deck")
@@ -145,13 +142,11 @@ class MainWindow(QMainWindow):
         self.is_streaming_response = False
         self.signaller = Signaller()
         
-        # Aura Command Deck: Animated Terminal System
-        self.status_message_queue = deque()  # Queue for status updates
-        self.current_status_message = ""  # Currently being typed
-        self.current_status_class = ""  # CSS class for current message
-        self.current_char_index = 0  # Character position in current message
-        self.status_typing_timer = QTimer()
-        self.STATUS_TYPING_SPEED = 15  # milliseconds between characters
+        # Aura Command Deck: Real-time status system
+        
+        # Mission Control: Task dispatching
+        self.dispatch_button = None  # Will be initialized in _create_input_area
+        self.tasks_available = False  # Track if tasks are available for dispatch
         
         self._init_ui()
         self._register_event_handlers()
@@ -237,10 +232,11 @@ class MainWindow(QMainWindow):
         return banner_widget
 
     def _create_input_area(self):
-        """Creates the bottom input area."""
+        """Creates the bottom input area with chat input and dispatch button."""
         input_container = QWidget()
         input_layout = QHBoxLayout(input_container)
         input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(10)
 
         self.chat_input = ChatInputTextEdit()
         self.chat_input.setObjectName("chat_input")
@@ -248,8 +244,40 @@ class MainWindow(QMainWindow):
         self.chat_input.sendMessage.connect(self._send_message)
         self.chat_input.setEnabled(False)
 
+        # Mission Control: Dispatch All Tasks button
+        self.dispatch_button = QPushButton("⚡ Dispatch All Tasks")
+        self.dispatch_button.setObjectName("dispatch_button")
+        self.dispatch_button.setEnabled(False)  # Disabled by default
+        self.dispatch_button.clicked.connect(self._dispatch_all_tasks)
+        self.dispatch_button.setFixedWidth(200)
+        self.dispatch_button.setStyleSheet("""
+            QPushButton#dispatch_button {
+                background-color: #2c2c2c;
+                border: 1px solid #4a4a4a;
+                color: #dcdcdc;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px 15px;
+                border-radius: 5px;
+                font-family: "JetBrains Mono", monospace;
+            }
+            QPushButton#dispatch_button:hover:enabled {
+                background-color: #3a3a3a;
+                border-color: #FFB74D;
+            }
+            QPushButton#dispatch_button:enabled {
+                color: #FFB74D;
+                border-color: #FFB74D;
+            }
+            QPushButton#dispatch_button:disabled {
+                color: #666666;
+                border-color: #333333;
+                background-color: #1a1a1a;
+            }
+        """)
+
         input_layout.addWidget(self.chat_input, 1)
-        input_layout.addStretch(1)
+        input_layout.addWidget(self.dispatch_button)
 
         return input_container
 
@@ -282,9 +310,8 @@ class MainWindow(QMainWindow):
         # Aura Command Deck: Subscribe to workflow status updates
         self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
         
-        # Setup typing animation timer
-        self.status_typing_timer.timeout.connect(self._type_next_status_char)
-        self.status_typing_timer.setSingleShot(False)
+        # Mission Control: Subscribe to task events for dispatch button management
+        self.event_bus.subscribe("TASK_LIST_UPDATED", self._handle_task_list_updated)
 
     def _start_new_session(self):
         """Dispatches an event to start a new session and resets the UI."""
@@ -465,12 +492,11 @@ class MainWindow(QMainWindow):
 
     def _update_child_window_positions(self):
         """Updates the position of all attached child windows."""
-        self._update_task_log_position()
         self._update_code_viewer_position()
 
-    def _update_task_log_position(self):
-        """Updates the position of the task log window to be pinned to the right."""
-        if not self.task_log_window or not self.isVisible():
+    def _update_code_viewer_position(self):
+        """Updates the position of the code viewer window to be pinned to the right of the main window."""
+        if not self.isVisible() or not self.code_viewer_window or not self.code_viewer_window.isVisible():
             return
 
         main_window_pos = self.pos()
@@ -479,21 +505,6 @@ class MainWindow(QMainWindow):
 
         new_x = main_window_pos.x() + main_window_width + gap
         new_y = main_window_pos.y()
-
-        self.task_log_window.move(new_x, new_y)
-        self.task_log_window.resize(self.task_log_window.width(), self.height())
-
-    def _update_code_viewer_position(self):
-        """Updates the position of the code viewer window to be pinned to the right of the task log."""
-        if not self.isVisible() or not self.code_viewer_window or not self.code_viewer_window.isVisible() or not self.task_log_window or not self.task_log_window.isVisible():
-            return
-
-        task_log_pos = self.task_log_window.pos()
-        task_log_width = self.task_log_window.width()
-        gap = 8  # A small gap between windows
-
-        new_x = task_log_pos.x() + task_log_width + gap
-        new_y = task_log_pos.y()
 
         self.code_viewer_window.move(new_x, new_y)
         self.code_viewer_window.resize(self.code_viewer_window.width(), self.height())
@@ -541,84 +552,79 @@ class MainWindow(QMainWindow):
     
     def _handle_workflow_status_update(self, event):
         """
-        Aura Command Deck: Handle incoming workflow status updates by queuing them for animation.
+        Aura Command Deck: Handle incoming workflow status updates with clean, fast line display.
         """
         message = event.payload.get("message", "")
         status = event.payload.get("status", "info")
         
         if message:
-            # Add to queue for animated typing
-            self.status_message_queue.append((message, status))
+            # Map status to icon and color
+            status_config = {
+                "success": {"icon": "🟢", "color": "#39FF14"},
+                "in-progress": {"icon": "🟡", "color": "#FFB74D"}, 
+                "error": {"icon": "🔴", "color": "#FF4444"},
+                "info": {"icon": "🔵", "color": "#64B5F6"}
+            }
             
-            # Start typing animation if not already running
-            if not self.status_typing_timer.isActive():
-                self._start_next_status_message()
-    
-    def _start_next_status_message(self):
-        """
-        Aura Command Deck: Start typing the next message in the queue.
-        """
-        if not self.status_message_queue:
-            return
+            config = status_config.get(status, status_config["info"])
+            icon = config["icon"]
+            color = config["color"]
             
-        # Get next message from queue
-        message, status = self.status_message_queue.popleft()
-        self.current_status_message = message
-        self.current_status_class = f"status-{status}"
-        self.current_char_index = 0
-        
-        # Map status to icon
-        status_icons = {
-            "success": "🟢",
-            "in-progress": "🟡", 
-            "error": "🔴",
-            "info": "🔵"
-        }
-        icon = status_icons.get(status, "⚪")
-        
-        # Insert the initial HTML container with icon
-        cursor = self.chat_display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(f'<div class="{self.current_status_class}">{escape(icon)} ')
-        self.chat_display.setTextCursor(cursor)
-        
-        # Start the character-by-character typing
-        self.status_typing_timer.start(self.STATUS_TYPING_SPEED)
-    
-    def _type_next_status_char(self):
-        """
-        Aura Command Deck: Type the next character of the current status message.
-        This is the core animation method that creates the hacker terminal effect.
-        """
-        if self.current_char_index >= len(self.current_status_message):
-            # Current message is complete
-            cursor = self.chat_display.textCursor()
-            cursor.movePosition(QTextCursor.End)
-            cursor.insertHtml('</div>')
-            self.chat_display.setTextCursor(cursor)
+            # Create clean status line HTML
+            status_html = f'''
+            <div style="color: {color}; font-family: 'JetBrains Mono', monospace; font-size: 13px; margin: 2px 0; padding: 2px 0;">
+                {icon} {message}
+            </div>
+            '''
+            
+            # Append immediately to chat display
+            self.chat_display.append(status_html.strip())
             
             # Auto-scroll to bottom to keep status updates visible
             scrollbar = self.chat_display.verticalScrollBar()
             scrollbar.setValue(scrollbar.maximum())
-            
-            self.status_typing_timer.stop()
-            
-            # Start next message if queue has more
-            if self.status_message_queue:
-                self._start_next_status_message()
+    
+
+    # ═══════════════════════════════════════════════════════════════════════════════════════
+    # MISSION CONTROL: TASK DISPATCH SYSTEM
+    # ═══════════════════════════════════════════════════════════════════════════════════════
+    
+    def _dispatch_all_tasks(self):
+        """
+        Mission Control: Dispatch all pending tasks to begin the build process.
+        """
+        if not self.tasks_available:
             return
+            
+        # Disable the button to prevent multiple dispatches
+        self.dispatch_button.setEnabled(False)
+        self.dispatch_button.setText("🚀 Building...")
         
-        # Type the next character
-        char = self.current_status_message[self.current_char_index]
-        escaped_char = escape(char)  # Handle HTML special characters safely
+        # Dispatch the build command
+        self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
         
-        cursor = self.chat_display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(escaped_char)
-        self.chat_display.setTextCursor(cursor)
+        logger.info("Mission Control: All tasks dispatched for execution")
         
-        # Auto-scroll to keep typing visible
-        scrollbar = self.chat_display.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # Add status message to show build started
+        self.chat_display.append(f'<div style="color: #FFB74D; font-family: JetBrains Mono; font-size: 13px; margin: 8px 0;">🚀 <strong>MISSION CONTROL:</strong> Build sequence initiated</div>')
+        self.chat_display.moveCursor(QTextCursor.End)
+
+    def _handle_task_list_updated(self, event):
+        """
+        Mission Control: Handle task list updates to manage dispatch button state.
+        """
+        tasks = event.payload.get("tasks", [])
+        pending_tasks = [task for task in tasks if task.get("status") == "PENDING"]
         
-        self.current_char_index += 1
+        # Enable dispatch button if there are pending tasks
+        has_pending_tasks = len(pending_tasks) > 0
+        
+        if has_pending_tasks != self.tasks_available:
+            self.tasks_available = has_pending_tasks
+            
+            if self.dispatch_button:
+                self.dispatch_button.setEnabled(has_pending_tasks)
+                if has_pending_tasks:
+                    self.dispatch_button.setText(f"⚡ Dispatch {len(pending_tasks)} Tasks")
+                else:
+                    self.dispatch_button.setText("⚡ Dispatch All Tasks")

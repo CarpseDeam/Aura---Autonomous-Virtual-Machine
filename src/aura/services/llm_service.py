@@ -503,8 +503,17 @@ class LLMService:
                     )
                     total_tasks += 1
 
+            # Mission Control: Display the task list in the chat window
+            task_list_html = self._format_task_list_for_chat(blueprint, total_tasks)
+            
+            # Send the formatted task list to the chat display
+            self.event_bus.dispatch(Event(
+                event_type="MODEL_CHUNK_RECEIVED", 
+                payload={"chunk": task_list_html}
+            ))
+            
             # Send a confirmation message back to the user
-            confirmation_prompt = f"🔥 Phoenix Initiative Activated! I've created a granular blueprint with {total_tasks} precise tasks. Each specialist will implement individual methods and functions according to the spec. Ready for validation-driven development!"
+            confirmation_prompt = f"\n\n🔥 Phoenix Initiative Activated! I've created a granular blueprint with {total_tasks} precise tasks. Use the **Dispatch All Tasks** button to begin the build process!"
             self._stream_generation(confirmation_prompt, "lead_companion_agent")
 
         except Exception as e:
@@ -573,6 +582,89 @@ class LLMService:
         """Dispatches a model error event."""
         logger.error(message)
         self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": message}))
+
+    def _format_task_list_for_chat(self, blueprint: dict, total_tasks: int) -> str:
+        """
+        Mission Control: Format the architect's blueprint as HTML for the chat display.
+        """
+        html_parts = []
+        
+        # Header
+        html_parts.append(f"""
+        <div style="margin: 15px 0; padding: 15px; border-left: 4px solid #FFB74D; background-color: rgba(255, 183, 77, 0.1);">
+            <div style="color: #FFB74D; font-weight: bold; font-size: 16px; margin-bottom: 10px;">
+                📋 PROJECT BLUEPRINT
+            </div>
+            <div style="color: #dcdcdc; font-size: 14px; margin-bottom: 15px;">
+                Generated {total_tasks} precision tasks across {len(blueprint)} files
+            </div>
+        """)
+        
+        # Task list
+        task_counter = 1
+        for file_path, file_spec in blueprint.items():
+            file_name = file_path.split('/')[-1] if '/' in file_path else file_path
+            
+            html_parts.append(f"""
+            <div style="margin: 8px 0;">
+                <div style="color: #64B5F6; font-weight: bold; font-size: 14px;">
+                    📁 {file_name}
+                </div>
+            """)
+            
+            # Classes and methods
+            for class_spec in file_spec.get("classes", []):
+                class_name = class_spec.get("name", "UnknownClass")
+                methods = class_spec.get("methods", [])
+                
+                if methods:
+                    html_parts.append(f"""
+                    <div style="margin-left: 15px; color: #39FF14;">
+                        🔧 {class_name} class ({len(methods)} methods)
+                    </div>
+                    """)
+                    
+                    for method in methods[:3]:  # Show first 3 methods to avoid clutter
+                        method_name = method.get("name", "unknown")
+                        html_parts.append(f"""
+                        <div style="margin-left: 30px; color: #a0a0a0; font-size: 12px;">
+                            • {method_name}()
+                        </div>
+                        """)
+                        task_counter += 1
+                    
+                    if len(methods) > 3:
+                        html_parts.append(f"""
+                        <div style="margin-left: 30px; color: #666666; font-size: 12px; font-style: italic;">
+                            + {len(methods) - 3} more methods...
+                        </div>
+                        """)
+            
+            # Standalone functions
+            functions = file_spec.get("functions", [])
+            if functions:
+                for func in functions:
+                    func_name = func.get("name", "unknown")
+                    html_parts.append(f"""
+                    <div style="margin-left: 15px; color: #FF69B4;">
+                        ⚙️ {func_name}() function
+                    </div>
+                    """)
+                    task_counter += 1
+                    
+            html_parts.append("</div>")
+        
+        # Footer
+        html_parts.append("""
+            <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #4a4a4a;">
+                <div style="color: #FFB74D; font-size: 13px;">
+                    ✨ Ready for dispatch - Each task will be validated through the Phoenix Quality Gate
+                </div>
+            </div>
+        </div>
+        """)
+        
+        return "".join(html_parts)
 
     def _handle_request_available_models(self, event: Event):
         """Handles the request for available models."""

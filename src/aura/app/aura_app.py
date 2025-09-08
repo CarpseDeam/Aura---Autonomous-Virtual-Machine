@@ -16,7 +16,6 @@ from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
 from src.aura.models.events import Event
 from src.ui.windows.main_window import MainWindow
-from src.ui.windows.task_log_window import TaskLogWindow
 from src.ui.windows.code_viewer_window import CodeViewerWindow
 
 
@@ -56,11 +55,9 @@ class AuraApp:
             self.workspace_service
         )
         self.main_window = MainWindow(self.event_bus)
-        self.task_log_window = TaskLogWindow(self.event_bus)
         self.code_viewer_window = CodeViewerWindow(self.event_bus, self.ast_service)
 
-        # Give the main window references to the side windows for positioning
-        self.main_window.task_log_window = self.task_log_window
+        # Give the main window reference to the code viewer for positioning
         self.main_window.code_viewer_window = self.code_viewer_window
 
         self._register_event_handlers()
@@ -102,5 +99,4 @@ class AuraApp:
         """Shows the main window and starts the application."""
         logging.info("Starting Aura application...")
         self.main_window.show()
-        self.task_log_window.show()
         sys.exit(self.app.exec())
