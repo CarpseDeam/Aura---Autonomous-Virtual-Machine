@@ -6,8 +6,6 @@ from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
-from src.aura.services.design_service import DesignService
-from src.aura.services.blueprint_service import BlueprintService
 from src.aura.services.build_service import BuildService
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.conversation_management_service import ConversationManagementService
@@ -16,6 +14,7 @@ from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.services.validation_service import ValidationService
 from src.aura.prompts.prompt_manager import PromptManager
+from src.aura.services.orchestration_service import OrchestrationService
 from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
 from src.aura.models.events import Event
 from src.ui.windows.main_window import MainWindow
@@ -52,16 +51,13 @@ class AuraApp:
         # Low-level LLM dispatcher
         self.llm_service = LLMService(self.event_bus)
         # High-level services
-        self.design_service = DesignService(
-            self.event_bus,
-            self.prompt_manager,
-            self.llm_service,
-            self.task_management_service,
-        )
-        # New specialist: processes blueprint after generation
-        self.blueprint_service = BlueprintService(
-            self.event_bus,
-            self.task_management_service,
+        # New OrchestrationService becomes the primary entry point for user requests
+        self.orchestration_service = OrchestrationService(
+            event_bus=self.event_bus,
+            llm_service=self.llm_service,
+            ast_service=self.ast_service,
+            prompt_manager=self.prompt_manager,
+            task_management_service=self.task_management_service,
         )
         self.build_service = BuildService(
             self.event_bus,

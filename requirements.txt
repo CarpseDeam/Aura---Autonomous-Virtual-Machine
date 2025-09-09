@@ -8,3 +8,4 @@ requests
 sentence-transformers
 faiss-cpu
 PyYAML
+pytest

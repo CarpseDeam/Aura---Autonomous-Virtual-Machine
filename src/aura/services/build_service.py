@@ -54,8 +54,12 @@ class BuildService:
         logger.info("BuildService: BLUEPRINT_APPROVED received; starting build sequence if idle.")
         # Avoid double-start if a task is already in progress
         any_in_progress = any(t.status == TaskStatus.IN_PROGRESS for t in self.task_management_service.tasks)
+        any_pending = any(t.status == TaskStatus.PENDING for t in self.task_management_service.tasks)
         if not any_in_progress:
-            self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
+            if any_pending:
+                self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
+            else:
+                logger.info("BuildService: No pending tasks in blueprint; not starting build.")
         else:
             logger.info("BuildService: Build already in progress; ignoring auto-start.")
 

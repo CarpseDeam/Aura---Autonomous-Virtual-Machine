@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List, Optional, Set
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.models.task import Task, TaskStatus
@@ -10,12 +10,14 @@ logger = logging.getLogger(__name__)
 class TaskManagementService:
     """
     Manages the state of the task list for Mission Control.
-    Handles sequential dispatching of tasks.
+    Handles dependency-aware dispatching of tasks.
     """
 
     def __init__(self, event_bus: EventBus):
         self.event_bus = event_bus
         self.tasks: List[Task] = []
+        # Set of file paths that have completed all their tasks
+        self.completed_files: Set[str] = set()
         self._register_event_handlers()
         logger.info("TaskManagementService initialized.")
 
@@ -52,7 +54,10 @@ class TaskManagementService:
 
         # Phoenix Initiative: Check for specification data
         spec = event.payload.get("spec")
-        new_task = Task(description=description, spec=spec)
+        dependencies = event.payload.get("dependencies") or []
+        if not isinstance(dependencies, list):
+            dependencies = []
+        new_task = Task(description=description, spec=spec, dependencies=dependencies)
         self.tasks.append(new_task)
         
         if spec:
@@ -64,9 +69,14 @@ class TaskManagementService:
 
     def handle_dispatch_all_tasks(self, event: Event):
         """
-        Kicks off the sequential dispatching of all pending tasks.
+        Start dependency-aware dispatching of all eligible tasks.
         """
-        logger.info("Handling DISPATCH_ALL_TASKS event. Starting sequential dispatch.")
+        logger.info("Handling DISPATCH_ALL_TASKS event. Starting dependency-aware dispatch.")
+        # Exit early if there are no pending tasks to prevent idle loops
+        if not any(t.status == TaskStatus.PENDING for t in self.tasks):
+            logger.info("No pending tasks to dispatch; exiting cleanly.")
+            self._dispatch_task_list_update()
+            return
         self._dispatch_next_task()
 
     def handle_task_completed(self, event: Event):
@@ -74,46 +84,44 @@ class TaskManagementService:
         Handles the completion of a task and triggers the next one.
         """
         logger.info("Handling CODE_GENERATED event, signifying task completion.")
-        
-        # Find the task that was in progress
-        in_progress_task = next((task for task in self.tasks if task.status == TaskStatus.IN_PROGRESS), None)
-
-        if in_progress_task:
-            logger.info(f"Task '{in_progress_task.id}' completed.")
-            # Instead of removing the task, update its status to COMPLETED.
-            in_progress_task.status = TaskStatus.COMPLETED
-            self._dispatch_task_list_update()
-            
-            # Dispatch the next task in the sequence
-            self._dispatch_next_task()
-        else:
+        # Legacy path without task_id: mark the first IN_PROGRESS task as completed
+        in_progress_task = next((t for t in self.tasks if t.status == TaskStatus.IN_PROGRESS), None)
+        if not in_progress_task:
             logger.warning("CODE_GENERATED event received, but no task was in progress.")
+            return
+        in_progress_task.status = TaskStatus.COMPLETED
+        logger.info(f"Task '{in_progress_task.id}' completed (legacy path).")
+        self._check_file_completion_and_mark(in_progress_task)
+        self._dispatch_task_list_update()
+        self._dispatch_next_task()
 
     def _dispatch_next_task(self):
         """
-        Finds the next pending task, marks it as in-progress, and dispatches it.
-        If no tasks are left, the process is complete.
+        Scan all pending tasks and dispatch those whose file dependencies have completed.
+        Dispatches all eligible tasks in parallel (marking them IN_PROGRESS).
         """
-        # Find the next task that is still pending
-        next_task_to_dispatch = next((task for task in self.tasks if task.status == TaskStatus.PENDING), None)
+        # Determine eligible tasks
+        eligible: List[Task] = []
+        for task in self.tasks:
+            if task.status != TaskStatus.PENDING:
+                continue
+            deps = task.dependencies or []
+            if all(dep in self.completed_files for dep in deps):
+                eligible.append(task)
 
-        if next_task_to_dispatch:
-            logger.info(f"Dispatching next task: '{next_task_to_dispatch.description}'")
-            next_task_to_dispatch.status = TaskStatus.IN_PROGRESS
-            
-            # Update the UI to show the task is in progress
-            self._dispatch_task_list_update()
+        if not eligible:
+            # No eligible tasks; either waiting on dependencies or done
+            if all(t.status in {TaskStatus.COMPLETED, TaskStatus.VALIDATION_PASSED} for t in self.tasks):
+                logger.info("All tasks have been dispatched and completed (dependency-aware).")
+            return
 
-            # Dispatch the task for an agent to execute
-            self.event_bus.dispatch(Event(
-                event_type="DISPATCH_TASK",
-                payload={"task_id": next_task_to_dispatch.id}
-            ))
-        else:
-            # No pending tasks are left, the sequence is complete.
-            logger.info("All tasks have been dispatched and completed.")
-            # The task list should be empty at this point, but we dispatch an update for safety.
-            self._dispatch_task_list_update()
+        for t in eligible:
+            t.status = TaskStatus.IN_PROGRESS
+            logger.info(f"Dispatching task: '{t.description}'")
+            self.event_bus.dispatch(Event(event_type="DISPATCH_TASK", payload={"task_id": t.id}))
+
+        # Update UI after marking tasks
+        self._dispatch_task_list_update()
 
     def _dispatch_task_list_update(self):
         """
@@ -153,9 +161,8 @@ class TaskManagementService:
             task.status = TaskStatus.VALIDATION_PASSED
             task.validation_error = None  # Clear any previous errors
             logger.info(f"Task {task_id} PASSED validation")
+            self._check_file_completion_and_mark(task)
             self._dispatch_task_list_update()
-            
-            # Move to next task in the sequence
             self._dispatch_next_task()
 
     def handle_validation_failed(self, event: Event):
@@ -174,10 +181,21 @@ class TaskManagementService:
             task.validation_error = error_message
             logger.warning(f"Task {task_id} FAILED validation: {error_message}")
             self._dispatch_task_list_update()
-            
-            # Continue with next task even if this one failed
-            # TODO: In future, might want different behavior (retry, stop, etc.)
+            # Try dispatching other tasks that are not blocked by this file
             self._dispatch_next_task()
+
+    def _check_file_completion_and_mark(self, task: Task):
+        """
+        If all tasks for a file are completed/passed, add the file to completed_files.
+        """
+        file_path = (task.spec or {}).get("file_path")
+        if not file_path:
+            return
+        related = [t for t in self.tasks if (t.spec or {}).get("file_path") == file_path]
+        if related and all(t.status in {TaskStatus.COMPLETED, TaskStatus.VALIDATION_PASSED} for t in related):
+            if file_path not in self.completed_files:
+                self.completed_files.add(file_path)
+                logger.info(f"File completed: {file_path}")
 
     def add_temporary_task(self, task: Task):
         """

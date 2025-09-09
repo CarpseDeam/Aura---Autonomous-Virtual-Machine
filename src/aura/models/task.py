@@ -1,7 +1,7 @@
 import uuid
 from enum import Enum
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 class TaskStatus(str, Enum):
     """Enumeration for the status of a task."""
@@ -21,4 +21,5 @@ class Task(BaseModel):
     description: str
     status: TaskStatus = TaskStatus.PENDING
     spec: Optional[Dict[str, Any]] = None  # Phoenix Initiative: Granular specification from architect
+    dependencies: Optional[List[str]] = None  # Build order dependencies (file paths)
     validation_error: Optional[str] = None  # Error message if validation fails
