@@ -29,8 +29,6 @@ class TaskManagementService:
         self.event_bus.subscribe("VALIDATE_CODE", self.handle_validation_started)
         self.event_bus.subscribe("VALIDATION_SUCCESSFUL", self.handle_validation_successful)
         self.event_bus.subscribe("VALIDATION_FAILED", self.handle_validation_failed)
-        # Legacy: Subscribe to direct completion for non-spec tasks
-        self.event_bus.subscribe("CODE_GENERATED", self.handle_task_completed)
 
     def get_task_by_id(self, task_id: str) -> Optional[Task]:
         """
@@ -79,21 +77,7 @@ class TaskManagementService:
             return
         self._dispatch_next_task()
 
-    def handle_task_completed(self, event: Event):
-        """
-        Handles the completion of a task and triggers the next one.
-        """
-        logger.info("Handling CODE_GENERATED event, signifying task completion.")
-        # Legacy path without task_id: mark the first IN_PROGRESS task as completed
-        in_progress_task = next((t for t in self.tasks if t.status == TaskStatus.IN_PROGRESS), None)
-        if not in_progress_task:
-            logger.warning("CODE_GENERATED event received, but no task was in progress.")
-            return
-        in_progress_task.status = TaskStatus.COMPLETED
-        logger.info(f"Task '{in_progress_task.id}' completed (legacy path).")
-        self._check_file_completion_and_mark(in_progress_task)
-        self._dispatch_task_list_update()
-        self._dispatch_next_task()
+    
 
     def _dispatch_next_task(self):
         """

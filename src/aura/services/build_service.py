@@ -83,7 +83,7 @@ class BuildService:
         context_data = self.context_retrieval_service.get_context_for_task(task.description, file_path)
 
         prompt = self.prompt_manager.render(
-            "generate_code.jinja2",
+            "engineer.jinja2",
             task_description=task.description,
             file_path=file_path,
             context_files=context_data,

@@ -51,11 +51,6 @@ class ValidationService:
         if is_valid:
             logger.info(f"Quality Gate: Validation PASSED for task {task_id}")
             self._dispatch_validation_successful(task_id, file_path, generated_code)
-            # Dispatch CODE_GENERATED event for the CodeViewerWindow to update
-            self.event_bus.dispatch(Event(
-                event_type="CODE_GENERATED",
-                payload={"file_path": file_path, "code": generated_code}
-            ))
         else:
             logger.warning(f"Quality Gate: Validation FAILED for task {task_id}: {'; '.join(validation_errors)}")
             self._dispatch_validation_failed(task_id, file_path, "; ".join(validation_errors))

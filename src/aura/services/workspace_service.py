@@ -301,6 +301,7 @@ class WorkspaceService:
                 payload={
                     "task_id": task_id,
                     "file_path": file_path,
+                    "code": validated_code,
                     "project_name": self.active_project,
                     "line_count": len(validated_code.strip().split('\n')) if validated_code.strip() else 0
                 }

@@ -303,8 +303,6 @@ class MainWindow(QMainWindow):
 
         self.is_streaming_response = False
         self.signaller = Signaller()
-        self.dispatch_button = None
-        self.tasks_available = False
 
         self._init_ui()
         self._register_event_handlers()
@@ -382,13 +380,7 @@ class MainWindow(QMainWindow):
         self.chat_input.setPlaceholderText("Type here. Shift+Enter for newline. Enter to send.")
         self.chat_input.sendMessage.connect(self._send_message)
 
-        self.dispatch_button = QPushButton("Dispatch All Tasks")
-        self.dispatch_button.setObjectName("top_bar_button")
-        self.dispatch_button.clicked.connect(self._dispatch_all_tasks)
-        self.dispatch_button.setEnabled(False)
-
         hl.addWidget(self.chat_input, 1)
-        hl.addWidget(self.dispatch_button)
         return container
 
     def _register_event_handlers(self):
@@ -401,10 +393,8 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("MODEL_ERROR", lambda e: self.signaller.error_received.emit(e.payload.get("message", "Unknown error")))
 
         self.event_bus.subscribe("DISPATCH_TASK", self._handle_task_dispatch)
-        self.event_bus.subscribe("CODE_GENERATED", self._handle_code_generated)
         # Legacy UI status updates are deprecated in favor of MainWindow-driven narrative logging
         self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
-        self.event_bus.subscribe("TASK_LIST_UPDATED", self._handle_task_list_updated)
 
         self.event_bus.subscribe("PROJECT_ACTIVATED", self._handle_project_activated)
         self.event_bus.subscribe("PROJECT_IMPORTED", self._handle_project_imported)
@@ -512,11 +502,7 @@ class MainWindow(QMainWindow):
         operation = event.payload.get("operation", "generated")
         self._display_system_message("NEURAL", f"File {operation}: {file_path}")
 
-    def _handle_code_generated(self, event):
-        file_path = event.payload.get("file_path", "file")
-        if self.thinking_indicator.knight_rider.is_animating:
-            self.thinking_indicator.set_thinking_message(f"Completed: {file_path}")
-        self._display_system_message("NEURAL", f"Code generation complete: {file_path}")
+    
 
     def _display_system_message(self, category: str, message: str):
         self.typewriter.queue_line(f"[{category}] {message}", category)
@@ -555,29 +541,7 @@ class MainWindow(QMainWindow):
                 self.typewriter.queue_line(d, "DEFAULT")
         self.typewriter.start()
 
-    # Mission Control: dispatch
-    def _dispatch_all_tasks(self):
-        if not self.tasks_available:
-            return
-        self.dispatch_button.setEnabled(False)
-        self.dispatch_button.setText("Building...")
-        self.event_bus.dispatch(Event(event_type="DISPATCH_ALL_TASKS"))
-        logger.info("Mission Control: All tasks dispatched for execution")
-        self.typewriter.queue_line("[SYSTEM] Build sequence initiated. Executing blueprint...", "SYSTEM")
-        self.typewriter.start()
-
-    def _handle_task_list_updated(self, event):
-        tasks = event.payload.get("tasks", [])
-        pending = [t for t in tasks if t.get("status") == "PENDING"]
-        has_pending = len(pending) > 0
-        if has_pending != self.tasks_available:
-            self.tasks_available = has_pending
-            if self.dispatch_button:
-                self.dispatch_button.setEnabled(has_pending)
-                if has_pending:
-                    self.dispatch_button.setText(f"Dispatch {len(pending)} Tasks")
-                else:
-                    self.dispatch_button.setText("Dispatch All Tasks")
+    # Mission Control manual dispatch has been removed; build starts automatically.
 
     # Workspace events
     def _handle_project_activated(self, event):

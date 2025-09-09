@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class CodeViewerSignaller(QObject):
     """A signaller to safely update the UI from other threads."""
-    code_generated = Signal(dict)
+    validated_code_saved = Signal(dict)
     project_activated = Signal(dict)
 
 
@@ -138,10 +138,10 @@ class CodeViewerWindow(QWidget):
 
     def _register_event_handlers(self):
         """Subscribes to relevant events from the event bus."""
-        self.signaller.code_generated.connect(self._on_code_generated)
+        self.signaller.validated_code_saved.connect(self._on_validated_code_saved)
         self.event_bus.subscribe(
-            "CODE_GENERATED",
-            lambda event: self.signaller.code_generated.emit(event.payload)
+            "VALIDATED_CODE_SAVED",
+            lambda event: self.signaller.validated_code_saved.emit(event.payload)
         )
         self.signaller.project_activated.connect(self._on_project_activated)
         self.event_bus.subscribe(
@@ -172,13 +172,13 @@ class CodeViewerWindow(QWidget):
             current_parent_item = child_item
 
     @Slot(dict)
-    def _on_code_generated(self, payload: dict):
-        """Handles the code_generated signal to update the UI."""
+    def _on_validated_code_saved(self, payload: dict):
+        """Handles the validated_code_saved signal to update the UI only after validation."""
         file_path = payload.get("file_path")
         code = payload.get("code")
 
         if not file_path or code is None:
-            logger.warning("CODE_GENERATED event received with missing payload.")
+            logger.warning("VALIDATED_CODE_SAVED event received with missing payload.")
             return
 
         self._add_path_to_tree(file_path)
