@@ -82,9 +82,7 @@ class BuildService:
         # AST-driven context retrieval
         context_data = self.context_retrieval_service.get_context_for_task(task.description, file_path)
 
-        # Prepare additional context: current source and optional parent class source
-        current_source = self.context_retrieval_service._read_file_content(file_path) or ""
-
+        # Prepare additional context: optional parent class source (current source read just-in-time below)
         parent_class_name = None
         parent_class_source = None
         spec = getattr(task, 'spec', None) or {}
@@ -108,6 +106,9 @@ class BuildService:
                         logger.info(f"Parent class '{parent_class_name}' not found in index.")
             except Exception as e:
                 logger.warning(f"Failed to retrieve parent class source for '{parent_class_name}': {e}")
+
+        # Read the latest on-disk content immediately before rendering the prompt
+        current_source = self.context_retrieval_service._read_file_content(file_path) or ""
 
         prompt = self.prompt_manager.render(
             "engineer.jinja2",
