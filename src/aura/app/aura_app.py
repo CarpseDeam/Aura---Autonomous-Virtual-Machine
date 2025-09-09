@@ -6,15 +6,15 @@ from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
-from src.aura.services.build_service import BuildService
-from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.services.validation_service import ValidationService
 from src.aura.prompts.prompt_manager import PromptManager
-from src.aura.services.orchestration_service import OrchestrationService
+from src.aura.brain import AuraBrain
+from src.aura.executor import AuraExecutor
+from src.aura.interface import AuraInterface
 from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
 from src.aura.models.events import Event
 from src.ui.windows.main_window import MainWindow
@@ -41,7 +41,6 @@ class AuraApp:
         self.prompt_manager = PromptManager()
         # CRITICAL: Instantiation order matters for dependencies
         # EventBus -> ASTService -> WorkspaceService -> Other services
-        self.task_management_service = TaskManagementService(self.event_bus)
         self.conversation_management_service = ConversationManagementService(self.event_bus)
         self.ast_service = ASTService(self.event_bus)
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR, self.ast_service)
@@ -50,21 +49,22 @@ class AuraApp:
         self.validation_service = ValidationService(self.event_bus)
         # Low-level LLM dispatcher
         self.llm_service = LLMService(self.event_bus)
-        # High-level services
-        # New OrchestrationService becomes the primary entry point for user requests
-        self.orchestration_service = OrchestrationService(
+        # New 3-layer architecture
+        self.brain = AuraBrain(self.llm_service, self.prompt_manager)
+        self.executor = AuraExecutor(
             event_bus=self.event_bus,
-            llm_service=self.llm_service,
-            ast_service=self.ast_service,
-            prompt_manager=self.prompt_manager,
-            task_management_service=self.task_management_service,
+            llm=self.llm_service,
+            prompts=self.prompt_manager,
+            ast=self.ast_service,
+            context=self.context_retrieval_service,
         )
-        self.build_service = BuildService(
-            self.event_bus,
-            self.prompt_manager,
-            self.llm_service,
-            self.context_retrieval_service,
-            self.task_management_service,
+        self.interface = AuraInterface(
+            event_bus=self.event_bus,
+            brain=self.brain,
+            executor=self.executor,
+            ast=self.ast_service,
+            conversations=self.conversation_management_service,
+            workspace=self.workspace_service,
         )
         self.main_window = MainWindow(self.event_bus)
         self.code_viewer_window = CodeViewerWindow(self.event_bus, self.ast_service)
