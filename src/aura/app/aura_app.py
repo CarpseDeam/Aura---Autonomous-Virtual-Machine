@@ -1,5 +1,4 @@
 import sys
-import os
 import logging
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFontDatabase
@@ -10,13 +9,12 @@ from src.aura.services.conversation_management_service import ConversationManage
 from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
-from src.aura.services.validation_service import ValidationService
+from src.aura.services.blueprint_validator import BlueprintValidator
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
 from src.aura.interface import AuraInterface
-from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
-from src.aura.models.events import Event
+from src.aura.config import ASSETS_DIR, WORKSPACE_DIR
 from src.ui.windows.main_window import MainWindow
 from src.ui.windows.code_viewer_window import CodeViewerWindow
 
@@ -45,8 +43,8 @@ class AuraApp:
         self.ast_service = ASTService(self.event_bus)
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR, self.ast_service)
         self.context_retrieval_service = ContextRetrievalService(self.ast_service)
-        # Phoenix Initiative: Initialize ValidationService for Quality Gate
-        self.validation_service = ValidationService(self.event_bus)
+        # Phoenix Initiative: Initialize BlueprintValidator for Quality Gate
+        self.validation_service = BlueprintValidator()
         # Low-level LLM dispatcher
         self.llm_service = LLMService(self.event_bus)
         # New 3-layer architecture

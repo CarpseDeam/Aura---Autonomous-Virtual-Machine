@@ -1,7 +1,7 @@
 import logging
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QSplitter,
-                               QTreeWidget, QTreeWidgetItem, QTabWidget, QTextEdit, QApplication)
+                               QTreeWidget, QTreeWidgetItem, QTabWidget, QTextEdit)
 from PySide6.QtCore import Qt, Signal, QObject, Slot, QSettings, QByteArray
 from PySide6.QtGui import QTextCursor
 from src.aura.app.event_bus import EventBus

@@ -1,5 +1,4 @@
 import logging
-import html
 from typing import List, Optional
 
 from PySide6.QtWidgets import (

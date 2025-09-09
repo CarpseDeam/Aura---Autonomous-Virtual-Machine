@@ -1,8 +1,5 @@
-import logging
 from PySide6.QtCore import QRegularExpression
 from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
-
-logger = logging.getLogger(__name__)
 
 
 class PythonSyntaxHighlighter(QSyntaxHighlighter):
