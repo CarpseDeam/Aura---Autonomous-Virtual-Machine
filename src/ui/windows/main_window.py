@@ -410,6 +410,8 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("PROJECT_IMPORTED", self._handle_project_imported)
         self.event_bus.subscribe("PROJECT_IMPORT_ERROR", self._handle_project_import_error)
         self.event_bus.subscribe("VALIDATED_CODE_SAVED", self._handle_validated_code_saved)
+        # New: listen for generated blueprints to display summary
+        self.event_bus.subscribe("BLUEPRINT_GENERATED", self._handle_blueprint_generated)
 
     # Boot
     def _start_boot_sequence(self):
@@ -630,3 +632,90 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         QApplication.quit()
         super().closeEvent(event)
+
+    # ------------------- Blueprint UI -------------------
+    def _handle_blueprint_generated(self, event: Event):
+        """Render a summary of the generated blueprint in the chat display."""
+        try:
+            blueprint_data = event.payload or {}
+            files = blueprint_data.get("files") or []
+            total_tasks = sum(
+                (len(c.get("methods", [])) for f in files for c in (f or {}).get("classes", []))
+            ) + sum(len((f or {}).get("functions", [])) for f in files)
+            blueprint_view = {f.get("file_path"): f for f in files if f and f.get("file_path")}
+
+            html = self._format_task_list_for_chat(blueprint_view, total_tasks)
+            # Stream the HTML summary and a status line
+            self._handle_model_chunk(html)
+            self._handle_model_chunk(
+                f"Blueprint processed successfully. {total_tasks} tasks have been generated. Ready for dispatch."
+            )
+            self._handle_stream_end()
+        except Exception as e:
+            logger.debug(f"MainWindow: failed to render blueprint summary: {e}")
+
+    def _format_task_list_for_chat(self, blueprint: dict, total_tasks: int) -> str:
+        """Format the architect's blueprint as HTML for the chat display."""
+        html_parts = []
+        html_parts.append(f"""
+        <div style=\"margin: 15px 0; padding: 15px; border-left: 4px solid #FFB74D; background-color: rgba(255, 183, 77, 0.1);\">
+            <div style=\"color: #FFB74D; font-weight: bold; font-size: 16px; margin-bottom: 10px;\">
+                PROJECT BLUEPRINT
+            </div>
+            <div style=\"color: #dcdcdc; font-size: 14px; margin-bottom: 15px;\">
+                Generated {total_tasks} precision tasks across {len(blueprint)} files
+            </div>
+        """)
+
+        for file_path, file_spec in blueprint.items():
+            file_name = file_path.split('/')[-1] if '/' in file_path else file_path
+            html_parts.append(f"""
+            <div style=\"margin: 8px 0;\">
+                <div style=\"color: #64B5F6; font-weight: bold; font-size: 14px;\">
+                    {file_name}
+                </div>
+            """)
+
+            for class_spec in file_spec.get("classes", []) or []:
+                class_name = class_spec.get("name", "UnknownClass")
+                methods = class_spec.get("methods", []) or []
+                if methods:
+                    html_parts.append(f"""
+                    <div style=\"margin-left: 15px; color: #39FF14;\">
+                        {class_name} class ({len(methods)} methods)
+                    </div>
+                    """)
+                    for method in methods[:3]:
+                        method_name = method.get("name", "unknown")
+                        html_parts.append(f"""
+                        <div style=\"margin-left: 30px; color: #a0a0a0; font-size: 12px;\">
+                            • {method_name}()
+                        </div>
+                        """)
+                    if len(methods) > 3:
+                        html_parts.append(f"""
+                        <div style=\"margin-left: 30px; color: #666666; font-size: 12px; font-style: italic;\">
+                            + {len(methods) - 3} more methods...
+                        </div>
+                        """)
+
+            for func in file_spec.get("functions", []) or []:
+                func_name = func.get("name", "unknown")
+                html_parts.append(f"""
+                <div style=\"margin-left: 15px; color: #FF69B4;\">
+                    {func_name}() function
+                </div>
+                """)
+
+            html_parts.append("</div>")
+
+        html_parts.append("""
+            <div style=\"margin-top: 15px; padding-top: 10px; border-top: 1px solid #4a4a4a;\">
+                <div style=\"color: #FFB74D; font-size: 13px;\">
+                    Ready for dispatch - Each task will be validated through the Phoenix Quality Gate
+                </div>
+            </div>
+        </div>
+        """)
+
+        return "".join(html_parts)

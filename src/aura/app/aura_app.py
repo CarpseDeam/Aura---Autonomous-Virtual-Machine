@@ -6,6 +6,9 @@ from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
+from src.aura.services.design_service import DesignService
+from src.aura.services.blueprint_service import BlueprintService
+from src.aura.services.build_service import BuildService
 from src.aura.services.task_management_service import TaskManagementService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.ast_service import ASTService
@@ -46,13 +49,26 @@ class AuraApp:
         self.context_retrieval_service = ContextRetrievalService(self.ast_service)
         # Phoenix Initiative: Initialize ValidationService for Quality Gate
         self.validation_service = ValidationService(self.event_bus)
-        self.llm_service = LLMService(
+        # Low-level LLM dispatcher
+        self.llm_service = LLMService(self.event_bus)
+        # High-level services
+        self.design_service = DesignService(
             self.event_bus,
             self.prompt_manager,
+            self.llm_service,
             self.task_management_service,
-            self.conversation_management_service,
+        )
+        # New specialist: processes blueprint after generation
+        self.blueprint_service = BlueprintService(
+            self.event_bus,
+            self.task_management_service,
+        )
+        self.build_service = BuildService(
+            self.event_bus,
+            self.prompt_manager,
+            self.llm_service,
             self.context_retrieval_service,
-            self.workspace_service
+            self.task_management_service,
         )
         self.main_window = MainWindow(self.event_bus)
         self.code_viewer_window = CodeViewerWindow(self.event_bus, self.ast_service)
