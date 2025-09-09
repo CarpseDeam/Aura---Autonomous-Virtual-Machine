@@ -3,6 +3,7 @@ import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QSplitter,
                                QTreeWidget, QTreeWidgetItem, QTabWidget, QTextEdit, QApplication)
 from PySide6.QtCore import Qt, Signal, QObject, Slot, QSettings, QByteArray
+from PySide6.QtGui import QTextCursor
 from src.aura.app.event_bus import EventBus
 from src.ui.widgets.syntax_highlighter import PythonSyntaxHighlighter
 from src.aura.services.ast_service import ASTService
@@ -14,6 +15,7 @@ class CodeViewerSignaller(QObject):
     """A signaller to safely update the UI from other threads."""
     validated_code_saved = Signal(dict)
     project_activated = Signal(dict)
+    code_chunk_generated = Signal(dict)
 
 
 class CodeViewerWindow(QWidget):
@@ -148,6 +150,12 @@ class CodeViewerWindow(QWidget):
             "PROJECT_ACTIVATED",
             lambda event: self.signaller.project_activated.emit(event.payload)
         )
+        # Real-time code chunk updates
+        self.signaller.code_chunk_generated.connect(self._on_code_chunk_generated)
+        self.event_bus.subscribe(
+            "CODE_CHUNK_GENERATED",
+            lambda event: self.signaller.code_chunk_generated.emit(event.payload)
+        )
 
     def _add_path_to_tree(self, file_path: str):
         """Adds a file path to the tree, creating parent directories as needed."""
@@ -198,6 +206,38 @@ class CodeViewerWindow(QWidget):
             tab_index = self.tab_widget.addTab(editor, os.path.basename(file_path))
             self.tab_widget.setCurrentIndex(tab_index)
             self.tab_widget.setTabToolTip(tab_index, file_path)
+
+    @Slot(dict)
+    def _on_code_chunk_generated(self, payload: dict):
+        """Handles streaming code chunks to create/append content in real-time."""
+        file_path = payload.get("file_path")
+        chunk = payload.get("chunk", "")
+
+        if not file_path:
+            logger.warning("CODE_CHUNK_GENERATED received without file_path.")
+            return
+
+        # Ensure path appears in the tree on first chunk
+        if file_path not in self.tree_items:
+            self._add_path_to_tree(file_path)
+
+        # Create a new editor/tab for first chunk of a file
+        if file_path not in self.open_tabs:
+            editor = QTextEdit()
+            editor.setReadOnly(True)
+            highlighter = PythonSyntaxHighlighter(editor.document())
+            self.open_tabs[file_path] = editor
+            tab_index = self.tab_widget.addTab(editor, os.path.basename(file_path))
+            self.tab_widget.setCurrentIndex(tab_index)
+            self.tab_widget.setTabToolTip(tab_index, file_path)
+        else:
+            editor = self.open_tabs[file_path]
+
+        # Append the incoming chunk
+        if chunk:
+            editor.moveCursor(QTextCursor.End)
+            editor.insertPlainText(chunk)
+            editor.moveCursor(QTextCursor.End)
 
     @Slot(dict)
     def _on_project_activated(self, payload: dict):

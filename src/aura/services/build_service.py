@@ -82,12 +82,42 @@ class BuildService:
         # AST-driven context retrieval
         context_data = self.context_retrieval_service.get_context_for_task(task.description, file_path)
 
+        # Prepare additional context: current source and optional parent class source
+        current_source = self.context_retrieval_service._read_file_content(file_path) or ""
+
+        parent_class_name = None
+        parent_class_source = None
+        spec = getattr(task, 'spec', None) or {}
+        if isinstance(spec, dict):
+            parent_class_name = (
+                spec.get('parent_class')
+                or spec.get('base_class')
+                or spec.get('inherits_from')
+                or spec.get('extends')
+            )
+        # If the spec indicates inheritance, try to fetch the parent class source code
+        if parent_class_name:
+            try:
+                ast_service = getattr(self.context_retrieval_service, 'ast_service', None)
+                if ast_service:
+                    parent_path = ast_service.find_class_file_path(parent_class_name)
+                    if parent_path:
+                        parent_class_source = self.context_retrieval_service._read_file_content(parent_path) or None
+                        logger.info(f"Including parent class '{parent_class_name}' from: {parent_path}")
+                    else:
+                        logger.info(f"Parent class '{parent_class_name}' not found in index.")
+            except Exception as e:
+                logger.warning(f"Failed to retrieve parent class source for '{parent_class_name}': {e}")
+
         prompt = self.prompt_manager.render(
             "engineer.jinja2",
-            task_description=task.description,
             file_path=file_path,
+            user_request=task.description,
+            source_code=current_source,
+            spec=task.spec,
             context_files=context_data,
-            spec=task.spec
+            parent_class_name=parent_class_name,
+            parent_class_source=parent_class_source,
         )
         if not prompt:
             self._handle_error("Failed to render the engineer prompt.")
@@ -108,8 +138,28 @@ class BuildService:
             return
 
         try:
-            logger.info(f"Engineer: Generating code for '{file_path}' with agent '{agent_name}'.")
-            full_code = self.llm.run_for_agent(agent_name, prompt)
+            logger.info(f"Engineer: Generating code for '{file_path}' with agent '{agent_name}' (streaming).")
+            # Stream chunks from the provider and dispatch incremental updates
+            full_code_parts = []
+            stream = self.llm.stream_chat_for_agent(agent_name, prompt)
+            for chunk in stream:
+                # Dispatch each chunk so the UI can render in real-time
+                try:
+                    self.event_bus.dispatch(Event(
+                        event_type="CODE_CHUNK_GENERATED",
+                        payload={
+                            "file_path": file_path,
+                            "chunk": chunk or ""
+                        }
+                    ))
+                except Exception:
+                    # Don't let UI-dispatch hiccups break generation; continue accumulating
+                    logger.warning("Dispatch of CODE_CHUNK_GENERATED failed; continuing stream.", exc_info=True)
+                # Accumulate full text for validation/finalization
+                if chunk:
+                    full_code_parts.append(chunk)
+
+            full_code = "".join(full_code_parts)
 
             if full_code.startswith("ERROR:"):
                 self._handle_error(full_code)

@@ -402,6 +402,8 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("VALIDATED_CODE_SAVED", self._handle_validated_code_saved)
         # New: listen for generated blueprints to display summary
         self.event_bus.subscribe("BLUEPRINT_GENERATED", self._handle_blueprint_generated)
+        # Build lifecycle completion signal
+        self.event_bus.subscribe("BUILD_COMPLETED", self._handle_build_completed)
 
     # Boot
     def _start_boot_sequence(self):
@@ -566,6 +568,14 @@ class MainWindow(QMainWindow):
             self.typewriter.queue_line(f"[SUCCESS] Saved {file_path}", "SUCCESS")
         else:
             self.typewriter.queue_line(f"[SUCCESS] Wrote {line_count} lines to {file_path}", "SUCCESS")
+        self.typewriter.start()
+
+    def _handle_build_completed(self, event):
+        # Stop any thinking animation, show final success, and re-enable input
+        self.thinking_indicator.stop_thinking()
+        self.typewriter.queue_line("Build completed successfully. Aura is ready.", "SUCCESS")
+        self.chat_input.setEnabled(True)
+        self.chat_input.setFocus()
         self.typewriter.start()
 
     # Child window positioning

@@ -471,6 +471,32 @@ class ASTService:
             'semantic_search_enabled': self._semantic_enabled
         }
 
+    def find_class_file_path(self, class_name: str) -> Optional[str]:
+        """
+        Find the absolute file path where a given class is defined within the indexed project.
+
+        Args:
+            class_name: The exact name of the class to locate.
+
+        Returns:
+            Absolute file path as a string if found, otherwise None.
+        """
+        try:
+            for rel_path, info in self.project_index.items():
+                for cls in info.get('classes', []):
+                    if cls.get('name') == class_name:
+                        # Prefer the stored absolute file path if present
+                        abs_path = info.get('file_path')
+                        if abs_path and os.path.isabs(abs_path):
+                            return abs_path
+                        # Fallback: construct absolute from project_root and rel_path
+                        if self.project_root:
+                            return os.path.join(self.project_root, rel_path)
+                        return rel_path
+        except Exception as e:
+            logger.warning(f"Class lookup failed for '{class_name}': {e}")
+        return None
+
     def _initialize_semantic_search(self):
         """
         Initialize the semantic search components if dependencies are available.

@@ -1,9 +1,10 @@
-You are an expert Python engineer. Take the user's request and the provided source code and return the complete, updated file.
+You are an expert Python engineer. Take the user's request and the provided source code and return ONLY the precise, complete code snippet for the specific function or method requested in the task. Do NOT return the entire file's source code.
 
 Constraints:
 - Adhere to professional standards: docstrings, type hints, and PEP 8.
 - Preserve existing functionality unless explicitly instructed otherwise.
-- Output ONLY the raw code for the file. No markdown fences, no commentary.
+- Output ONLY the raw code for the requested function or method. No markdown fences, no commentary, no surrounding file content.
+- If a parent class reference is provided, you MUST examine it and correctly implement all required/abstract methods and match required signatures and contracts.
 
 Target File: {{ file_path }}
 
@@ -13,4 +14,11 @@ User Request:
 Current Source (Ground Truth):
 {{ source_code }}
 
-Now produce the full updated file content.
+{% if parent_class_source %}
+
+REFERENCE: PARENT CLASS SOURCE CODE ({{ parent_class_name }})
+{{ parent_class_source }}
+
+{% endif %}
+
+Now produce ONLY the requested function or method code block.

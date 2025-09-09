@@ -213,7 +213,7 @@ class WorkspaceService:
 
     def _handle_code_generated(self, event: Event):
         """
-        Handle CODE_GENERATED events by automatically saving to the active project.
+        Handle CODE_GENERATED events by surgically inserting a code snippet into the target file.
         
         Args:
             event: Event containing file_path and code payload
@@ -230,14 +230,20 @@ class WorkspaceService:
             return
         
         try:
-            # Extract just the filename if it's a full path
-            if os.path.sep in file_path:
-                filename = os.path.basename(file_path)
-            else:
-                filename = file_path
-            
-            self.save_code_to_project(filename, code)
-            logger.info(f"Automatically saved generated code to active project: {filename}")
+            # Perform surgical insertion of the snippet
+            final_path, full_content = self.insert_code_snippet(file_path, code)
+            logger.info(f"Automatically inserted generated snippet into: {final_path}")
+            # Optional: notify UI similarly to validated saves for legacy flows
+            self.event_bus.dispatch(Event(
+                event_type="VALIDATED_CODE_SAVED",
+                payload={
+                    "task_id": None,
+                    "file_path": file_path,
+                    "code": full_content,
+                    "project_name": self.active_project,
+                    "line_count": len(full_content.strip().split('\n')) if full_content.strip() else 0
+                }
+            ))
             
         except Exception as e:
             logger.error(f"Failed to auto-save generated code: {e}")
@@ -267,8 +273,8 @@ class WorkspaceService:
 
     def _handle_validation_successful(self, event: Event):
         """
-        Phoenix Initiative: Handle VALIDATION_SUCCESSFUL events by saving validated code.
-        Only code that passes the Quality Gate gets saved to the workspace.
+        Phoenix Initiative: Handle VALIDATION_SUCCESSFUL events by surgically inserting the validated snippet.
+        Only code that passes the Quality Gate gets inserted into the workspace file.
         
         Args:
             event: Event containing validated code and file path
@@ -286,26 +292,127 @@ class WorkspaceService:
             return
         
         try:
-            # Extract just the filename if it's a full path
-            if os.path.sep in file_path:
-                filename = os.path.basename(file_path)
-            else:
-                filename = file_path
+            # Perform surgical insertion of the validated snippet
+            final_path, full_content = self.insert_code_snippet(file_path, validated_code)
+            logger.info(f"Phoenix Initiative: Inserted validated snippet for task {task_id} into {final_path}")
             
-            self.save_code_to_project(filename, validated_code)
-            logger.info(f"Phoenix Initiative: Saved validated code for task {task_id} to {filename}")
-            
-            # Dispatch a special event indicating validated code was saved
+            # Dispatch a special event indicating validated code was saved, with full file content for viewers
             self.event_bus.dispatch(Event(
                 event_type="VALIDATED_CODE_SAVED",
                 payload={
                     "task_id": task_id,
                     "file_path": file_path,
-                    "code": validated_code,
+                    "code": full_content,
                     "project_name": self.active_project,
-                    "line_count": len(validated_code.strip().split('\n')) if validated_code.strip() else 0
+                    "line_count": len(full_content.strip().split('\n')) if full_content.strip() else 0
                 }
             ))
             
         except Exception as e:
             logger.error(f"Failed to save validated code for task {task_id}: {e}")
+
+    def insert_code_snippet(self, file_path: str, code_snippet: str) -> tuple[str, str]:
+        """
+        Surgically insert a code snippet into an existing file at the correct location.
+
+        Heuristics:
+        - If the snippet looks like a top-level function (def ... without self), append at EOF.
+        - If it looks like a class method (def ... with self) and the file contains exactly one class,
+          insert at the end of that class body with proper indentation.
+        - If multiple classes exist or detection is inconclusive, append at EOF.
+
+        Args:
+            file_path: Relative or absolute path to the target file inside the active project.
+            code_snippet: The code snippet to insert.
+
+        Returns:
+            Tuple of (absolute_path, full_file_content_after_write)
+        """
+        if not self.active_project or not self.active_project_path:
+            raise RuntimeError("No active project set. Call set_active_project() first.")
+
+        # Normalize and resolve path within the active project
+        rel_path = file_path
+        if os.path.isabs(rel_path):
+            # Convert to relative if it points within the project
+            try:
+                rel_path = os.path.relpath(rel_path, str(self.active_project_path))
+            except Exception:
+                # If conversion fails, just use the basename
+                rel_path = os.path.basename(rel_path)
+        rel_path = rel_path.lstrip('/')
+        target_file = self.active_project_path / rel_path
+
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing = ""
+        if target_file.exists():
+            try:
+                existing = target_file.read_text(encoding='utf-8')
+            except Exception:
+                existing = ""
+
+        # Decide insertion strategy
+        snippet = code_snippet.strip("\n") + "\n"
+        first_line = next((ln for ln in snippet.splitlines() if ln.strip() and not ln.strip().startswith('#')), "")
+        is_method_like = first_line.lstrip().startswith("def ") and "self" in first_line
+        is_class_like = first_line.lstrip().startswith("class ")
+
+        if not existing.strip():
+            # Trivial case: create new file with snippet
+            final_content = snippet if snippet.endswith("\n") else snippet + "\n"
+            target_file.write_text(final_content, encoding='utf-8')
+        else:
+            inserted = False
+            if is_method_like and not is_class_like:
+                try:
+                    import ast
+                    tree = ast.parse(existing)
+                    class_nodes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+                    if len(class_nodes) == 1 and hasattr(class_nodes[0], 'end_lineno'):
+                        cls = class_nodes[0]
+                        lines = existing.splitlines()
+                        insert_index = cls.end_lineno  # 1-based; insert after this line to stay inside class by indenting
+                        # Determine class indent from its definition line
+                        def_line = lines[cls.lineno - 1]
+                        base_indent = len(def_line) - len(def_line.lstrip())
+                        indent = ' ' * (base_indent + 4)
+                        indented_snippet = "\n".join((indent + s if s.strip() else s) for s in snippet.splitlines())
+                        # Insert with a separating newline if needed
+                        new_lines = (
+                            lines[:insert_index] +
+                            ([indented_snippet] if indented_snippet.endswith("\n") else [indented_snippet + "\n"]) +
+                            lines[insert_index:]
+                        )
+                        final_content = "\n".join(new_lines)
+                        target_file.write_text(final_content, encoding='utf-8')
+                        inserted = True
+                except Exception:
+                    inserted = False
+
+            if not inserted:
+                # Append at EOF with two newlines separation
+                sep = "\n\n" if existing and not existing.endswith("\n\n") else ("\n" if not existing.endswith("\n") else "")
+                final_content = existing + sep + snippet
+                target_file.write_text(final_content, encoding='utf-8')
+
+        # After write, read back full content and update AST index
+        full_content = target_file.read_text(encoding='utf-8')
+        try:
+            from src.aura.models.events import Event as _Evt
+            fake_event = _Evt(event_type="CODE_GENERATED", payload={"file_path": rel_path, "code": full_content})
+            self.ast_service.update_index_for_file(fake_event)
+        except Exception as e:
+            logger.debug(f"AST index update after snippet insertion failed: {e}")
+
+        # Notify file saved
+        self.event_bus.dispatch(Event(
+            event_type="FILE_SAVED_TO_PROJECT",
+            payload={
+                "project_name": self.active_project,
+                "file_path": str(target_file),
+                "relative_path": rel_path
+            }
+        ))
+
+        return str(target_file), full_content

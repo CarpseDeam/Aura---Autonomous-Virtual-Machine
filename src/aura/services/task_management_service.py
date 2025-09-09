@@ -102,7 +102,10 @@ class TaskManagementService:
         for t in eligible:
             t.status = TaskStatus.IN_PROGRESS
             logger.info(f"Dispatching task: '{t.description}'")
-            self.event_bus.dispatch(Event(event_type="DISPATCH_TASK", payload={"task_id": t.id}))
+            self.event_bus.dispatch(Event(event_type="DISPATCH_TASK", payload={
+                "task_id": t.id,
+                "task_description": t.description
+            }))
 
         # Update UI after marking tasks
         self._dispatch_task_list_update()
@@ -148,6 +151,9 @@ class TaskManagementService:
             self._check_file_completion_and_mark(task)
             self._dispatch_task_list_update()
             self._dispatch_next_task()
+            # If no tasks are pending or in progress (or validating), signal that the build is complete
+            if not any(t.status in {TaskStatus.PENDING, TaskStatus.IN_PROGRESS, TaskStatus.VALIDATING} for t in self.tasks):
+                self.event_bus.dispatch(Event(event_type="BUILD_COMPLETED", payload={}))
 
     def handle_validation_failed(self, event: Event):
         """
