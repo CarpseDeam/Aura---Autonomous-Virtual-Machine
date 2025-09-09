@@ -168,23 +168,11 @@ class BuildService:
 
             sanitized_code = self._sanitize_code(full_code)
 
-            if task and hasattr(task, 'spec') and task.spec:
-                logger.info(f"Phoenix Initiative: Routing task {task.id} through Quality Gate")
-                self.event_bus.dispatch(Event(
-                    event_type="VALIDATE_CODE",
-                    payload={
-                        "spec": task.spec,
-                        "generated_code": sanitized_code,
-                        "task_id": task.id,
-                        "file_path": file_path
-                    }
-                ))
-            else:
-                logger.info(f"Legacy: Direct dispatch for non-spec task in '{file_path}'")
-                self.event_bus.dispatch(Event(
-                    event_type="CODE_GENERATED",
-                    payload={"file_path": file_path, "code": sanitized_code}
-                ))
+            # Simplified: Directly dispatch full file content without validation gate
+            self.event_bus.dispatch(Event(
+                event_type="CODE_GENERATED",
+                payload={"file_path": file_path, "code": sanitized_code}
+            ))
 
             logger.info(f"Successfully processed code generation for '{file_path}'.")
         except Exception as e:

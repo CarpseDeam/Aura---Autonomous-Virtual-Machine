@@ -229,7 +229,7 @@ class OrchestrationService:
     # -------- Static helpers used by worker --------
     @staticmethod
     def _events_from_blueprint(blueprint_data: Dict[str, Any]) -> List[Event]:
-        """Return a list of ADD_TASK events derived from a blueprint."""
+        """Create ONE ADD_TASK event per file in the blueprint, passing full file spec."""
         events: List[Event] = []
         files: List[Dict[str, Any]] = []
         if isinstance(blueprint_data.get("files"), list):
@@ -243,40 +243,14 @@ class OrchestrationService:
 
         for f in files:
             file_path = f.get("file_path") or "workspace/generated.py"
-            imports_required = f.get("imports_required") or []
-            # Functions
-            for func in (f.get("functions") or []):
-                desc = func.get("description") or f"Implement function {func.get('function_name')}"
-                payload = {
-                    "description": f"{desc} in {file_path}",
-                    "spec": {
-                        "file_path": file_path,
-                        "function_name": func.get("function_name"),
-                        "signature": func.get("signature"),
-                        "description": desc,
-                        "imports_required": func.get("imports_required") or imports_required,
-                    },
-                    "dependencies": f.get("dependencies") or [],
-                }
-                events.append(Event(event_type="ADD_TASK", payload=payload))
-            # Classes / Methods
-            for cls in (f.get("classes") or []):
-                class_name = cls.get("class_name") or cls.get("name")
-                for method in (cls.get("methods") or []):
-                    desc = method.get("description") or f"Implement method {method.get('method_name') or method.get('function_name')}"
-                    payload = {
-                        "description": f"{desc} in {file_path}::{class_name}",
-                        "spec": {
-                            "file_path": file_path,
-                            "class_name": class_name,
-                            "method_name": method.get("method_name") or method.get("function_name"),
-                            "signature": method.get("signature"),
-                            "description": desc,
-                            "imports_required": method.get("imports_required") or imports_required,
-                        },
-                        "dependencies": f.get("dependencies") or [],
-                    }
-                    events.append(Event(event_type="ADD_TASK", payload=payload))
+            # Consolidated task per file
+            description = f"Implement the file {file_path}."
+            payload = {
+                "description": description,
+                "spec": f,
+                "dependencies": f.get("dependencies") or [],
+            }
+            events.append(Event(event_type="ADD_TASK", payload=payload))
         return events
 
     @staticmethod
@@ -308,4 +282,3 @@ class OrchestrationService:
     def _handle_error(self, message: str) -> None:
         logger.error(message)
         self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": message}))
-
