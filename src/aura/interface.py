@@ -4,6 +4,8 @@ import os
 import re
 from typing import Any, Dict, List
 
+from PySide6.QtCore import QThreadPool
+
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
@@ -12,6 +14,7 @@ from src.aura.executor import AuraExecutor
 from src.aura.services.ast_service import ASTService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.workspace_service import WorkspaceService
+from src.aura.worker import BrainExecutorWorker
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,7 @@ class AuraInterface:
         ast: ASTService,
         conversations: ConversationManagementService,
         workspace: WorkspaceService,
+        thread_pool: QThreadPool,
     ) -> None:
         self.event_bus = event_bus
         self.brain = brain
@@ -42,6 +46,7 @@ class AuraInterface:
         self.ast = ast
         self.conversations = conversations
         self.workspace = workspace
+        self.thread_pool = thread_pool
 
         self._register_event_handlers()
 
@@ -64,6 +69,14 @@ class AuraInterface:
             self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Empty user request received."}))
             return
 
+        # Run heavy logic on a background thread
+        worker = BrainExecutorWorker(self, user_text)
+        worker.signals.error.connect(lambda msg: self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": msg})))
+        # finished signal available for potential UI hooks; no-op here
+        worker.signals.finished.connect(lambda: None)
+        self.thread_pool.start(worker)
+
+    def _handle_user_message_logic(self, user_text: str) -> None:
         # Record conversation
         try:
             self.conversations.add_message("user", user_text)

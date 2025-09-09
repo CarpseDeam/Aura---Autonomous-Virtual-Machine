@@ -1,6 +1,7 @@
 import sys
 import logging
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QThreadPool
 from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
@@ -56,6 +57,9 @@ class AuraApp:
             ast=self.ast_service,
             context=self.context_retrieval_service,
         )
+        # Thread pool for background tasks
+        thread_pool = QThreadPool.globalInstance()
+
         self.interface = AuraInterface(
             event_bus=self.event_bus,
             brain=self.brain,
@@ -63,6 +67,7 @@ class AuraApp:
             ast=self.ast_service,
             conversations=self.conversation_management_service,
             workspace=self.workspace_service,
+            thread_pool=thread_pool,
         )
         self.main_window = MainWindow(self.event_bus)
         self.code_viewer_window = CodeViewerWindow(self.event_bus, self.ast_service)

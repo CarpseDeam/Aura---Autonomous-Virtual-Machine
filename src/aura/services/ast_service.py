@@ -245,6 +245,12 @@ class ASTService:
             logger.error(f"Syntax error in generated code for {file_path}: {str(e)}")
         except Exception as e:
             logger.error(f"Failed to update AST index for {file_path}: {str(e)}")    
+        finally:
+            # Ensure semantic index stays in sync with latest code
+            try:
+                self._build_semantic_index()
+            except Exception as e:
+                logger.warning(f"Failed to rebuild semantic index after update: {e}")
 
     def get_indexed_file_paths(self) -> List[str]:
         """
