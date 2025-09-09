@@ -263,13 +263,13 @@ class OrchestrationService:
             for cls in (f.get("classes") or []):
                 class_name = cls.get("class_name") or cls.get("name")
                 for method in (cls.get("methods") or []):
-                    desc = method.get("description") or f"Implement method {method.get('method_name')}"
+                    desc = method.get("description") or f"Implement method {method.get('method_name') or method.get('function_name')}"
                     payload = {
                         "description": f"{desc} in {file_path}::{class_name}",
                         "spec": {
                             "file_path": file_path,
                             "class_name": class_name,
-                            "method_name": method.get("method_name"),
+                            "method_name": method.get("method_name") or method.get("function_name"),
                             "signature": method.get("signature"),
                             "description": desc,
                             "imports_required": method.get("imports_required") or imports_required,
