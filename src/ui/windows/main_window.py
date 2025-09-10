@@ -1,6 +1,7 @@
 import logging
 import textwrap
 from typing import List, Optional
+import markdown
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout,
@@ -18,6 +19,82 @@ from src.ui.widgets.knight_rider_widget import ThinkingIndicator
 
 
 logger = logging.getLogger(__name__)
+
+# Retro CSS stylesheet for AURA's markdown-rendered responses
+AURA_RESPONSE_CSS = """
+<style>
+    body { 
+        font-family: 'JetBrains Mono', monospace; 
+        font-size: 13px; 
+        color: #dcdcdc; 
+        background: transparent; 
+        margin: 2px 0; 
+        line-height: 1.4;
+    }
+    h1, h2, h3, h4, h5, h6 { 
+        color: #FFB74D; 
+        font-weight: bold; 
+        margin: 8px 0 4px 0; 
+    }
+    h1 { font-size: 16px; }
+    h2 { font-size: 15px; }
+    h3 { font-size: 14px; }
+    p { 
+        margin: 4px 0; 
+        color: #dcdcdc; 
+    }
+    ul, ol { 
+        margin: 4px 0; 
+        padding-left: 20px; 
+    }
+    li { 
+        margin: 2px 0; 
+        color: #dcdcdc; 
+    }
+    code { 
+        background-color: #2a2a2a; 
+        color: #64B5F6; 
+        padding: 1px 4px; 
+        border-radius: 2px; 
+        font-family: 'JetBrains Mono', monospace; 
+        font-size: 12px; 
+    }
+    pre { 
+        background-color: #1e1e1e; 
+        color: #dcdcdc; 
+        padding: 8px; 
+        border-radius: 4px; 
+        border-left: 3px solid #FFB74D; 
+        margin: 8px 0; 
+        white-space: pre-wrap; 
+        font-family: 'JetBrains Mono', monospace; 
+        font-size: 12px; 
+        overflow-x: auto; 
+    }
+    pre code { 
+        background: transparent; 
+        padding: 0; 
+    }
+    blockquote { 
+        border-left: 3px solid #64B5F6; 
+        margin: 8px 0; 
+        padding-left: 12px; 
+        color: #b0b0b0; 
+    }
+    strong, b { 
+        color: #FFB74D; 
+        font-weight: bold; 
+    }
+    em, i { 
+        color: #64B5F6; 
+        font-style: italic; 
+    }
+    a { 
+        color: #64B5F6; 
+        text-decoration: underline; 
+    }
+</style>
+"""
 
 
 class Signaller(QObject):
@@ -296,6 +373,26 @@ class MainWindow(QMainWindow):
         self.chat_display.insertHtml(user_html)
         self.chat_display.ensureCursorVisible()
 
+    def _render_aura_response(self, response_text: str):
+        """Render AURA's response using Markdown-to-HTML conversion with retro styling."""
+        # Convert markdown to HTML
+        html_content = markdown.markdown(response_text, extensions=['fenced_code', 'codehilite'])
+        
+        # Create complete HTML document with CSS styling
+        styled_html = f"""
+        <div>
+            {AURA_RESPONSE_CSS}
+            <div style="margin-bottom: 8px;">
+                {html_content}
+            </div>
+        </div>
+        """
+        
+        # Append the styled HTML to chat display
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.insertHtml(styled_html)
+        self.chat_display.ensureCursorVisible()
+
     def _send_message(self):
         user_text = self.chat_input.toPlainText().strip()
         if not user_text:
@@ -322,66 +419,20 @@ class MainWindow(QMainWindow):
     def _handle_stream_end(self):
         if self.is_streaming_response and self.full_response_buffer.strip():
             # Add the colored [AURA] tag to show who is speaking
-            aura_label_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">[AURA]</div>'
+            aura_label_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; font-weight: bold;">[AURA]</div>'
             self.chat_display.moveCursor(QTextCursor.End)
             self.chat_display.insertHtml(aura_label_html)
             
-            # Use textwrap to properly wrap the complete message
-            wrapped_lines = textwrap.wrap(self.full_response_buffer.strip(), width=80)
-            self.displayed_text_buffer = '\n'.join(wrapped_lines)
+            # Render the complete response using markdown-to-HTML conversion
+            self._render_aura_response(self.full_response_buffer.strip())
             
-            # Reset animation state and start the timer
-            self.animation_index = 0
-            self._current_display_text = ""  # Track what we've displayed so far
-            self.animation_timer.start()
-            
-        else:
-            # No content to animate, just finish up
-            self.is_streaming_response = False
-            self.chat_input.setEnabled(True)
-            self.chat_input.setFocus()
-
-    def _on_animation_tick(self):
-        """Handle each animation tick to reveal text character by character."""
-        if self.animation_index < len(self.displayed_text_buffer):
-            # Get the next character to reveal
-            next_char = self.displayed_text_buffer[self.animation_index]
-            self._current_display_text += next_char
-            
-            # Create HTML content with proper styling and escaping
-            escaped_text = self._current_display_text.replace('\n', '<br>').replace(' ', '&nbsp;')
-            content_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">{escaped_text}</div><br>'
-            
-            # Find the last AURA content div and replace it
-            cursor = self.chat_display.textCursor()
-            cursor.movePosition(QTextCursor.End)
-            
-            # For now, we'll append the updated content (a more sophisticated approach would be to replace the last div)
-            # This is a simple approach that works with Qt's text engine
-            if self.animation_index == 0:
-                # First character, start the content div
-                self.chat_display.insertHtml(f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">')
-            
-            # Insert just the new character
-            if next_char == '\n':
-                self.chat_display.insertHtml('<br>')
-            else:
-                self.chat_display.insertHtml(next_char.replace(' ', '&nbsp;'))
-            
-            self.animation_index += 1
-            self.chat_display.ensureCursorVisible()
-            
-        else:
-            # Animation finished
-            self.animation_timer.stop()
-            self.chat_display.insertHtml('</div><br>')  # Close the content div
-            self.is_streaming_response = False
-            self.chat_input.setEnabled(True)
-            self.chat_input.setFocus()
-            
-            # Clear buffers
+            # Clear the buffer and finish up
             self.full_response_buffer = ""
-            self._current_display_text = ""
+            
+        # Finish streaming state
+        self.is_streaming_response = False
+        self.chat_input.setEnabled(True)
+        self.chat_input.setFocus()
 
     def _handle_model_error(self, error_message: str):
         self.thinking_indicator.stop_thinking()
