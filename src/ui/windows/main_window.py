@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout,
     QApplication, QPushButton, QFileDialog
 )
-from PySide6.QtGui import QFont, QTextCursor, QIcon, QColor, QTextCharFormat
+from PySide6.QtGui import QFont, QTextCursor, QIcon, QColor, QTextCharFormat, QTextOption
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 
 from src.aura.app.event_bus import EventBus
@@ -325,7 +325,12 @@ class MainWindow(QMainWindow):
         banner_label.setAlignment(Qt.AlignCenter)
 
         self.chat_display = QTextEdit()
+        # Prevent chat display from receiving keyboard focus to avoid
+        # conflicts between user selection and the typewriter cursor
+        self.chat_display.setFocusPolicy(Qt.NoFocus)
         self.chat_display.setObjectName("chat_display")
+        # Ensure word wrapping occurs at word boundaries for readability
+        self.chat_display.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.chat_display.setReadOnly(True)
 
         self.thinking_indicator = ThinkingIndicator()
@@ -450,7 +455,8 @@ class MainWindow(QMainWindow):
 
         # User parent + child
         self.typewriter.queue_line("[USER]", "KERNEL")
-        self.typewriter.queue_line(user_text, "DEFAULT")
+        # Use the same category for the user's message to unify color
+        self.typewriter.queue_line(user_text, "KERNEL")
         self.typewriter.start()
 
         self.thinking_indicator.start_thinking("Analyzing your request...")
