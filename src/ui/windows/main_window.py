@@ -1,4 +1,5 @@
 import logging
+import textwrap
 from typing import List, Optional
 
 from PySide6.QtWidgets import (
@@ -25,205 +26,7 @@ class Signaller(QObject):
     error_received = Signal(str)
 
 
-class TypewriterTerminal(QObject):
-    """Typewriter engine that renders lines with a blinking block cursor."""
 
-    def __init__(self, text_edit: QTextEdit, parent=None):
-        super().__init__(parent)
-        self.text_edit = text_edit
-        self.queue: List[dict] = []  # {open_html, text, close_html}
-        self.current: Optional[dict] = None
-        self.char_index = 0
-
-        self.typing_timer = QTimer(self)
-        self.typing_timer.setInterval(12)
-        self.typing_timer.timeout.connect(self._on_type_tick)
-
-        self.cursor_visible = False
-        self.cursor_timer = QTimer(self)
-        self.cursor_timer.setInterval(500)
-        self.cursor_timer.timeout.connect(self._toggle_cursor)
-
-        self.streaming_open = False
-        self.streaming_close_html = ""
-        # Category color map for non-HTML typewriter coloring
-        self.category_colors = {
-            "KERNEL": "#64B5F6",   # futuristic blue
-            "SYSTEM": "#66BB6A",   # informative green
-            "NEURAL": "#FFB74D",   # amber/orange
-            "SUCCESS": "#39FF14",  # bright green
-            "ERROR": "#FF4444",    # alert red
-            "WORKSPACE": "#64B5F6",
-            "USER": "#64B5F6",
-            "DEFAULT": "#dcdcdc",
-        }
-
-    def start(self):
-        if not self.cursor_timer.isActive():
-            self.cursor_timer.start()
-
-    def _remove_cursor_if_present(self):
-        cursor = self.text_edit.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.movePosition(QTextCursor.Left, QTextCursor.KeepAnchor, 1)
-        if cursor.selectedText() == "█":
-            cursor.removeSelectedText()
-            self.cursor_visible = False
-
-    def _append_html(self, html_str: str):
-        self._remove_cursor_if_present()
-        self.text_edit.moveCursor(QTextCursor.End)
-        self.text_edit.insertHtml(html_str)
-        self._ensure_cursor()
-
-    def _append_text_escaped(self, text: str):
-        self._remove_cursor_if_present()
-        self.text_edit.moveCursor(QTextCursor.End)
-        self.text_edit.insertHtml(text)
-        self._ensure_cursor()
-
-    def _ensure_cursor(self):
-        if not self.cursor_visible:
-            self.text_edit.insertPlainText("█")
-            self.cursor_visible = True
-        self.text_edit.moveCursor(QTextCursor.End)
-        self.text_edit.ensureCursorVisible()
-
-    def _toggle_cursor(self):
-        self._remove_cursor_if_present()
-        if not self.cursor_visible:
-            self.text_edit.insertPlainText("█")
-            self.cursor_visible = True
-        else:
-            self.cursor_visible = False
-        self.text_edit.moveCursor(QTextCursor.End)
-
-    def queue_line(self, text: str, color: str, level: int = 0):
-        indent = 20 * max(level, 0)
-        open_html = (
-            f"<div style='margin: 2px 0 2px {indent}px; color: {color};"
-            f" font-family: \"JetBrains Mono\", monospace; font-size: 13px;'>"
-            f"<span style='color: {color};'>●</span> "
-        )
-        close_html = "</div><br/>"
-        self._queue_segment(open_html, text, close_html)
-
-    def open_stream_block(self, color: str, level: int = 0):
-        if self.streaming_open:
-            return
-        indent = 20 * max(level, 0)
-        open_html = (
-            f"<div style='margin: 2px 0 2px {indent}px; color: {color};"
-            f" font-family: \"JetBrains Mono\", monospace; font-size: 13px;'>"
-        )
-        self._append_html(open_html)
-        self.streaming_open = True
-        self.streaming_close_html = "</div>"
-
-    def append_stream_text(self, text: str):
-        if not text:
-            return
-        self._queue_segment(None, text, None)
-
-    def close_stream_block(self):
-        if self.streaming_open:
-            if not self.typing_timer.isActive():
-                self._append_html(self.streaming_close_html + "<br/>")
-            else:
-                self._queue_segment(None, "", self.streaming_close_html + "<br/>")
-            self.streaming_open = False
-            self.streaming_close_html = ""
-
-    def _queue_segment(self, open_html: Optional[str], text: str, close_html: Optional[str]):
-        # HTML mode segment (used for streaming blocks)
-        self.queue.append({
-            "mode": "html",
-            "open_html": open_html,
-            "text": text,
-            "close_html": close_html,
-        })
-        if not self.typing_timer.isActive():
-            self._advance_queue()
-            self.typing_timer.start()
-        self.start()
-
-    def _queue_plain_segment(self, text: str, color_hex: str):
-        """Queue a plain-text segment (no HTML), colored by category."""
-        self.queue.append({
-            "mode": "plain",
-            "text": text,
-            "color": color_hex,
-        })
-        if not self.typing_timer.isActive():
-            self._advance_queue()
-            self.typing_timer.start()
-        self.start()
-
-    def _advance_queue(self):
-        if not self.queue:
-            self.current = None
-            self.char_index = 0
-            self.typing_timer.stop()
-            self._ensure_cursor()
-            return
-        self.current = self.queue.pop(0)
-        self.char_index = 0
-        if self.current.get("open_html"):
-            self._append_html(self.current["open_html"])
-
-    def _on_type_tick(self):
-        if not self.current:
-            self._advance_queue()
-            return
-
-        text = self.current.get("text", "")
-        if self.char_index < len(text):
-            ch = text[self.char_index]
-            mode = self.current.get("mode")
-            if mode == "plain":
-                # Insert raw text with QTextCharFormat color; no HTML entities
-                color_hex = self.current.get("color", "#dcdcdc")
-                self._remove_cursor_if_present()
-                cursor = self.text_edit.textCursor()
-                cursor.movePosition(QTextCursor.End)
-                fmt = QTextCharFormat()
-                fmt.setForeground(QColor(color_hex))
-                if ch == "\n":
-                    cursor.insertText("\n")
-                else:
-                    cursor.insertText(ch, fmt)
-                self._ensure_cursor()
-            else:
-                # HTML stream: escape per character
-                if ch == "\n":
-                    out = "<br>"
-                elif ch == " ":
-                    out = "&nbsp;"
-                elif ch == "<":
-                    out = "&lt;"
-                elif ch == ">":
-                    out = "&gt;"
-                elif ch == "&":
-                    out = "&amp;"
-                else:
-                    out = ch
-                self._append_text_escaped(out)
-            self.char_index += 1
-            return
-
-        if self.current.get("close_html"):
-            self._append_html(self.current["close_html"])
-        self._advance_queue()
-
-    # Backward- and forward-compatible queue_line:
-    # - New form: queue_line(message, category)
-    # - Legacy form: queue_line(text, color, level=0)
-    def queue_line(self, message: str, category: str, level: int = 0):
-        color = category
-        if not (isinstance(category, str) and category.startswith("#")):
-            color = self.category_colors.get((category or "").upper(), self.category_colors["DEFAULT"])
-        text = message if message.endswith("\n") else message + "\n"
-        self._queue_plain_segment(text, color)
 
 
 class MainWindow(QMainWindow):
@@ -302,6 +105,14 @@ class MainWindow(QMainWindow):
 
         self.is_streaming_response = False
         self.signaller = Signaller()
+        
+        # New animation system variables
+        self.animation_timer = QTimer(self)
+        self.animation_timer.setInterval(20)  # 20ms for smooth animation
+        self.animation_timer.timeout.connect(self._on_animation_tick)
+        self.full_response_buffer = ""
+        self.displayed_text_buffer = ""
+        self.animation_index = 0
 
         self._init_ui()
         self._register_event_handlers()
@@ -342,9 +153,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.chat_display, 1)
         layout.addWidget(self.thinking_indicator)
         layout.addWidget(input_container)
-
-        self.typewriter = TypewriterTerminal(self.chat_display, self)
-        self.typewriter.start()
 
     def _create_top_bar(self):
         widget = QWidget()
@@ -409,14 +217,43 @@ class MainWindow(QMainWindow):
         # Build lifecycle completion signal
         self.event_bus.subscribe("BUILD_COMPLETED", self._handle_build_completed)
 
+
     # Boot
     def _start_boot_sequence(self):
         self.chat_display.clear()
         for item in self.BOOT_SEQUENCE:
             text = item.get("text", "")
             if text:
-                self.typewriter.queue_line(text, "NEURAL")
-        self.typewriter.start()
+                boot_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">{text}</div><br>'
+                self.chat_display.insertHtml(boot_html)
+        self.chat_display.ensureCursorVisible()
+
+    def _log_system_message(self, category: str, message: str):
+        """Display system messages instantly with appropriate colors."""
+        # Color map for different categories
+        color_map = {
+            "KERNEL": "#64B5F6",   # futuristic blue
+            "SYSTEM": "#66BB6A",   # informative green
+            "NEURAL": "#FFB74D",   # amber/orange
+            "SUCCESS": "#39FF14",  # bright green
+            "ERROR": "#FF4444",    # alert red
+            "WORKSPACE": "#64B5F6",
+            "USER": "#64B5F6",
+            "DEFAULT": "#dcdcdc",
+        }
+        color = color_map.get(category.upper(), color_map["DEFAULT"])
+        
+        processed_message = message.replace('
+', '<br>').replace(' ', '&nbsp;')
+        system_html = f"""
+        <div style="color: {color}; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
+            [{category}] {processed_message}
+        </div>
+        <br>
+        """
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.insertHtml(system_html)
+        self.chat_display.ensureCursorVisible()
 
     def _start_new_session(self):
         self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
@@ -446,6 +283,24 @@ class MainWindow(QMainWindow):
                 self._display_system_message("WORKSPACE", f"Importing project from: {project_path}")
 
     # Input/Output
+    def _log_user_message(self, user_text: str):
+        """Display user message instantly using HTML."""
+        # Create styled HTML for user message
+        processed_user_text = user_text.replace('
+', '<br>').replace(' ', '&nbsp;')
+        user_html = f"""
+        <div style="color: #64B5F6; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
+            [USER]
+        </div>
+        <div style="color: #64B5F6; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">
+            {processed_user_text}
+        </div>
+        <br>
+        """
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.insertHtml(user_html)
+        self.chat_display.ensureCursorVisible()
+
     def _send_message(self):
         user_text = self.chat_input.toPlainText().strip()
         if not user_text:
@@ -453,11 +308,8 @@ class MainWindow(QMainWindow):
         self.chat_input.clear()
         self.chat_input.setEnabled(False)
 
-        # User parent + child
-        self.typewriter.queue_line("[USER]", "KERNEL")
-        # Use the same category for the user's message to unify color
-        self.typewriter.queue_line(user_text, "KERNEL")
-        self.typewriter.start()
+        # Display user message instantly
+        self._log_user_message(user_text)
 
         self.thinking_indicator.start_thinking("Analyzing your request...")
         self.event_bus.dispatch(Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text}))
@@ -466,23 +318,98 @@ class MainWindow(QMainWindow):
         if not self.is_streaming_response:
             self.is_streaming_response = True
             self.thinking_indicator.stop_thinking()
-            self.typewriter.queue_line("[AURA]", "NEURAL")
-            self.typewriter.open_stream_block(color="#dcdcdc", level=1)
-        self.typewriter.append_stream_text(chunk)
-        self.typewriter.start()
+            # Clear the response buffer for new response
+            self.full_response_buffer = ""
+        
+        # Only buffer the text, don't touch the UI
+        self.full_response_buffer += chunk
 
     def _handle_stream_end(self):
-        if self.is_streaming_response:
-            self.typewriter.close_stream_block()
-        self.is_streaming_response = False
-        self.chat_input.setEnabled(True)
-        self.chat_input.setFocus()
-        self.typewriter.start()
+        if self.is_streaming_response and self.full_response_buffer.strip():
+            # Add the colored [AURA] tag to show who is speaking
+            aura_label_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">[AURA]</div>'
+            self.chat_display.moveCursor(QTextCursor.End)
+            self.chat_display.insertHtml(aura_label_html)
+            
+            # Use textwrap to properly wrap the complete message
+            wrapped_lines = textwrap.wrap(self.full_response_buffer.strip(), width=80)
+            self.displayed_text_buffer = '
+'.join(wrapped_lines)
+            
+            # Reset animation state and start the timer
+            self.animation_index = 0
+            self._current_display_text = ""  # Track what we've displayed so far
+            self.animation_timer.start()
+            
+        else:
+            # No content to animate, just finish up
+            self.is_streaming_response = False
+            self.chat_input.setEnabled(True)
+            self.chat_input.setFocus()
+
+    def _on_animation_tick(self):
+        """Handle each animation tick to reveal text character by character."""
+        if self.animation_index < len(self.displayed_text_buffer):
+            # Get the next character to reveal
+            next_char = self.displayed_text_buffer[self.animation_index]
+            self._current_display_text += next_char
+            
+            # Create HTML content with proper styling and escaping
+            escaped_text = self._current_display_text.replace('
+', '<br>').replace(' ', '&nbsp;')
+            content_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">{escaped_text}</div><br>'
+            
+            # Find the last AURA content div and replace it
+            cursor = self.chat_display.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            
+            # For now, we'll append the updated content (a more sophisticated approach would be to replace the last div)
+            # This is a simple approach that works with Qt's text engine
+            if self.animation_index == 0:
+                # First character, start the content div
+                self.chat_display.insertHtml(f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">')
+            
+            # Insert just the new character
+            if next_char == '
+':
+                self.chat_display.insertHtml('<br>')
+            else:
+                self.chat_display.insertHtml(next_char.replace(' ', '&nbsp;'))
+            
+            self.animation_index += 1
+            self.chat_display.ensureCursorVisible()
+            
+        else:
+            # Animation finished
+            self.animation_timer.stop()
+            self.chat_display.insertHtml('</div><br>')  # Close the content div
+            self.is_streaming_response = False
+            self.chat_input.setEnabled(True)
+            self.chat_input.setFocus()
+            
+            # Clear buffers
+            self.full_response_buffer = ""
+            self._current_display_text = ""
 
     def _handle_model_error(self, error_message: str):
         self.thinking_indicator.stop_thinking()
-        self.typewriter.queue_line(f"[ERROR] {error_message}", "ERROR")
-        self._handle_stream_end()
+        # Display error message instantly with red color
+        processed_error_message = error_message.replace('
+', '<br>').replace(' ', '&nbsp;')
+        error_html = f"""
+        <div style="color: #FF4444; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
+            [ERROR] {processed_error_message}
+        </div>
+        <br>
+        """
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.insertHtml(error_html)
+        self.chat_display.ensureCursorVisible()
+        
+        # Reset state
+        self.is_streaming_response = False
+        self.chat_input.setEnabled(True)
+        self.chat_input.setFocus()
 
     # Workflow/system events
     def _handle_task_dispatch(self, event):
@@ -512,8 +439,7 @@ class MainWindow(QMainWindow):
     
 
     def _display_system_message(self, category: str, message: str):
-        self.typewriter.queue_line(f"[{category}] {message}", category)
-        self.typewriter.start()
+        self._log_system_message(category, message)
 
     def _handle_workflow_status_update(self, event):
         message = event.payload.get("message", "")
@@ -522,12 +448,7 @@ class MainWindow(QMainWindow):
         code_snippet = event.payload.get("code_snippet")  # optional str
         if not message:
             return
-        palette = {
-            "success": "#39FF14",
-            "in-progress": "#FFB74D",
-            "error": "#FF4444",
-            "info": "#64B5F6",
-        }
+            
         # Map status to categories for any legacy events that still arrive
         status_to_category = {
             "success": "SUCCESS",
@@ -536,17 +457,19 @@ class MainWindow(QMainWindow):
             "info": "SYSTEM",
         }
         category = status_to_category.get(status, "SYSTEM")
-        # Parent command line
-        self.typewriter.queue_line(message, category)
-        # Optional code snippet as indented child lines (kept simple for clarity)
+        
+        # Display parent message
+        self._log_system_message(category, message)
+        
+        # Optional code snippet as indented child lines
         if code_snippet:
             for line in code_snippet.splitlines():
-                self.typewriter.queue_line(line, "DEFAULT")
+                self._log_system_message("DEFAULT", f"  {line}")
+                
         # Optional detail lines
         if details:
             for d in details:
-                self.typewriter.queue_line(d, "DEFAULT")
-        self.typewriter.start()
+                self._log_system_message("DEFAULT", f"  {d}")
 
     # Mission Control manual dispatch has been removed; build starts automatically.
 
@@ -562,26 +485,23 @@ class MainWindow(QMainWindow):
 
     def _handle_project_import_error(self, event):
         error = event.payload.get("error", "Unknown error")
-        self.typewriter.queue_line(f"[ERROR] Project import failed: {error}", "ERROR")
-        self.typewriter.start()
+        self._log_system_message("ERROR", f"Project import failed: {error}")
 
     def _handle_validated_code_saved(self, event):
         file_path = event.payload.get("file_path", "unknown")
         line_count = event.payload.get("line_count")
         if line_count is None:
             # Fallback: do not attempt to read file from disk here; just omit count
-            self.typewriter.queue_line(f"[SUCCESS] Saved {file_path}", "SUCCESS")
+            self._log_system_message("SUCCESS", f"Saved {file_path}")
         else:
-            self.typewriter.queue_line(f"[SUCCESS] Wrote {line_count} lines to {file_path}", "SUCCESS")
-        self.typewriter.start()
+            self._log_system_message("SUCCESS", f"Wrote {line_count} lines to {file_path}")
 
     def _handle_build_completed(self, event):
         # Stop any thinking animation, show final success, and re-enable input
         self.thinking_indicator.stop_thinking()
-        self.typewriter.queue_line("Build completed successfully. Aura is ready.", "SUCCESS")
+        self._log_system_message("SUCCESS", "Build completed successfully. Aura is ready.")
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
-        self.typewriter.start()
 
     # Child window positioning
     def _update_child_window_positions(self):

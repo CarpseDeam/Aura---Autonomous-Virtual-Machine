@@ -11,31 +11,18 @@ SETTINGS_FILE = ROOT_DIR / "user_settings.json"
 WORKSPACE_DIR = ROOT_DIR / "workspace"
 
 # Agent Configurations
+# In config.py - Lower temperatures for more consistent professional code
 AGENT_CONFIG = {
-    "cognitive_router": {
-        "model": "gemini-2.5-flash",
-        "temperature": 0.2,
-        "top_p": 0.8,
-    },
-    "lead_companion_agent": {
-        "model": "gemini-2.5-pro",
-        "temperature": 0.7,
-        "top_p": 1.0,
-    },
     "architect_agent": {
-        "model": "gemini-2.5-pro",
-        "temperature": 0.1,
-        "top_p": 1.0,
+        "temperature": 0.05,  # Very low for consistent architecture
+        "top_p": 0.9,
     },
     "engineer_agent": {
-        "model": "gemini-2.5-pro",
-        "temperature": 0.1,
-        "top_p": 1.0,
-    }
-    ,
-    "research_agent": {
-        "model": "gemini-2.5-flash",
-        "temperature": 0.2,
+        "temperature": 0.1,   # Low for consistent implementation
         "top_p": 0.9,
+    },
+    "lead_companion_agent": {
+        "temperature": 0.2,   # Slightly higher for creative problem solving
+        "top_p": 0.95,
     }
 }
