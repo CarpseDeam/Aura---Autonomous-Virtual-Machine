@@ -7,6 +7,13 @@ that follows industry best practices for professional software development.
 
 # --- Core Directives: The most fundamental, non-negotiable laws. ---
 
+FRAMEWORK_EXCLUSIVITY_RULE = """
+**LAW: FRAMEWORK EXCLUSIVITY FOR CORE APPLICATION LOOP**
+- For the core application responsibilities of window creation, main loop management, and user input handling, you MUST choose ONE AND ONLY ONE technology stack (e.g., Pygame, tcod, Qt).
+- You are ABSOLUTELY FORBIDDEN from mixing core event loops (e.g., using tcod for rendering and Pygame for events).
+- All parts of the application must defer to a single, authoritative event loop.
+"""
+
 TECHNOLOGY_CONSTRAINT_RULE = """
 **LAW: TECHNOLOGY CONSTRAINTS ARE SACRED**
 - When a specific technology, framework, or library is specified (e.g., "use Pygame"), you MUST use EXACTLY that technology.

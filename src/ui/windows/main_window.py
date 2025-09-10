@@ -243,8 +243,7 @@ class MainWindow(QMainWindow):
         }
         color = color_map.get(category.upper(), color_map["DEFAULT"])
         
-        processed_message = message.replace('
-', '<br>').replace(' ', '&nbsp;')
+        processed_message = message.replace('\n', '<br>').replace(' ', '&nbsp;')
         system_html = f"""
         <div style="color: {color}; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
             [{category}] {processed_message}
@@ -285,16 +284,12 @@ class MainWindow(QMainWindow):
     # Input/Output
     def _log_user_message(self, user_text: str):
         """Display user message instantly using HTML."""
-        # Create styled HTML for user message
-        processed_user_text = user_text.replace('
-', '<br>').replace(' ', '&nbsp;')
+        # Create styled HTML for user message - single paragraph with spans to prevent line breaks
+        processed_user_text = user_text.replace('\n', '<br>').replace(' ', '&nbsp;')
         user_html = f"""
-        <div style="color: #64B5F6; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
-            [USER]
-        </div>
-        <div style="color: #64B5F6; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">
-            {processed_user_text}
-        </div>
+        <p style="color: #64B5F6; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
+            <span style="font-weight: bold;">[USER]</span> <span>{processed_user_text}</span>
+        </p>
         <br>
         """
         self.chat_display.moveCursor(QTextCursor.End)
@@ -333,8 +328,7 @@ class MainWindow(QMainWindow):
             
             # Use textwrap to properly wrap the complete message
             wrapped_lines = textwrap.wrap(self.full_response_buffer.strip(), width=80)
-            self.displayed_text_buffer = '
-'.join(wrapped_lines)
+            self.displayed_text_buffer = '\n'.join(wrapped_lines)
             
             # Reset animation state and start the timer
             self.animation_index = 0
@@ -355,8 +349,7 @@ class MainWindow(QMainWindow):
             self._current_display_text += next_char
             
             # Create HTML content with proper styling and escaping
-            escaped_text = self._current_display_text.replace('
-', '<br>').replace(' ', '&nbsp;')
+            escaped_text = self._current_display_text.replace('\n', '<br>').replace(' ', '&nbsp;')
             content_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">{escaped_text}</div><br>'
             
             # Find the last AURA content div and replace it
@@ -370,8 +363,7 @@ class MainWindow(QMainWindow):
                 self.chat_display.insertHtml(f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; white-space: pre-wrap;">')
             
             # Insert just the new character
-            if next_char == '
-':
+            if next_char == '\n':
                 self.chat_display.insertHtml('<br>')
             else:
                 self.chat_display.insertHtml(next_char.replace(' ', '&nbsp;'))
@@ -394,8 +386,7 @@ class MainWindow(QMainWindow):
     def _handle_model_error(self, error_message: str):
         self.thinking_indicator.stop_thinking()
         # Display error message instantly with red color
-        processed_error_message = error_message.replace('
-', '<br>').replace(' ', '&nbsp;')
+        processed_error_message = error_message.replace('\n', '<br>').replace(' ', '&nbsp;')
         error_html = f"""
         <div style="color: #FF4444; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
             [ERROR] {processed_error_message}
