@@ -47,11 +47,25 @@ class AuraInterface:
         self.conversations = conversations
         self.workspace = workspace
         self.thread_pool = thread_pool
+        # Default language until detection signals otherwise
+        self.current_language: str = "python"
 
         self._register_event_handlers()
 
     def _register_event_handlers(self) -> None:
         self.event_bus.subscribe("SEND_USER_MESSAGE", self._handle_user_message)
+        # Passive listener for detected language updates
+        self.event_bus.subscribe("PROJECT_LANGUAGE_DETECTED", self._handle_project_language_detected)
+
+    def _handle_project_language_detected(self, event: Event) -> None:
+        """Update current language from WorkspaceService detection events."""
+        try:
+            lang = (event.payload or {}).get("language")
+            if isinstance(lang, str) and lang:
+                self.current_language = lang
+                logger.info(f"Interface updated language -> {self.current_language}")
+        except Exception:
+            logger.debug("Failed to process PROJECT_LANGUAGE_DETECTED event; ignoring.")
 
     def _build_context(self) -> ProjectContext:
         active_project = self.workspace.active_project
@@ -157,7 +171,11 @@ class AuraInterface:
 
             # 4) Call the Companion with rendered prompt
             try:
-                companion_prompt = self.brain.prompts.render("companion.jinja2", jit=jit_context)  # type: ignore[attr-defined]
+                companion_prompt = self.brain.prompts.render(
+                    "companion.jinja2",
+                    language=self.current_language,
+                    jit=jit_context,
+                )  # type: ignore[attr-defined]
             except Exception as e:
                 logger.error(f"Failed to render companion prompt: {e}")
                 self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Failed to prepare companion prompt."}))

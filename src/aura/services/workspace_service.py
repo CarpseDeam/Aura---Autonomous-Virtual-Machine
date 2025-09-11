@@ -71,6 +71,12 @@ class WorkspaceService:
             self.ast_service.index_project(str(self.active_project_path))
             logger.info(f"Prime Directive completed: Project '{project_name}' indexed successfully")
             
+            # Automatic language detection after indexing completes
+            try:
+                self._detect_project_language()
+            except Exception as det_err:
+                logger.warning(f"Language detection failed: {det_err}")
+            
             # Dispatch project activation event
             self.event_bus.dispatch(Event(
                 event_type="PROJECT_ACTIVATED",
@@ -83,6 +89,75 @@ class WorkspaceService:
         except Exception as e:
             logger.error(f"Prime Directive failed during project activation: {e}")
             raise RuntimeError(f"Failed to activate project '{project_name}': AST indexing failed") from e
+
+    def _detect_project_language(self) -> None:
+        """
+        Detect the dominant programming language for the active project based on
+        indexed files and dispatch a PROJECT_LANGUAGE_DETECTED event.
+
+        Strategy:
+        - Query ASTService for indexed file paths
+        - Count extensions (e.g., .py, .gd)
+        - Map dominant extension to language name
+        - Fallback to 'python' if uncertain
+        """
+        if not self.active_project_path:
+            logger.debug("Language detection skipped: no active project path.")
+            return
+
+        try:
+            indexed_files = []
+            if hasattr(self.ast_service, "get_indexed_file_paths"):
+                indexed_files = self.ast_service.get_indexed_file_paths()
+            else:
+                # Fallback: use project_index keys if available
+                indexed_files = list(getattr(self.ast_service, "project_index", {}).keys())
+
+            # Count file extensions
+            counts = {}
+            for rel_path in indexed_files or []:
+                ext = os.path.splitext(rel_path)[1].lower()
+                if not ext:
+                    continue
+                counts[ext] = counts.get(ext, 0) + 1
+
+            # Determine dominant extension
+            dominant_ext = None
+            dominant_count = -1
+            for ext, cnt in counts.items():
+                if cnt > dominant_count:
+                    dominant_ext = ext
+                    dominant_count = cnt
+
+            # Map extension to language
+            ext_to_lang = {
+                ".py": "python",
+                ".gd": "gdscript",
+                ".ts": "typescript",
+                ".js": "javascript",
+                ".rs": "rust",
+                ".java": "java",
+                ".cs": "csharp",
+                ".cpp": "cpp",
+                ".cxx": "cpp",
+                ".cc": "cpp",
+                ".c": "c",
+                ".go": "go",
+                ".rb": "ruby",
+                ".php": "php",
+                ".kt": "kotlin",
+                ".swift": "swift",
+            }
+
+            detected_language = ext_to_lang.get(dominant_ext or "", "python")
+
+            logger.info(f"PROJECT_LANGUAGE_DETECTED -> {detected_language} (ext: {dominant_ext}, counts: {counts})")
+            self.event_bus.dispatch(Event(
+                event_type="PROJECT_LANGUAGE_DETECTED",
+                payload={"language": detected_language}
+            ))
+        except Exception as e:
+            logger.warning(f"Language detection encountered an error: {e}")
 
     def import_project_from_path(self, source_path: str):
         """
