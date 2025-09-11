@@ -1,5 +1,4 @@
 import logging
-import textwrap
 from typing import List, Optional
 import markdown
 
@@ -7,7 +6,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout,
     QApplication, QPushButton, QFileDialog
 )
-from PySide6.QtGui import QFont, QTextCursor, QIcon, QColor, QTextCharFormat, QTextOption
+from PySide6.QtGui import QFont, QTextCursor, QIcon, QTextOption
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 
 from src.aura.app.event_bus import EventBus
@@ -107,7 +106,7 @@ class Signaller(QObject):
 
 
 class MainWindow(QMainWindow):
-    """Main window with a Modern Retro Terminal log and typewriter output."""
+    """Main window with a Modern Retro Terminal log and markdown-rendered output."""
 
     AURA_ASCII_BANNER = """
         █████╗ ██╗   ██╗██████╗  █████╗
@@ -183,13 +182,6 @@ class MainWindow(QMainWindow):
         self.is_streaming_response = False
         self.signaller = Signaller()
         
-        # New animation system variables
-        self.animation_timer = QTimer(self)
-        self.animation_timer.setInterval(20)  # 20ms for smooth animation
-        self.animation_timer.timeout.connect(self._on_animation_tick)
-        self.full_response_buffer = ""
-        self.displayed_text_buffer = ""
-        self.animation_index = 0
 
         self._init_ui()
         self._register_event_handlers()
@@ -214,7 +206,7 @@ class MainWindow(QMainWindow):
 
         self.chat_display = QTextEdit()
         # Prevent chat display from receiving keyboard focus to avoid
-        # conflicts between user selection and the typewriter cursor
+        # conflicts between user selection and caret/auto-scrolling
         self.chat_display.setFocusPolicy(Qt.NoFocus)
         self.chat_display.setObjectName("chat_display")
         # Ensure word wrapping occurs at word boundaries for readability

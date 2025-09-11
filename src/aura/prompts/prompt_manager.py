@@ -33,18 +33,41 @@ class PromptManager:
             if name.isupper() and isinstance(value, str):
                 self.env.globals[name] = value
 
-    def render(self, template_name: str, **kwargs) -> str:
+    def render(self, template_name: str, language: str = 'python', **kwargs) -> str:
         """
         Renders a prompt template with the given context.
 
         Args:
             template_name: The name of the template file (e.g., 'generate_code.jinja2').
+            language: The language guide to load (e.g., 'python', 'gdscript').
             **kwargs: The context variables to pass to the template.
 
         Returns:
             The rendered prompt string.
         """
         try:
+            # Attempt to load language-specific guide content
+            language_guide_content = ""
+            try:
+                guides_dir = ROOT_DIR / "src" / "aura" / "prompts" / "language_guides"
+                guide_path = guides_dir / f"{language}.md"
+                if guide_path.exists():
+                    language_guide_content = guide_path.read_text(encoding="utf-8")
+                else:
+                    logger.warning(
+                        f"Language guide not found for '{language}' at {guide_path}. Using empty content."
+                    )
+            except Exception as guide_err:
+                logger.error(
+                    f"Error loading language guide for '{language}': {guide_err}",
+                    exc_info=True,
+                )
+                language_guide_content = ""
+
+            # Ensure language-aware context is available to templates
+            kwargs["language"] = language
+            kwargs["language_guide_content"] = language_guide_content
+
             template = self.env.get_template(template_name)
             return template.render(**kwargs)
         except Exception as e:
