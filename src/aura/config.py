@@ -25,6 +25,10 @@ AGENT_CONFIG = {
         "temperature": 0.2,   # Slightly higher for creative problem solving
         "top_p": 0.95,
     },
+    "reasoning_agent": {
+        "temperature": 0.0,
+        "top_p": 1.0,
+    },
     "cognitive_router": {
         "temperature": 0.0,  # Deterministic routing decisions
         "top_p": 1.0,
