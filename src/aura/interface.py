@@ -3,7 +3,6 @@ import logging
 from PySide6.QtCore import QThreadPool
 
 from src.aura.app.event_bus import EventBus
-from src.aura.models.action import ActionType
 from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
 from src.aura.brain import AuraBrain
@@ -97,21 +96,9 @@ class AuraInterface:
         try:
             ctx = self._build_context()
             action = self.brain.decide(user_text, ctx)
-            result = self.executor.execute(action, ctx)
+            self.executor.execute(action, ctx)
         except Exception as e:
             logger.error(f"Failed to process user message: {e}", exc_info=True)
             self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Internal error during request handling."}))
             return
-
-        if not result.ok:
-            self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": result.error or "Execution failed."}))
-            return
-
-        if action.type == ActionType.SIMPLE_REPLY:
-            reply_text = str(result.data.get("reply") or "").strip()
-            if reply_text:
-                try:
-                    self.conversations.add_message("assistant", reply_text)
-                except Exception:
-                    logger.debug("Failed to append assistant message to conversation history.")
 

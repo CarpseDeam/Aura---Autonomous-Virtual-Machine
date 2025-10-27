@@ -66,30 +66,43 @@ class AuraExecutor:
         if not prompt:
             return Result(ok=False, kind="conversation", error="Failed to render chitchat prompt", data={})
 
-        chunks: List[str] = []
-        try:
-            stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt)
-            for chunk in stream:
-                if not chunk:
-                    continue
-                chunks.append(chunk)
-                try:
-                    self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": chunk}))
-                except Exception:
-                    logger.debug("Failed to dispatch MODEL_CHUNK_RECEIVED during simple reply stream.", exc_info=True)
-        except Exception as exc:
-            logger.error(f"Streaming chitchat reply failed: {exc}", exc_info=True)
-            return Result(ok=False, kind="conversation", error="Failed to stream conversational reply.", data={})
+        def dispatch_error(message: str) -> None:
+            try:
+                self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": message}))
+            except Exception:
+                logger.debug("Failed to dispatch MODEL_ERROR for simple reply.", exc_info=True)
 
-        reply_text = self._strip_code_fences("".join(chunks))
-        if not reply_text:
-            return Result(ok=False, kind="conversation", error="Chitchat model returned empty reply", data={})
-        try:
-            self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
-        except Exception:
-            logger.debug("Failed to dispatch MODEL_STREAM_ENDED for simple reply.", exc_info=True)
+        def run():
+            chunks: List[str] = []
+            try:
+                stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt)
+                for chunk in stream:
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    try:
+                        self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": chunk}))
+                    except Exception:
+                        logger.debug("Failed to dispatch MODEL_CHUNK_RECEIVED during simple reply stream.", exc_info=True)
+            except Exception as exc:
+                logger.error(f"Streaming chitchat reply failed: {exc}", exc_info=True)
+                dispatch_error("Failed to stream conversational reply.")
+                return
 
-        return Result(ok=True, kind="conversation", data={"reply": reply_text})
+            reply_text = self._strip_code_fences("".join(chunks))
+            if not reply_text:
+                logger.warning("Chitchat model returned an empty reply.")
+                dispatch_error("Chitchat model returned empty reply")
+                return
+            try:
+                self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+            except Exception:
+                logger.debug("Failed to dispatch MODEL_STREAM_ENDED for simple reply.", exc_info=True)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+
+        return Result(ok=True, kind="conversation", data={"status": "streaming"})
 
     def _exec_design_blueprint(self, action: Action, ctx: ProjectContext) -> Result:
         user_text = action.get_param("request", "")
