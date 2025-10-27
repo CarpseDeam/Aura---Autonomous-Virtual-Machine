@@ -1,10 +1,9 @@
 import json
 import logging
 import re
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from src.aura.models.action import Action, ActionType
-from src.aura.models.intent import Intent
 from src.aura.models.project_context import ProjectContext
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.llm_service import LLMService
@@ -14,13 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class AuraBrain:
-    """Brain layer: the single source of truth for decisions.
-
-    Responsibilities:
-    - Classify user intent as the single source of truth.
-    - Use the current ProjectContext when making decisions.
-    - Never executes work; only returns an Action.
-    """
+    """Brain layer: the single source of truth for decisions."""
 
     def __init__(self, llm: LLMService, prompts: PromptManager):
         self.llm = llm
@@ -28,83 +21,65 @@ class AuraBrain:
 
     def decide(self, user_text: str, context: ProjectContext) -> Action:
         """Return the next Action based on the user input and context."""
-        intent = self._detect_intent(user_text, context)
-
-        if intent == Intent.CHITCHAT:
-            return Action(type=ActionType.SIMPLE_REPLY, params={"request": user_text})
-
-        if intent == Intent.PLANNING_SESSION:
-            return Action(type=ActionType.DESIGN_BLUEPRINT, params={"request": user_text})
-
-        # Safe default for ambiguous intents: treat as refine code on the scratchpad.
-        return Action(
-            type=ActionType.REFINE_CODE,
-            params={"file_path": "workspace/generated.py", "request": user_text},
-        )
-
-    # --------------- Intent Router ---------------
-    def _detect_intent(self, user_text: str, context: ProjectContext) -> Intent:
-        """Use a lightweight LLM prompt with heuristics fallback to classify user intent."""
-        heuristic_guess = self._intent_from_heuristics(user_text)
-
         history = context.conversation_history or []
-        recent_history: List[Dict[str, str]] = history[-6:] if history else []
 
         prompt = self.prompts.render(
-            "cognitive_router.jinja2",
+            "reasoning_prompt.jinja2",
             user_text=user_text,
-            conversation_history=recent_history,
+            conversation_history=history,
         )
         if not prompt:
-            return heuristic_guess
+            raise RuntimeError("Failed to render reasoning prompt")
 
-        raw = self.llm.run_for_agent("cognitive_router", prompt)
+        raw = self.llm.run_for_agent("reasoning_agent", prompt)
         clean = self._strip_code_fences(raw)
         try:
             data = json.loads(clean) if clean else {}
-        except Exception:
-            data = {}
+        except Exception as exc:
+            logger.error("Failed to parse reasoning response: %s", exc, exc_info=True)
+            raise RuntimeError("Reasoning response was not valid JSON") from exc
 
-        intent_value = None
-        if isinstance(data, dict):
-            intent_value = data.get("intent") or data.get("Intent")
+        if not isinstance(data, dict):
+            raise RuntimeError("Reasoning response must be a JSON object")
 
-        try:
-            if intent_value:
-                return Intent(intent_value.upper())
-        except Exception:
-            pass
+        thought = data.get("thought")
+        if isinstance(thought, str):
+            logger.debug("Reasoning thought: %s", thought)
 
-        confidence = data.get("confidence") if isinstance(data, dict) else None
-        if isinstance(confidence, (int, float)) and confidence >= 0.75 and heuristic_guess != Intent.UNKNOWN:
-            return heuristic_guess
+        action_payload = data.get("action")
+        if not isinstance(action_payload, dict):
+            raise RuntimeError("Reasoning response missing 'action' object")
 
-        return heuristic_guess
+        return self._action_from_payload(action_payload)
+
+    def _action_from_payload(self, payload: Dict[str, Any]) -> Action:
+        type_value = payload.get("type")
+        if not isinstance(type_value, str):
+            raise RuntimeError("Reasoning response action.type must be a string")
+
+        action_type = self._resolve_action_type(type_value)
+
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            params = {}
+
+        return Action(type=action_type, params=params)
 
     @staticmethod
-    def _intent_from_heuristics(user_text: str) -> Intent:
-        """Keyword heuristics to keep the router resilient if the LLM fails."""
-        text = (user_text or "").strip().lower()
-        if not text:
-            return Intent.UNKNOWN
+    def _resolve_action_type(type_value: str) -> ActionType:
+        candidate = type_value.strip()
+        try:
+            return ActionType[candidate.upper()]
+        except KeyError:
+            pass
 
-        greetings = {"hi", "hey", "hello", "yo", "sup", "good morning", "good afternoon", "good evening"}
-        farewell = {"bye", "goodbye", "see ya", "later", "ttyl"}
-        polite_nops = {"thanks", "thank you", "appreciate it"}
+        for fallback in (candidate, candidate.lower()):
+            try:
+                return ActionType(fallback)
+            except ValueError:
+                continue
 
-        normalized = re.sub(r"[^\w\s]", "", text)
-        if normalized in greetings or normalized in farewell:
-            return Intent.CHITCHAT
-        if any(text.startswith(greet) for greet in greetings):
-            return Intent.CHITCHAT
-        if len(text.split()) <= 4 and any(word in text for word in greetings | polite_nops):
-            return Intent.CHITCHAT
-
-        planning_keywords = {"plan", "planning", "blueprint", "design", "architecture", "roadmap"}
-        if any(word in text for word in planning_keywords):
-            return Intent.PLANNING_SESSION
-
-        return Intent.UNKNOWN
+        raise RuntimeError(f"Unknown action type returned by reasoning prompt: {type_value}")
 
     @staticmethod
     def _strip_code_fences(text: str) -> str:
