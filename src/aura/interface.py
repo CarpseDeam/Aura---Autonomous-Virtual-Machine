@@ -5,6 +5,7 @@ from PySide6.QtCore import QThreadPool
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
+from src.aura.agent import AuraAgent
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
 from src.aura.services.ast_service import ASTService
@@ -43,6 +44,7 @@ class AuraInterface:
         self.conversations = conversations
         self.workspace = workspace
         self.thread_pool = thread_pool
+        self.agent = AuraAgent(brain=brain, executor=executor)
         # Default language until detection signals otherwise
         self.current_language: str = "python"
 
@@ -87,7 +89,6 @@ class AuraInterface:
         self.thread_pool.start(worker)
 
     def _handle_user_message_logic(self, user_text: str) -> None:
-        # Record conversation
         try:
             self.conversations.add_message("user", user_text)
         except Exception:
@@ -95,8 +96,7 @@ class AuraInterface:
 
         try:
             ctx = self._build_context()
-            action = self.brain.decide(user_text, ctx)
-            self.executor.execute(action, ctx)
+            self.agent.invoke(user_text, ctx)
         except Exception as e:
             logger.error(f"Failed to process user message: {e}", exc_info=True)
             self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Internal error during request handling."}))

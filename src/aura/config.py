@@ -24,5 +24,9 @@ AGENT_CONFIG = {
     "lead_companion_agent": {
         "temperature": 0.2,   # Slightly higher for creative problem solving
         "top_p": 0.95,
-    }
+    },
+    "cognitive_router": {
+        "temperature": 0.0,  # Deterministic routing decisions
+        "top_p": 1.0,
+    },
 }

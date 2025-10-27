@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 # Application-specific imports
+from src.aura.config import ROOT_DIR
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.services.ast_service import ASTService
@@ -151,11 +152,19 @@ class WorkspaceService:
 
             detected_language = ext_to_lang.get(dominant_ext or "", "python")
 
+            language_guide_path = ROOT_DIR / "src" / "aura" / "prompts" / "language_guides" / f"{detected_language}.md"
             logger.info(f"PROJECT_LANGUAGE_DETECTED -> {detected_language} (ext: {dominant_ext}, counts: {counts})")
             self.event_bus.dispatch(Event(
                 event_type="PROJECT_LANGUAGE_DETECTED",
                 payload={"language": detected_language}
             ))
+
+            if not language_guide_path.exists():
+                logger.info(f"Knowledge gap detected for language: {detected_language}")
+                self.event_bus.dispatch(Event(
+                    event_type="KNOWLEDGE_GAP_DETECTED",
+                    payload={"language": detected_language}
+                ))
         except Exception as e:
             logger.warning(f"Language detection encountered an error: {e}")
 

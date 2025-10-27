@@ -10,3 +10,7 @@ faiss-cpu
 PyYAML
 pytest
 markdown
+langchain
+langgraph
+langchain_core
+langchain_openai
