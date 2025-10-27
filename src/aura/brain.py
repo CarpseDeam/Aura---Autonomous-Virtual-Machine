@@ -26,23 +26,21 @@ class AuraBrain:
         self.llm = llm
         self.prompts = prompts
 
-    def decide(self, user_text: str, context: ProjectContext) -> List[Action]:
-        """Return a plan (list of Actions) based on the user input and context."""
+    def decide(self, user_text: str, context: ProjectContext) -> Action:
+        """Return the next Action based on the user input and context."""
         intent = self._detect_intent(user_text, context)
 
         if intent == Intent.CHITCHAT:
-            return [Action(type=ActionType.SIMPLE_REPLY, params={"request": user_text})]
+            return Action(type=ActionType.SIMPLE_REPLY, params={"request": user_text})
 
         if intent == Intent.PLANNING_SESSION:
-            return [Action(type=ActionType.DESIGN_BLUEPRINT, params={"request": user_text})]
+            return Action(type=ActionType.DESIGN_BLUEPRINT, params={"request": user_text})
 
         # Safe default for ambiguous intents: treat as refine code on the scratchpad.
-        return [
-            Action(
-                type=ActionType.REFINE_CODE,
-                params={"file_path": "workspace/generated.py", "request": user_text},
-            )
-        ]
+        return Action(
+            type=ActionType.REFINE_CODE,
+            params={"file_path": "workspace/generated.py", "request": user_text},
+        )
 
     # --------------- Intent Router ---------------
     def _detect_intent(self, user_text: str, context: ProjectContext) -> Intent:

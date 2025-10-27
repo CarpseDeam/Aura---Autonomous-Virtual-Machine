@@ -56,6 +56,7 @@ class AuraApp:
             prompts=self.prompt_manager,
             ast=self.ast_service,
             context=self.context_retrieval_service,
+            workspace=self.workspace_service,
         )
         # Thread pool for background tasks
         thread_pool = QThreadPool.globalInstance()

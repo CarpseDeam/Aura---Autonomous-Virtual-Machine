@@ -36,6 +36,9 @@ class AuraAgent:
             ActionType.SIMPLE_REPLY: "execute_simple_reply",
             ActionType.DESIGN_BLUEPRINT: "execute_design_blueprint",
             ActionType.REFINE_CODE: "execute_refine_code",
+            ActionType.LIST_FILES: "execute_list_files",
+            ActionType.READ_FILE: "execute_read_file",
+            ActionType.WRITE_FILE: "execute_write_file",
         }
 
         graph = StateGraph(AgentState)
@@ -73,13 +76,13 @@ class AuraAgent:
             return state
 
         try:
-            plan = self.brain.decide(request, context)
+            next_action = self.brain.decide(request, context)
         except Exception as exc:
             logger.error("Failed to generate plan via brain: %s", exc, exc_info=True)
             state["plan"] = []
             return state
 
-        state["plan"] = plan or []
+        state["plan"] = [next_action] if next_action else []
         return state
 
     def execute_step(self, state: AgentState) -> AgentState:

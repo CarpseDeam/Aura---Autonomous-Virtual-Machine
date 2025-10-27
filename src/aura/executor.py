@@ -12,6 +12,7 @@ from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
+from src.aura.services.workspace_service import WorkspaceService
 from src.aura.services.llm_service import LLMService
 
 
@@ -35,16 +36,21 @@ class AuraExecutor:
         prompts: PromptManager,
         ast: ASTService,
         context: ContextRetrievalService,
+        workspace: WorkspaceService,
     ) -> None:
         self.event_bus = event_bus
         self.llm = llm
         self.prompts = prompts
         self.ast = ast
         self.context = context
+        self.workspace = workspace
         self._tools = {
             ActionType.DESIGN_BLUEPRINT: self.execute_design_blueprint,
             ActionType.REFINE_CODE: self.execute_refine_code,
             ActionType.SIMPLE_REPLY: self.execute_simple_reply,
+            ActionType.LIST_FILES: self.execute_list_files,
+            ActionType.READ_FILE: self.execute_read_file,
+            ActionType.WRITE_FILE: self.execute_write_file,
         }
 
     # --------------- Public API ---------------
@@ -189,6 +195,60 @@ class AuraExecutor:
         # Enforce validation-first pipeline for blueprint-driven tasks
         self._stream_and_finalize(prompt, "engineer_agent", file_path, validate_with_spec=spec)
         return {"file_path": file_path}
+
+    def execute_list_files(self, action: Action, ctx: ProjectContext) -> List[str]:
+        project_path = getattr(self.workspace, "active_project_path", None)
+        if not project_path:
+            raise RuntimeError("No active project set")
+
+        files: List[str] = []
+        try:
+            for path in project_path.rglob("*"):
+                if path.is_file():
+                    files.append(str(path.relative_to(project_path)))
+        except Exception as exc:
+            logger.error("Failed to list files for project %s: %s", project_path, exc, exc_info=True)
+            raise RuntimeError("Failed to list files for active project") from exc
+        return files
+
+    def execute_read_file(self, action: Action, ctx: ProjectContext) -> str:
+        file_path = action.get_param("file_path")
+        if not file_path:
+            raise ValueError("Missing 'file_path' parameter for read_file action")
+
+        project_path = getattr(self.workspace, "active_project_path", None)
+        if not project_path:
+            raise RuntimeError("No active project set")
+
+        project_root = project_path.resolve()
+        target = (project_path / file_path).resolve()
+        try:
+            target.relative_to(project_root)
+        except ValueError:
+            raise RuntimeError("Attempted to read outside the active project") from None
+        if not target.exists() or not target.is_file():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        try:
+            return target.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.error("Failed to read file %s: %s", target, exc, exc_info=True)
+            raise RuntimeError(f"Failed to read file: {file_path}") from exc
+
+    def execute_write_file(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
+        file_path = action.get_param("file_path")
+        content = action.get_param("content", "")
+
+        if not file_path:
+            raise ValueError("Missing 'file_path' parameter for write_file action")
+
+        try:
+            self.workspace.save_code_to_project(file_path, content)
+        except Exception as exc:
+            logger.error("Failed to write file %s: %s", file_path, exc, exc_info=True)
+            raise
+
+        return {"file_path": file_path, "status": "written"}
 
     def _stream_and_finalize(self, prompt: str, agent_name: str, file_path: str, validate_with_spec: Optional[Dict[str, Any]]):
         def run():

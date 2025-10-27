@@ -7,6 +7,9 @@ class ActionType(str, Enum):
     DESIGN_BLUEPRINT = "design_blueprint"
     REFINE_CODE = "refine_code"
     SIMPLE_REPLY = "simple_reply"
+    LIST_FILES = "list_files"
+    READ_FILE = "read_file"
+    WRITE_FILE = "write_file"
 
 
 class Action(BaseModel):
