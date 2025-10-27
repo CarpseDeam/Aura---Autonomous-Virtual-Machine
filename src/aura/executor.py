@@ -41,19 +41,22 @@ class AuraExecutor:
         self.prompts = prompts
         self.ast = ast
         self.context = context
+        self._tools = {
+            ActionType.DESIGN_BLUEPRINT: self.execute_design_blueprint,
+            ActionType.REFINE_CODE: self.execute_refine_code,
+            ActionType.SIMPLE_REPLY: self.execute_simple_reply,
+        }
 
     # --------------- Public API ---------------
-    def execute(self, action: Action, project_context: ProjectContext) -> Result:
-        if action.type == ActionType.DESIGN_BLUEPRINT:
-            return self._exec_design_blueprint(action, project_context)
-        if action.type == ActionType.REFINE_CODE:
-            return self._exec_refine_code(action, project_context)
-        if action.type == ActionType.SIMPLE_REPLY:
-            return self._exec_simple_reply(action, project_context)
-        return Result(ok=False, kind="unknown", error="Unsupported action type", data={})
+    def execute(self, action: Action, project_context: ProjectContext) -> Any:
+        tool = self._tools.get(action.type)
+        if not tool:
+            logger.warning("Unsupported action type requested: %s", action.type)
+            return Result(ok=False, kind="unknown", error="Unsupported action type", data={})
+        return tool(action, project_context)
 
     # --------------- Workflows ---------------
-    def _exec_simple_reply(self, action: Action, ctx: ProjectContext) -> Result:
+    def execute_simple_reply(self, action: Action, ctx: ProjectContext) -> str:
         user_text = action.get_param("request", "")
         history = ctx.conversation_history or []
         recent_history = history[-6:] if history else []
@@ -64,77 +67,43 @@ class AuraExecutor:
             conversation_history=recent_history,
         )
         if not prompt:
-            return Result(ok=False, kind="conversation", error="Failed to render chitchat prompt", data={})
+            raise RuntimeError("Failed to render chitchat prompt")
 
-        def dispatch_error(message: str) -> None:
-            try:
-                self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": message}))
-            except Exception:
-                logger.debug("Failed to dispatch MODEL_ERROR for simple reply.", exc_info=True)
+        try:
+            stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt)
+        except Exception as exc:
+            logger.error("Streaming chitchat reply failed: %s", exc, exc_info=True)
+            raise RuntimeError("Failed to stream conversational reply.") from exc
 
-        def run():
-            chunks: List[str] = []
-            try:
-                stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt)
-                for chunk in stream:
-                    if not chunk:
-                        continue
+        chunks: List[str] = []
+        try:
+            for chunk in stream:
+                if chunk:
                     chunks.append(chunk)
-                    try:
-                        self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": chunk}))
-                    except Exception:
-                        logger.debug("Failed to dispatch MODEL_CHUNK_RECEIVED during simple reply stream.", exc_info=True)
-            except Exception as exc:
-                logger.error(f"Streaming chitchat reply failed: {exc}", exc_info=True)
-                dispatch_error("Failed to stream conversational reply.")
-                return
+        except Exception as exc:
+            logger.error("Error while gathering chitchat stream: %s", exc, exc_info=True)
+            raise RuntimeError("Failed to gather conversational reply stream.") from exc
 
-            reply_text = self._strip_code_fences("".join(chunks))
-            if not reply_text:
-                logger.warning("Chitchat model returned an empty reply.")
-                dispatch_error("Chitchat model returned empty reply")
-                return
-            try:
-                self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
-            except Exception:
-                logger.debug("Failed to dispatch MODEL_STREAM_ENDED for simple reply.", exc_info=True)
+        reply_text = self._strip_code_fences("".join(chunks))
+        if not reply_text:
+            logger.warning("Chitchat model returned an empty reply.")
+            raise RuntimeError("Chitchat model returned empty reply")
+        return reply_text
 
-        t = threading.Thread(target=run, daemon=True)
-        t.start()
-
-        return Result(ok=True, kind="conversation", data={"status": "streaming"})
-
-    def _exec_design_blueprint(self, action: Action, ctx: ProjectContext) -> Result:
+    def execute_design_blueprint(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
         user_text = action.get_param("request", "")
         prompt = self.prompts.render("architect.jinja2", user_text=user_text)
         if not prompt:
-            return Result(ok=False, kind="blueprint", error="Failed to render architect prompt", data={})
+            raise RuntimeError("Failed to render architect prompt")
 
         response = self.llm.run_for_agent("architect_agent", prompt)
         data = self._parse_json_safely(response)
         if not self._blueprint_has_files(data):
-            return Result(ok=False, kind="blueprint", error="Architect returned no files in blueprint", data={})
+            raise RuntimeError("Architect returned no files in blueprint")
 
-        # Notify UI with a concise blueprint summary
-        self.event_bus.dispatch(Event(event_type="BLUEPRINT_GENERATED", payload=data))
+        return data
 
-        # Convert blueprint into task-like specs and begin execution sequentially
-        files = self._files_from_blueprint(data)
-        for spec in files:
-            file_path = spec.get("file_path") or "workspace/generated.py"
-            desc = f"Implement the file {file_path}."
-            # Status event to keep terminal narrative
-            self.event_bus.dispatch(Event(event_type="DISPATCH_TASK", payload={
-                "task_id": None,
-                "task_description": desc,
-            }))
-            self._generate_for_spec(spec, desc)
-
-        # Build complete
-        self.event_bus.dispatch(Event(event_type="BUILD_COMPLETED", payload={}))
-        return Result(ok=True, kind="blueprint", data={"blueprint": data})
-
-    def _exec_refine_code(self, action: Action, ctx: ProjectContext) -> Result:
+    def execute_refine_code(self, action: Action, ctx: ProjectContext) -> Result:
         file_path = action.get_param("file_path", "workspace/generated.py")
         request_text = action.get_param("request", "")
 
@@ -166,8 +135,20 @@ class AuraExecutor:
         return Result(ok=True, kind="code", data={"file_path": file_path})
 
     # --------------- Internals ---------------
-    def _generate_for_spec(self, spec: Dict[str, Any], description: str) -> None:
+    def execute_generate_code_for_spec(self, spec: Dict[str, Any], user_request: str) -> Dict[str, Any]:
         file_path = spec.get("file_path") or "workspace/generated.py"
+        description = spec.get("description") or user_request or f"Implement the file {file_path}."
+
+        try:
+            self.event_bus.dispatch(Event(
+                event_type="DISPATCH_TASK",
+                payload={
+                    "task_id": None,
+                    "task_description": description,
+                },
+            ))
+        except Exception:
+            logger.debug("Failed to dispatch DISPATCH_TASK event for %s", file_path, exc_info=True)
 
         # Gather AST/RAG context
         context_data = self.context.get_context_for_task(description, file_path)
@@ -204,9 +185,10 @@ class AuraExecutor:
         )
         if not prompt:
             self._handle_error("Failed to render engineer prompt for spec.")
-            return
+            return {"file_path": file_path, "status": "prompt_error"}
         # Enforce validation-first pipeline for blueprint-driven tasks
         self._stream_and_finalize(prompt, "engineer_agent", file_path, validate_with_spec=spec)
+        return {"file_path": file_path}
 
     def _stream_and_finalize(self, prompt: str, agent_name: str, file_path: str, validate_with_spec: Optional[Dict[str, Any]]):
         def run():

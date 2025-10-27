@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, TypedDict
+from typing import Any, Dict, List, TypedDict
 
 from langgraph.graph import END, StateGraph
 
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
-from src.aura.models.action import Action
+from src.aura.models.action import Action, ActionType
+from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
 
 
@@ -21,6 +22,8 @@ class AgentState(TypedDict, total=False):
     plan: List[Action]
     messages: List[Dict[str, str]]
     context: ProjectContext
+    blueprint: Dict[str, Any]
+    results: List[Any]
 
 
 class AuraAgent:
@@ -29,6 +32,11 @@ class AuraAgent:
     def __init__(self, brain: AuraBrain, executor: AuraExecutor) -> None:
         self.brain = brain
         self.executor = executor
+        self._tool_name_by_action = {
+            ActionType.SIMPLE_REPLY: "execute_simple_reply",
+            ActionType.DESIGN_BLUEPRINT: "execute_design_blueprint",
+            ActionType.REFINE_CODE: "execute_refine_code",
+        }
 
         graph = StateGraph(AgentState)
         graph.add_node("plan", self.plan)
@@ -90,15 +98,89 @@ class AuraAgent:
 
         action = plan.pop(0)
         try:
-            self.executor.execute(action, context)
+            result = self._invoke_executor_tool(action, context)
         except Exception as exc:
-            logger.error("Executor failed while handling action %s: %s", action, exc, exc_info=True)
+            logger.error("Executor tool failed for action %s: %s", action.type, exc, exc_info=True)
+            try:
+                self.executor.event_bus.dispatch(Event(
+                    event_type="MODEL_ERROR",
+                    payload={"message": f"Failed while running tool for action '{action.type.value}'."},
+                ))
+            except Exception:
+                logger.debug("Failed to dispatch MODEL_ERROR event after tool failure.", exc_info=True)
             state["plan"] = []
-        finally:
-            state["plan"] = plan
+            return state
+
+        try:
+            self._handle_tool_result(action, result, state)
+        except Exception as exc:
+            logger.error("Post-processing failed for action %s: %s", action.type, exc, exc_info=True)
+            try:
+                self.executor.event_bus.dispatch(Event(
+                    event_type="MODEL_ERROR",
+                    payload={"message": f"Post-processing failed for action '{action.type.value}'."},
+                ))
+            except Exception:
+                logger.debug("Failed to dispatch MODEL_ERROR event after post-processing failure.", exc_info=True)
+            state["plan"] = []
+            return state
+
+        state["plan"] = plan
         return state
 
     def should_continue(self, state: AgentState) -> bool:
         """Decide whether the graph should execute another action step."""
         remaining = state.get("plan") or []
         return bool(remaining)
+
+    def _invoke_executor_tool(self, action: Action, context: ProjectContext) -> Any:
+        tool_name = self._tool_name_by_action.get(action.type)
+        if not tool_name:
+            raise ValueError(f"No executor tool configured for action type {action.type}")
+
+        tool = getattr(self.executor, tool_name, None)
+        if not callable(tool):
+            raise AttributeError(f"Executor tool '{tool_name}' is not callable")
+
+        return tool(action, context)
+
+    def _handle_tool_result(self, action: Action, result: Any, state: AgentState) -> None:
+        if action.type == ActionType.SIMPLE_REPLY:
+            reply_text = str(result or "")
+            if not reply_text:
+                raise RuntimeError("Simple reply tool returned empty response")
+            state.setdefault("messages", []).append({"role": "assistant", "content": reply_text})
+            try:
+                self.executor.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": reply_text}))
+                self.executor.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+            except Exception:
+                logger.debug("Failed to dispatch conversation events for simple reply.", exc_info=True)
+            return
+
+        if action.type == ActionType.DESIGN_BLUEPRINT:
+            blueprint = result if isinstance(result, dict) else {}
+            if not blueprint:
+                raise RuntimeError("Design blueprint tool returned no data")
+            state["blueprint"] = blueprint
+            try:
+                self.executor.event_bus.dispatch(Event(event_type="BLUEPRINT_GENERATED", payload=blueprint))
+            except Exception:
+                logger.debug("Failed to dispatch BLUEPRINT_GENERATED event.", exc_info=True)
+
+            files = self.executor._files_from_blueprint(blueprint)
+            user_request = action.get_param("request", "")
+            for spec in files:
+                try:
+                    file_result = self.executor.execute_generate_code_for_spec(spec, user_request)
+                    if file_result:
+                        state.setdefault("results", []).append(file_result)
+                except Exception as exc:
+                    logger.error("Failed to generate code for spec %s: %s", spec.get("file_path"), exc, exc_info=True)
+            try:
+                self.executor.event_bus.dispatch(Event(event_type="BUILD_COMPLETED", payload={}))
+            except Exception:
+                logger.debug("Failed to dispatch BUILD_COMPLETED event.", exc_info=True)
+            return
+
+        # Default: stash result for downstream consumers
+        state.setdefault("results", []).append(result)
