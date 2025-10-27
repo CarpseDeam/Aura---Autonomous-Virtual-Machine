@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class Intent(str, Enum):
     """
     Enumeration for the user's detected intent.

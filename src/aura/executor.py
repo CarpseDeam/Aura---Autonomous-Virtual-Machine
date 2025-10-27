@@ -48,9 +48,49 @@ class AuraExecutor:
             return self._exec_design_blueprint(action, project_context)
         if action.type == ActionType.REFINE_CODE:
             return self._exec_refine_code(action, project_context)
+        if action.type == ActionType.SIMPLE_REPLY:
+            return self._exec_simple_reply(action, project_context)
         return Result(ok=False, kind="unknown", error="Unsupported action type", data={})
 
     # --------------- Workflows ---------------
+    def _exec_simple_reply(self, action: Action, ctx: ProjectContext) -> Result:
+        user_text = action.get_param("request", "")
+        history = ctx.conversation_history or []
+        recent_history = history[-6:] if history else []
+
+        prompt = self.prompts.render(
+            "chitchat_reply.jinja2",
+            user_text=user_text,
+            conversation_history=recent_history,
+        )
+        if not prompt:
+            return Result(ok=False, kind="conversation", error="Failed to render chitchat prompt", data={})
+
+        chunks: List[str] = []
+        try:
+            stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt)
+            for chunk in stream:
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                try:
+                    self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": chunk}))
+                except Exception:
+                    logger.debug("Failed to dispatch MODEL_CHUNK_RECEIVED during simple reply stream.", exc_info=True)
+        except Exception as exc:
+            logger.error(f"Streaming chitchat reply failed: {exc}", exc_info=True)
+            return Result(ok=False, kind="conversation", error="Failed to stream conversational reply.", data={})
+
+        reply_text = self._strip_code_fences("".join(chunks))
+        if not reply_text:
+            return Result(ok=False, kind="conversation", error="Chitchat model returned empty reply", data={})
+        try:
+            self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+        except Exception:
+            logger.debug("Failed to dispatch MODEL_STREAM_ENDED for simple reply.", exc_info=True)
+
+        return Result(ok=True, kind="conversation", data={"reply": reply_text})
+
     def _exec_design_blueprint(self, action: Action, ctx: ProjectContext) -> Result:
         user_text = action.get_param("request", "")
         prompt = self.prompts.render("architect.jinja2", user_text=user_text)

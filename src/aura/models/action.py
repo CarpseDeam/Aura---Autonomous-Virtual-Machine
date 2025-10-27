@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class ActionType(str, Enum):
     DESIGN_BLUEPRINT = "design_blueprint"
     REFINE_CODE = "refine_code"
+    SIMPLE_REPLY = "simple_reply"
 
 
 class Action(BaseModel):
