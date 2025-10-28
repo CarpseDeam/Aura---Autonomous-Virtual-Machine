@@ -14,6 +14,7 @@ from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.services.llm_service import LLMService
+from src.aura.services.research_service import ResearchService
 
 
 logger = logging.getLogger(__name__)
@@ -44,10 +45,12 @@ class AuraExecutor:
         self.ast = ast
         self.context = context
         self.workspace = workspace
+        self.research_service = ResearchService(lambda prompt: self.llm.run_for_agent("lead_companion_agent", prompt))
         self._tools = {
             ActionType.DESIGN_BLUEPRINT: self.execute_design_blueprint,
             ActionType.REFINE_CODE: self.execute_refine_code,
             ActionType.SIMPLE_REPLY: self.execute_simple_reply,
+            ActionType.RESEARCH: self.execute_research,
             ActionType.LIST_FILES: self.execute_list_files,
             ActionType.READ_FILE: self.execute_read_file,
             ActionType.WRITE_FILE: self.execute_write_file,
@@ -62,6 +65,12 @@ class AuraExecutor:
         return tool(action, project_context)
 
     # --------------- Workflows ---------------
+    def execute_research(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
+        topic = action.get_param("topic") or action.get_param("subject") or action.get_param("request", "")
+        if not isinstance(topic, str) or not topic.strip():
+            raise ValueError("Missing 'topic' parameter for research action")
+        return self.research_service.research(topic.strip())
+
     def execute_simple_reply(self, action: Action, ctx: ProjectContext) -> str:
         user_text = action.get_param("request", "")
         history = ctx.conversation_history or []
