@@ -45,7 +45,7 @@ class AuraExecutor:
         self.ast = ast
         self.context = context
         self.workspace = workspace
-        self.research_service = ResearchService(lambda prompt: self.llm.run_for_agent("lead_companion_agent", prompt))
+        self.research_service = ResearchService()
         self._tools = {
             ActionType.DESIGN_BLUEPRINT: self.execute_design_blueprint,
             ActionType.REFINE_CODE: self.execute_refine_code,
