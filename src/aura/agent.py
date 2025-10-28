@@ -16,14 +16,18 @@ logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict, total=False):
-    """Mutable state that flows through the agent's LangGraph pipeline."""
+    """Mutable state that flows through the agent's LangGraph pipeline.
 
-    request: str
-    plan: List[Action]
-    messages: List[Dict[str, str]]
-    context: ProjectContext
-    blueprint: Dict[str, Any]
-    results: List[Any]
+    This state supports a cyclical think-act-observe loop where the agent
+    continuously plans, executes, and observes until the task is complete.
+    """
+
+    input: str  # Original user request
+    messages: List[Dict[str, Any]]  # Full conversation history including tool outputs
+    context: ProjectContext  # Project context for execution
+    current_action: Action  # The action being executed in current iteration
+    iteration_count: int  # Number of plan-execute cycles (safeguard against infinite loops)
+    blueprint: Dict[str, Any]  # Special state for blueprint generation
 
 
 class AuraAgent:
@@ -42,100 +46,177 @@ class AuraAgent:
             ActionType.RESEARCH: "execute_research",
         }
 
+        # Build a cyclical think-act-observe graph
         graph = StateGraph(AgentState)
         graph.add_node("plan", self.plan)
-        graph.add_node("act", self.execute_step)
+        graph.add_node("execute_tool", self.execute_tool)
+
+        # Start with planning
         graph.set_entry_point("plan")
-        graph.add_edge("plan", "act")
+
+        # After planning, execute the tool
+        graph.add_edge("plan", "execute_tool")
+
+        # After execution, decide whether to continue or end
         graph.add_conditional_edges(
-            "act",
+            "execute_tool",
             self.should_continue,
-            {True: "act", False: END},
+            {
+                "continue": "plan",  # Loop back to plan for next action
+                "end": END,  # Task complete or max iterations reached
+            },
         )
         self._graph_app = graph.compile()
 
     def invoke(self, request: str, context: ProjectContext) -> AgentState:
-        """Kick off the graph with the latest user request and project context."""
+        """Kick off the cyclical think-act-observe loop with the user request."""
+        # Initialize state with user input as the first message
+        messages = list(context.conversation_history or [])
+        messages.append({"role": "user", "content": request})
+
         state: AgentState = {
-            "request": request,
-            "plan": [],
-            "messages": list(context.conversation_history or []),
+            "input": request,
+            "messages": messages,
             "context": context,
+            "iteration_count": 0,
         }
+
         final_state = self._graph_app.invoke(state)
         final_state.pop("context", None)
+        final_state.pop("current_action", None)  # Don't expose internal action state
         return final_state
 
     def plan(self, state: AgentState) -> AgentState:
-        """Call into the brain to craft a plan of Actions."""
-        request = state.get("request", "")
-        context = state.get("context")
+        """Think step: Analyze current state and decide next action.
 
-        if not request or context is None:
-            logger.warning("Plan step missing request or context; returning empty plan.")
-            state["plan"] = []
+        This node examines the conversation history (including tool outputs)
+        and uses the brain to determine what action to take next.
+        """
+        input_request = state.get("input", "")
+        context = state.get("context")
+        messages = state.get("messages", [])
+
+        if not input_request or context is None:
+            logger.warning("Plan step missing input or context; cannot proceed.")
+            state["current_action"] = None
             return state
+
+        # Increment iteration counter for loop safeguard
+        state["iteration_count"] = state.get("iteration_count", 0) + 1
 
         try:
-            next_action = self.brain.decide(request, context)
+            # The brain analyzes the full message history to decide next action
+            next_action = self.brain.decide(input_request, context)
+            logger.info(f"[Plan] Iteration {state['iteration_count']}: Next action = {next_action.type if next_action else None}")
         except Exception as exc:
-            logger.error("Failed to generate plan via brain: %s", exc, exc_info=True)
-            state["plan"] = []
-            return state
+            logger.error("Failed to generate action via brain: %s", exc, exc_info=True)
+            # Create a fallback simple reply action on error
+            next_action = Action(
+                type=ActionType.SIMPLE_REPLY,
+                params={"response": f"I encountered an error while planning: {str(exc)}"}
+            )
 
-        state["plan"] = [next_action] if next_action else []
+        state["current_action"] = next_action
         return state
 
-    def execute_step(self, state: AgentState) -> AgentState:
-        """Execute the next action in the plan via the executor."""
-        context = state.get("context")
-        plan = state.get("plan") or []
+    def execute_tool(self, state: AgentState) -> AgentState:
+        """Act step: Execute the planned action and observe the result.
 
-        if not plan:
-            logger.debug("No further actions to execute.")
+        This node takes the current_action, executes it via the executor,
+        and appends the observation to the message history.
+        """
+        context = state.get("context")
+        action = state.get("current_action")
+
+        if action is None:
+            logger.warning("No action to execute; ending cycle.")
             return state
 
         if context is None:
-            logger.warning("Execution step missing context; skipping remaining actions.")
-            state["plan"] = []
+            logger.warning("Execution step missing context; cannot execute.")
             return state
 
-        action = plan.pop(0)
+        logger.info(f"[Execute] Running action: {action.type}")
+
         try:
             result = self._invoke_executor_tool(action, context)
         except Exception as exc:
             logger.error("Executor tool failed for action %s: %s", action.type, exc, exc_info=True)
+            # Add error observation to messages
+            error_msg = f"Tool execution failed for {action.type.value}: {str(exc)}"
+            state.setdefault("messages", []).append({
+                "role": "system",
+                "content": error_msg,
+                "action_type": action.type.value,
+            })
             try:
                 self.executor.event_bus.dispatch(Event(
                     event_type="MODEL_ERROR",
-                    payload={"message": f"Failed while running tool for action '{action.type.value}'."},
+                    payload={"message": error_msg},
                 ))
             except Exception:
-                logger.debug("Failed to dispatch MODEL_ERROR event after tool failure.", exc_info=True)
-            state["plan"] = []
+                logger.debug("Failed to dispatch MODEL_ERROR event.", exc_info=True)
             return state
 
+        # Handle and observe the result
         try:
             self._handle_tool_result(action, result, state)
+            logger.info(f"[Observe] Action {action.type} completed successfully")
         except Exception as exc:
             logger.error("Post-processing failed for action %s: %s", action.type, exc, exc_info=True)
+            error_msg = f"Post-processing failed for {action.type.value}: {str(exc)}"
+            state.setdefault("messages", []).append({
+                "role": "system",
+                "content": error_msg,
+                "action_type": action.type.value,
+            })
             try:
                 self.executor.event_bus.dispatch(Event(
                     event_type="MODEL_ERROR",
-                    payload={"message": f"Post-processing failed for action '{action.type.value}'."},
+                    payload={"message": error_msg},
                 ))
             except Exception:
-                logger.debug("Failed to dispatch MODEL_ERROR event after post-processing failure.", exc_info=True)
-            state["plan"] = []
-            return state
+                logger.debug("Failed to dispatch MODEL_ERROR event.", exc_info=True)
 
-        state["plan"] = plan
         return state
 
-    def should_continue(self, state: AgentState) -> bool:
-        """Decide whether the graph should execute another action step."""
-        remaining = state.get("plan") or []
-        return bool(remaining)
+    def should_continue(self, state: AgentState) -> str:
+        """Decide whether to loop back to planning or end the conversation.
+
+        Returns:
+            "continue": Loop back to plan node for next iteration
+            "end": Complete the current turn and return to user
+        """
+        MAX_ITERATIONS = 10
+
+        action = state.get("current_action")
+        iteration_count = state.get("iteration_count", 0)
+
+        # Safeguard: Prevent infinite loops
+        if iteration_count >= MAX_ITERATIONS:
+            logger.warning(f"Maximum iterations ({MAX_ITERATIONS}) reached. Ending cycle.")
+            # Add a system message about the loop limit
+            state.setdefault("messages", []).append({
+                "role": "system",
+                "content": f"Maximum iteration limit ({MAX_ITERATIONS}) reached. The agent has been stopped to prevent infinite loops.",
+            })
+            return "end"
+
+        # If no action was planned, end the cycle
+        if action is None:
+            logger.info("[Router] No current action, ending cycle.")
+            return "end"
+
+        # Final actions that complete the user's turn
+        FINAL_ACTIONS = {ActionType.SIMPLE_REPLY, ActionType.RESEARCH, ActionType.DESIGN_BLUEPRINT}
+
+        if action.type in FINAL_ACTIONS:
+            logger.info(f"[Router] Final action {action.type} completed, ending cycle.")
+            return "end"
+
+        # For tool actions (LIST_FILES, READ_FILE, WRITE_FILE, etc.), continue the loop
+        logger.info(f"[Router] Tool action {action.type} completed, continuing to next iteration.")
+        return "continue"
 
     def _invoke_executor_tool(self, action: Action, context: ProjectContext) -> Any:
         tool_name = self._tool_name_by_action.get(action.type)
@@ -204,5 +285,14 @@ class AuraAgent:
                 logger.debug("Failed to dispatch conversation events for research result.", exc_info=True)
             return
 
-        # Default: stash result for downstream consumers
-        state.setdefault("results", []).append(result)
+        # Default case: Tool actions (LIST_FILES, READ_FILE, WRITE_FILE, REFINE_CODE)
+        # Add the tool result as an observation in the message history
+        # This allows the agent to see what the tool returned in the next planning cycle
+        observation = {
+            "role": "tool",
+            "action_type": action.type.value,
+            "content": str(result),
+            "result": result,  # Keep structured data for potential future use
+        }
+        state.setdefault("messages", []).append(observation)
+        logger.debug(f"Added tool observation for {action.type} to message history")
