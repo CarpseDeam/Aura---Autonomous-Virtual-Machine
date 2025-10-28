@@ -88,17 +88,3 @@ class AuraInterface:
         worker.signals.finished.connect(lambda: None)
         self.thread_pool.start(worker)
 
-    def _handle_user_message_logic(self, user_text: str) -> None:
-        try:
-            self.conversations.add_message("user", user_text)
-        except Exception:
-            logger.debug("Failed to append to conversation history; continuing.")
-
-        try:
-            ctx = self._build_context()
-            self.agent.invoke(user_text, ctx)
-        except Exception as e:
-            logger.error(f"Failed to process user message: {e}", exc_info=True)
-            self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Internal error during request handling."}))
-            return
-

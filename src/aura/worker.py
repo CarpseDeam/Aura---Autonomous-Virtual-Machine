@@ -1,7 +1,8 @@
 import logging
-from typing import Optional
 
 from PySide6.QtCore import QObject, Signal, QRunnable
+
+from src.aura.models.events import Event
 
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ class BrainExecutorWorker(QRunnable):
     """
     QRunnable that runs the Companion logic off the main UI thread.
 
-    It invokes AuraInterface._handle_user_message_logic(user_text) in a background thread
+    It handles user message processing (context building, agent invocation)
     and emits signals on error and completion.
     """
 
@@ -30,7 +31,20 @@ class BrainExecutorWorker(QRunnable):
 
     def run(self):
         try:
-            self.interface._handle_user_message_logic(self.user_text)
+            try:
+                self.interface.conversations.add_message("user", self.user_text)
+            except Exception:
+                logger.debug("Failed to append to conversation history; continuing.")
+
+            try:
+                ctx = self.interface._build_context()
+                self.interface.agent.invoke(self.user_text, ctx)
+            except Exception as e:
+                logger.error(f"Failed to process user message: {e}", exc_info=True)
+                self.interface.event_bus.dispatch(
+                    Event(event_type="MODEL_ERROR", payload={"message": "Internal error during request handling."})
+                )
+                return
         except Exception as e:
             logger.error(f"Background worker error: {e}", exc_info=True)
             try:
@@ -42,4 +56,3 @@ class BrainExecutorWorker(QRunnable):
                 self.signals.finished.emit()
             except Exception:
                 pass
-
