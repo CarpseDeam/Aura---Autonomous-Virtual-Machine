@@ -186,5 +186,23 @@ class AuraAgent:
                 logger.debug("Failed to dispatch BUILD_COMPLETED event.", exc_info=True)
             return
 
+        if action.type == ActionType.RESEARCH:
+            summary = result.get("summary", "I couldn't find anything on that topic.")
+            sources = result.get("sources", [])
+
+            # Format the response with sources for clarity
+            response_text = summary
+            if sources:
+                source_links = "\n".join(f"- [{s.get('title')}]({s.get('url')})" for s in sources)
+                response_text += f"\n\n**Sources:**\n{source_links}"
+
+            state.setdefault("messages", []).append({"role": "assistant", "content": response_text})
+            try:
+                self.executor.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": response_text}))
+                self.executor.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+            except Exception:
+                logger.debug("Failed to dispatch conversation events for research result.", exc_info=True)
+            return
+
         # Default: stash result for downstream consumers
         state.setdefault("results", []).append(result)
