@@ -32,7 +32,7 @@ class AuraBrain:
             raise RuntimeError("Failed to render reasoning prompt")
 
         raw = self.llm.run_for_agent("reasoning_agent", prompt)
-        clean = self._strip_code_fences(raw)
+        clean = self._extract_json_from_response(raw)
         try:
             data = json.loads(clean) if clean else {}
         except Exception as exc:
@@ -82,9 +82,13 @@ class AuraBrain:
         raise RuntimeError(f"Unknown action type returned by reasoning prompt: {type_value}")
 
     @staticmethod
-    def _strip_code_fences(text: str) -> str:
-        t = (text or "").strip()
-        t = re.sub(r"^```\w*\s*\n?", "", t, flags=re.MULTILINE)
-        t = re.sub(r"\n?```\s*$", "", t, flags=re.MULTILINE)
-        return t.strip()
+    def _extract_json_from_response(text: str) -> str:
+        if text is None:
+            return ""
+        if not isinstance(text, str):
+            text = str(text)
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if match:
+            return match.group(0).strip()
+        return text.strip()
 

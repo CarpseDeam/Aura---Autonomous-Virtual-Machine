@@ -39,6 +39,7 @@ class AuraAgent:
             ActionType.LIST_FILES: "execute_list_files",
             ActionType.READ_FILE: "execute_read_file",
             ActionType.WRITE_FILE: "execute_write_file",
+            ActionType.RESEARCH: "execute_research",
         }
 
         graph = StateGraph(AgentState)
