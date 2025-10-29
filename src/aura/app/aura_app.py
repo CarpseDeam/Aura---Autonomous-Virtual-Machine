@@ -11,6 +11,7 @@ from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.services.blueprint_validator import BlueprintValidator
+from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
@@ -38,6 +39,7 @@ class AuraApp:
 
         self.event_bus = EventBus()
         self.prompt_manager = PromptManager()
+        self.image_storage_service = ImageStorageService()
         # CRITICAL: Instantiation order matters for dependencies
         # EventBus -> ASTService -> WorkspaceService -> Other services
         self.conversation_management_service = ConversationManagementService(self.event_bus)
@@ -47,7 +49,7 @@ class AuraApp:
         # Phoenix Initiative: Initialize BlueprintValidator for Quality Gate
         self.validation_service = BlueprintValidator()
         # Low-level LLM dispatcher
-        self.llm_service = LLMService(self.event_bus)
+        self.llm_service = LLMService(self.event_bus, self.image_storage_service)
         # New 3-layer architecture
         self.brain = AuraBrain(self.llm_service, self.prompt_manager)
         self.executor = AuraExecutor(
@@ -70,7 +72,7 @@ class AuraApp:
             workspace=self.workspace_service,
             thread_pool=thread_pool,
         )
-        self.main_window = MainWindow(self.event_bus)
+        self.main_window = MainWindow(self.event_bus, self.image_storage_service)
         self.code_viewer_window = CodeViewerWindow(self.event_bus, self.ast_service)
 
         # Give the main window reference to the code viewer for positioning

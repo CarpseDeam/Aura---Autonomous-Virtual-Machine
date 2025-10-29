@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from src.aura.app.event_bus import EventBus
 from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
 from src.aura.models.events import Event
+from src.aura.services.image_storage_service import ImageStorageService
 from src.providers.gemini_provider import GeminiProvider
 from src.providers.ollama_provider import OllamaProvider
 
@@ -24,8 +25,9 @@ class LLMService:
     - Answer model list/config reload requests for the UI.
     """
 
-    def __init__(self, event_bus: EventBus):
+    def __init__(self, event_bus: EventBus, image_storage: ImageStorageService):
         self.event_bus = event_bus
+        self.image_storage = image_storage
         self.agent_config: Dict = {}
         self.providers: Dict = {}
         self.model_to_provider_map: Dict[str, str] = {}
@@ -37,7 +39,10 @@ class LLMService:
     # ------------------- Boot / Config -------------------
     def _load_providers(self):
         logger.info("Loading LLM providers...")
-        provider_instances = [GeminiProvider(), OllamaProvider()]
+        provider_instances = [
+            GeminiProvider(image_storage=self.image_storage),
+            OllamaProvider(),
+        ]
         for provider in provider_instances:
             self.providers[provider.provider_name] = provider
             for model_name in provider.get_available_models():

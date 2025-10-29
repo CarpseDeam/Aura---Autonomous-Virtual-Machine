@@ -1,6 +1,7 @@
 import logging
 from html import escape
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 import markdown
 
 from PySide6.QtWidgets import (
@@ -13,6 +14,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.config import ASSETS_DIR
+from src.aura.services.image_storage_service import ImageStorageService
 from src.ui.widgets.chat_input import ChatInputTextEdit
 from src.ui.windows.settings_window import SettingsWindow
 from src.ui.widgets.knight_rider_widget import ThinkingIndicator
@@ -177,9 +179,10 @@ class MainWindow(QMainWindow):
         {"text": "Enter your commands..."},
     ]
 
-    def __init__(self, event_bus: EventBus):
+    def __init__(self, event_bus: EventBus, image_storage: ImageStorageService):
         super().__init__()
         self.event_bus = event_bus
+        self.image_storage = image_storage
         self.code_viewer_window = None
         self.settings_window = None
         self.setWindowTitle("Aura - Command Deck")
@@ -265,7 +268,7 @@ class MainWindow(QMainWindow):
         hl = QHBoxLayout(container)
         hl.setContentsMargins(0, 0, 0, 0)
 
-        self.chat_input = ChatInputTextEdit()
+        self.chat_input = ChatInputTextEdit(image_storage=self.image_storage)
         self.chat_input.setObjectName("chat_input")
         self.chat_input.setPlaceholderText("Type here. Shift+Enter for newline. Enter to send.")
         self.chat_input.sendMessage.connect(self._send_message)
@@ -360,7 +363,7 @@ class MainWindow(QMainWindow):
                 self._display_system_message("WORKSPACE", f"Importing project from: {project_path}")
 
     # Input/Output
-    def _log_user_message(self, user_text: str, image: Optional[Dict[str, Any]] = None):
+    def _log_user_message(self, user_text: str, image: Optional[Union[str, Dict[str, Any]]] = None):
         """Display a single user bubble using basic block HTML."""
         safe_text = escape(user_text).replace("\n", "<br>") if user_text else ""
 
@@ -368,17 +371,45 @@ class MainWindow(QMainWindow):
         if safe_text:
             content_parts.append(safe_text)
 
-        if image and image.get("data"):
-            mime_type = image.get("mime_type") or "image/png"
+        display_image: Optional[Dict[str, Any]] = None
+        has_image_reference = image is not None
+        image_reference: Optional[str] = None
+
+        if isinstance(image, dict):
+            if isinstance(image.get("path"), str):
+                image_reference = image["path"]
+            elif isinstance(image.get("relative_path"), str):
+                image_reference = image["relative_path"]
+            elif image.get("data"):
+                display_image = {
+                    "base64_data": image.get("data"),
+                    "mime_type": image.get("mime_type") or "image/png",
+                }
+        elif isinstance(image, Path):
+            image_reference = image.as_posix()
+        elif isinstance(image, str):
+            image_reference = image
+
+        if display_image is None and image_reference and self.image_storage:
+            loaded = self.image_storage.load_image(image_reference)
+            if loaded:
+                display_image = loaded
+            else:
+                logger.warning("Failed to load image for display from %s", image_reference)
+
+        if display_image and display_image.get("base64_data"):
+            mime_type = display_image.get("mime_type") or "image/png"
             image_html = (
                 '<div style="margin-top: 10px; text-align: center;">'
-                f'<img src="data:{mime_type};base64,{image["data"]}" '
+                f'<img src="data:{mime_type};base64,{display_image["base64_data"]}" '
                 'style="max-width: 260px; max-height: 180px; border-radius: 6px; '
                 'border: 1px solid rgba(255, 255, 255, 0.2); display: block; margin: 0 auto;" '
                 'alt="User attached image" />'
                 '</div>'
             )
             content_parts.append(image_html)
+        elif has_image_reference:
+            content_parts.append('<span style="color: #7CC4FF;">[Image attached]</span>')
 
         if not content_parts:
             content_parts.append('<span style="color: #7CC4FF;">[Image attached]</span>')
@@ -397,6 +428,26 @@ class MainWindow(QMainWindow):
         self.chat_display.moveCursor(QTextCursor.End)
         self.chat_display.insertHtml(user_html)
         self.chat_display.ensureCursorVisible()
+
+    def _normalize_image_reference(self, image: Optional[Union[str, Dict[str, Any]]]) -> Optional[Union[str, Dict[str, Any]]]:
+        if image is None:
+            return None
+        if isinstance(image, dict):
+            if isinstance(image.get("path"), str):
+                return image["path"]
+            if isinstance(image.get("relative_path"), str):
+                return image["relative_path"]
+            data = image.get("data")
+            if data and self.image_storage:
+                saved_path = self.image_storage.save_image(data, image.get("mime_type") or "image/png")
+                if saved_path:
+                    return saved_path
+            return image
+        if isinstance(image, Path):
+            return image.as_posix()
+        if isinstance(image, str):
+            return image
+        return image
 
     def _render_aura_response(self, response_text: str):
         """Render AURA's response as a left-aligned block using minimal HTML."""
@@ -456,16 +507,18 @@ class MainWindow(QMainWindow):
         if not user_text and not image_attachment:
             return
 
+        normalized_image = self._normalize_image_reference(image_attachment)
+
         self.chat_input.clear()
         self.chat_input.setEnabled(False)
 
         # Display user message instantly
-        self._log_user_message(user_text, image_attachment)
+        self._log_user_message(user_text, normalized_image)
 
         self.thinking_indicator.start_thinking("Analyzing your request...")
         payload: Dict[str, Any] = {"text": user_text}
-        if image_attachment:
-            payload["image"] = image_attachment
+        if normalized_image:
+            payload["image"] = normalized_image
         self.event_bus.dispatch(Event(event_type="SEND_USER_MESSAGE", payload=payload))
 
     def _handle_model_chunk(self, chunk: str):

@@ -1,8 +1,13 @@
 import base64
+from typing import Optional, Union
 
 from PySide6.QtWidgets import QLabel, QMessageBox, QTextEdit
 from PySide6.QtCore import Qt, Signal, QBuffer, QIODevice
 from PySide6.QtGui import QKeyEvent, QImage, QPixmap
+
+from src.aura.services.image_storage_service import ImageStorageService
+
+ImageAttachment = Union[str, dict]
 
 class ChatInputTextEdit(QTextEdit):
     """
@@ -11,9 +16,10 @@ class ChatInputTextEdit(QTextEdit):
     """
     sendMessage = Signal()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, image_storage: Optional[ImageStorageService] = None, **kwargs):
         super().__init__(*args, **kwargs)
-        self._attached_image = None
+        self._image_storage = image_storage
+        self._attached_image: Optional[ImageAttachment] = None
         self._max_image_bytes = 5 * 1024 * 1024  # 5 MB limit
         self._attachment_label = QLabel("[Image attached]", self)
         self._attachment_label.hide()
@@ -59,7 +65,12 @@ class ChatInputTextEdit(QTextEdit):
             if encoded is None:
                 return
 
-            self._attached_image = encoded
+            saved_path = None
+            if self._image_storage:
+                saved_path = self._image_storage.save_image(encoded["data"], encoded["mime_type"])
+
+            # Fallback to in-memory payload if storage fails for any reason.
+            self._attached_image = saved_path or encoded
             self._attachment_label.show()
             self._update_attachment_indicator_position()
             return
@@ -75,14 +86,14 @@ class ChatInputTextEdit(QTextEdit):
         Returns the current attached image (if any) and clears it.
         """
         image = self._attached_image
-        if image:
+        if image is not None:
             self._attached_image = None
             self._attachment_label.hide()
         return image
 
     def clear(self):
         super().clear()
-        if self._attached_image:
+        if self._attached_image is not None:
             self._attached_image = None
             self._attachment_label.hide()
 

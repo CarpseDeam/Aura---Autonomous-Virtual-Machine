@@ -1,5 +1,5 @@
 import logging
-
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import QObject, Signal, QRunnable
@@ -35,16 +35,17 @@ class BrainExecutorWorker(QRunnable):
     def run(self):
         try:
             try:
-                images = [self.image_attachment] if self.image_attachment else None
+                image_payload = self._normalize_image_attachment(self.image_attachment)
+                images = [image_payload] if image_payload else None
                 self.interface.conversations.add_message("user", self.user_text, images=images)
             except Exception:
                 logger.debug("Failed to append to conversation history; continuing.")
 
             try:
                 ctx = self.interface._build_context()
-                if self.image_attachment:
+                if image_payload:
                     ctx_extras = dict(ctx.extras or {})
-                    ctx_extras["latest_user_images"] = [self.image_attachment]
+                    ctx_extras["latest_user_images"] = [image_payload]
                     ctx.extras = ctx_extras
                 self.interface.agent.invoke(self.user_text, ctx)
             except Exception as e:
@@ -64,3 +65,16 @@ class BrainExecutorWorker(QRunnable):
                 self.signals.finished.emit()
             except Exception:
                 pass
+
+    @staticmethod
+    def _normalize_image_attachment(image: Optional[Any]) -> Optional[Any]:
+        if image is None:
+            return None
+        if isinstance(image, str):
+            return {"path": image}
+        if isinstance(image, Path):
+            return {"path": image.as_posix()}
+        if isinstance(image, dict):
+            if "path" in image or "relative_path" in image or "data" in image:
+                return image
+        return image
