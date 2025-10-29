@@ -321,12 +321,14 @@ class MainWindow(QMainWindow):
         }
         color = color_map.get(category.upper(), color_map["DEFAULT"])
         
-        processed_message = message.replace('\n', '<br>').replace(' ', '&nbsp;')
+        display_text = f"[{category.upper()}] {message}"
+        processed_message = display_text.replace('\n', '<br>').replace(' ', '&nbsp;')
         system_html = f"""
-        <div style="color: {color}; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
-            [{category}] {processed_message}
+        <div style="text-align: center; margin: 12px 0; padding: 8px;">
+            <span style="font-size: 12px; color: {color}; opacity: 0.85; font-family: 'JetBrains Mono', monospace;">
+                {processed_message}
+            </span>
         </div>
-        <br>
         """
         self.chat_display.moveCursor(QTextCursor.End)
         self.chat_display.insertHtml(system_html)
@@ -364,10 +366,10 @@ class MainWindow(QMainWindow):
         """Display user message instantly using HTML."""
         processed_user_text = escape(user_text).replace('\n', '<br>')
         user_html = f"""
-        <div style="display: block; clear: both; margin: 16px 0;">
-            <div style="display: inline-block; float: right; max-width: 70%; background-color: #2c3e50; color: #ffffff; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(100, 181, 246, 0.15); word-wrap: break-word;">
-                <span style="display: block; font-weight: bold; margin-bottom: 8px; color: #9bd0ff;">[USER]</span>
-                <span style="white-space: pre-wrap;">{processed_user_text}</span>
+        <div style="text-align: right; margin: 20px 0; padding: 0 10px;">
+            <div style="display: inline-block; max-width: 65%; background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%); color: #ecf0f1; padding: 14px 18px; border-radius: 18px; text-align: left; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); border: 1px solid #4a5f7f; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6; word-wrap: break-word;">
+                <div style="font-size: 11px; color: #64B5F6; font-weight: bold; margin-bottom: 4px;">YOU</div>
+                <div style="white-space: pre-wrap;">{processed_user_text}</div>
             </div>
         </div>
         """
@@ -399,9 +401,9 @@ class MainWindow(QMainWindow):
 
         styled_html = f"""
         {AURA_RESPONSE_CSS}
-        <div style="display: block; clear: both; margin: 16px 0;">
-            <div style="display: inline-block; float: left; max-width: 80%; background-color: #3a2b1f; color: #FFB74D; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(255, 183, 77, 0.12); word-wrap: break-word;">
-                <div style="font-weight: bold; margin-bottom: 8px; color: #FFB74D;">[AURA]</div>
+        <div style="text-align: left; margin: 20px 0; padding: 0 10px;">
+            <div style="display: inline-block; max-width: 75%; background: linear-gradient(135deg, #2d1f15 0%, #3a2818 100%); color: #FFB74D; padding: 14px 18px; border-radius: 18px; text-align: left; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4); border: 1px solid #5a3f28; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6; word-wrap: break-word;">
+                <div style="font-size: 11px; color: #FFD27F; font-weight: bold; margin-bottom: 6px;">AURA</div>
                 <div class="aura-response-content">
                     {html_content}
                 </div>
