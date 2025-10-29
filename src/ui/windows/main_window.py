@@ -1,4 +1,5 @@
 import logging
+from html import escape
 from typing import List, Optional
 import markdown
 
@@ -22,75 +23,83 @@ logger = logging.getLogger(__name__)
 # Retro CSS stylesheet for AURA's markdown-rendered responses
 AURA_RESPONSE_CSS = """
 <style>
-    body { 
-        font-family: 'JetBrains Mono', monospace; 
-        font-size: 13px; 
-        color: #dcdcdc; 
-        background: transparent; 
-        margin: 2px 0; 
+    .aura-response-content {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        color: #FFB74D;
+        background: transparent;
         line-height: 1.4;
+        word-wrap: break-word;
     }
-    h1, h2, h3, h4, h5, h6 { 
-        color: #FFB74D; 
-        font-weight: bold; 
-        margin: 8px 0 4px 0; 
+    .aura-response-content h1,
+    .aura-response-content h2,
+    .aura-response-content h3,
+    .aura-response-content h4,
+    .aura-response-content h5,
+    .aura-response-content h6 {
+        color: #FFD27F;
+        font-weight: bold;
+        margin: 8px 0 4px 0;
     }
-    h1 { font-size: 16px; }
-    h2 { font-size: 15px; }
-    h3 { font-size: 14px; }
-    p { 
-        margin: 4px 0; 
-        color: #dcdcdc; 
+    .aura-response-content h1 { font-size: 16px; }
+    .aura-response-content h2 { font-size: 15px; }
+    .aura-response-content h3 { font-size: 14px; }
+    .aura-response-content p {
+        margin: 4px 0;
+        color: #FFB74D;
     }
-    ul, ol { 
-        margin: 4px 0; 
-        padding-left: 20px; 
+    .aura-response-content ul,
+    .aura-response-content ol {
+        margin: 4px 0;
+        padding-left: 20px;
     }
-    li { 
-        margin: 2px 0; 
-        color: #dcdcdc; 
+    .aura-response-content li {
+        margin: 2px 0;
+        color: #FFB74D;
     }
-    code { 
-        background-color: #2a2a2a; 
-        color: #64B5F6; 
-        padding: 1px 4px; 
-        border-radius: 2px; 
-        font-family: 'JetBrains Mono', monospace; 
-        font-size: 12px; 
+    .aura-response-content code {
+        background-color: #2a2a2a;
+        color: #64B5F6;
+        padding: 1px 4px;
+        border-radius: 2px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
     }
-    pre { 
-        background-color: #1e1e1e; 
-        color: #dcdcdc; 
-        padding: 8px; 
-        border-radius: 4px; 
-        border-left: 3px solid #FFB74D; 
-        margin: 8px 0; 
-        white-space: pre-wrap; 
-        font-family: 'JetBrains Mono', monospace; 
-        font-size: 12px; 
-        overflow-x: auto; 
+    .aura-response-content pre {
+        background-color: #1e1e1e;
+        color: #FFE0A3;
+        padding: 8px;
+        border-radius: 4px;
+        border-left: 3px solid #FFB74D;
+        margin: 8px 0;
+        white-space: pre-wrap;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        overflow-x: auto;
     }
-    pre code { 
-        background: transparent; 
-        padding: 0; 
+    .aura-response-content pre code {
+        background: transparent;
+        padding: 0;
     }
-    blockquote { 
-        border-left: 3px solid #64B5F6; 
-        margin: 8px 0; 
-        padding-left: 12px; 
-        color: #b0b0b0; 
+    .aura-response-content blockquote {
+        border-left: 3px solid #64B5F6;
+        margin: 8px 0;
+        padding-left: 12px;
+        color: #E0C48A;
     }
-    strong, b { 
-        color: #FFB74D; 
-        font-weight: bold; 
+    .aura-response-content strong,
+    .aura-response-content b {
+        color: #FFD27F;
+        font-weight: bold;
     }
-    em, i { 
-        color: #64B5F6; 
-        font-style: italic; 
+    .aura-response-content em,
+    .aura-response-content i {
+        color: #64B5F6;
+        font-style: italic;
     }
-    a { 
-        color: #64B5F6; 
-        text-decoration: underline; 
+    .aura-response-content a {
+        color: #64B5F6;
+        text-decoration: underline;
     }
 </style>
 """
@@ -353,13 +362,14 @@ class MainWindow(QMainWindow):
     # Input/Output
     def _log_user_message(self, user_text: str):
         """Display user message instantly using HTML."""
-        # Create styled HTML for user message - single paragraph with spans to prevent line breaks
-        processed_user_text = user_text.replace('\n', '<br>').replace(' ', '&nbsp;')
+        processed_user_text = escape(user_text).replace('\n', '<br>')
         user_html = f"""
-        <p style="color: #64B5F6; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0;">
-            <span style="font-weight: bold;">[USER]</span> <span>{processed_user_text}</span>
-        </p>
-        <br>
+        <div style="margin: 16px 0; text-align: right;">
+            <span style="display: inline-block; max-width: 70%; background-color: #2c3e50; color: #ffffff; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(100, 181, 246, 0.15); word-wrap: break-word;">
+                <span style="display: block; font-weight: bold; margin-bottom: 8px; color: #9bd0ff;">[USER]</span>
+                <span style="white-space: pre-wrap;">{processed_user_text}</span>
+            </span>
+        </div>
         """
         self.chat_display.moveCursor(QTextCursor.End)
         self.chat_display.insertHtml(user_html)
@@ -367,20 +377,38 @@ class MainWindow(QMainWindow):
 
     def _render_aura_response(self, response_text: str):
         """Render AURA's response using Markdown-to-HTML conversion with retro styling."""
-        # Convert markdown to HTML
-        html_content = markdown.markdown(response_text, extensions=['fenced_code', 'codehilite'])
-        
-        # Create complete HTML document with CSS styling
+        # Normalize line endings and configure markdown conversion to preserve structure/line breaks
+        normalized_text = response_text.replace('\r\n', '\n').replace('\r', '\n')
+        markdown_extensions = [
+            "markdown.extensions.fenced_code",
+            "markdown.extensions.codehilite",
+            "markdown.extensions.nl2br",
+            "markdown.extensions.sane_lists",
+        ]
+        markdown_extension_configs = {
+            "markdown.extensions.codehilite": {
+                "guess_lang": False,
+            }
+        }
+        html_content = markdown.markdown(
+            normalized_text,
+            extensions=markdown_extensions,
+            extension_configs=markdown_extension_configs,
+            output_format="html5",
+        )
+
         styled_html = f"""
-        <div>
-            {AURA_RESPONSE_CSS}
-            <div style="margin-bottom: 8px;">
-                {html_content}
+        {AURA_RESPONSE_CSS}
+        <div style="margin: 16px 0; text-align: left;">
+            <div style="display: inline-block; max-width: 80%; background-color: #3a2b1f; color: #FFB74D; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(255, 183, 77, 0.12); word-wrap: break-word;">
+                <div style="font-weight: bold; margin-bottom: 8px; color: #FFB74D;">[AURA]</div>
+                <div class="aura-response-content">
+                    {html_content}
+                </div>
             </div>
         </div>
         """
-        
-        # Append the styled HTML to chat display
+
         self.chat_display.moveCursor(QTextCursor.End)
         self.chat_display.insertHtml(styled_html)
         self.chat_display.ensureCursorVisible()
@@ -410,12 +438,6 @@ class MainWindow(QMainWindow):
 
     def _handle_stream_end(self):
         if self.is_streaming_response and self.full_response_buffer.strip():
-            # Add the colored [AURA] tag to show who is speaking
-            aura_label_html = f'<div style="color: #FFB74D; font-family: JetBrains Mono, monospace; font-size: 13px; margin: 2px 0; font-weight: bold;">[AURA]</div>'
-            self.chat_display.moveCursor(QTextCursor.End)
-            self.chat_display.insertHtml(aura_label_html)
-            
-            # Render the complete response using markdown-to-HTML conversion
             self._render_aura_response(self.full_response_buffer.strip())
             
             # Clear the buffer and finish up
