@@ -34,6 +34,7 @@ class BrainExecutorWorker(QRunnable):
 
     def run(self):
         try:
+            image_payload = None
             try:
                 image_payload = self._normalize_image_attachment(self.image_attachment)
                 images = [image_payload] if image_payload else None
@@ -43,11 +44,21 @@ class BrainExecutorWorker(QRunnable):
 
             try:
                 ctx = self.interface._build_context()
+                baseline_length = len(ctx.conversation_history or [])
                 if image_payload:
                     ctx_extras = dict(ctx.extras or {})
                     ctx_extras["latest_user_images"] = [image_payload]
                     ctx.extras = ctx_extras
-                self.interface.agent.invoke(self.user_text, ctx)
+                final_state = self.interface.agent.invoke(self.user_text, ctx)
+                try:
+                    final_messages = list((final_state or {}).get("messages") or [])
+                    new_messages = final_messages[baseline_length:]
+                    if new_messages and isinstance(new_messages[0], dict) and new_messages[0].get("role") == "user":
+                        new_messages = new_messages[1:]
+                    if new_messages:
+                        self.interface.conversations.add_messages(new_messages)
+                except Exception:
+                    logger.debug("Failed to append agent messages to persistent history.", exc_info=True)
             except Exception as e:
                 logger.error(f"Failed to process user message: {e}", exc_info=True)
                 self.interface.event_bus.dispatch(

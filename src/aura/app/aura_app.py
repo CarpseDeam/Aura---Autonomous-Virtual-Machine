@@ -7,6 +7,7 @@ from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.conversation_management_service import ConversationManagementService
+from src.aura.services.conversation_persistence_service import ConversationPersistenceService
 from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
@@ -42,7 +43,11 @@ class AuraApp:
         self.image_storage_service = ImageStorageService()
         # CRITICAL: Instantiation order matters for dependencies
         # EventBus -> ASTService -> WorkspaceService -> Other services
-        self.conversation_management_service = ConversationManagementService(self.event_bus)
+        self.conversation_persistence_service = ConversationPersistenceService()
+        self.conversation_management_service = ConversationManagementService(
+            self.event_bus,
+            self.conversation_persistence_service,
+        )
         self.ast_service = ASTService(self.event_bus)
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR, self.ast_service)
         self.context_retrieval_service = ContextRetrievalService(self.ast_service)
