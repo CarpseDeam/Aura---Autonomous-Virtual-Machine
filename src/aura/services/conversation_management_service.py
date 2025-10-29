@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.aura.models.session import Session
 from src.aura.app.event_bus import EventBus
@@ -45,7 +45,7 @@ class ConversationManagementService:
             return None
         return self.sessions.get(self.active_session_id)
 
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content: str, images: Optional[List[Dict[str, Any]]] = None):
         """
         Adds a message to the history of the active session.
 
@@ -54,6 +54,7 @@ class ConversationManagementService:
         Args:
             role: The role of the message sender (e.g., 'user', 'model').
             content: The content of the message.
+            images: Optional list of image payloads attached to the message.
         """
         if not self.active_session_id:
             # The event parameter is not used, so we can pass None
@@ -61,9 +62,12 @@ class ConversationManagementService:
 
         session = self.get_active_session()
         if session:
-            session.history.append({"role": role, "content": content})
+            message: Dict[str, Any] = {"role": role, "content": content}
+            if images:
+                message["images"] = images
+            session.history.append(message)
 
-    def get_history(self) -> List[Dict[str, str]]:
+    def get_history(self) -> List[Dict[str, Any]]:
         """
         Retrieves the message history of the active session.
 
@@ -73,4 +77,3 @@ class ConversationManagementService:
         """
         session = self.get_active_session()
         return session.history if session else []
-

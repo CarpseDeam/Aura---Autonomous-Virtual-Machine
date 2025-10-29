@@ -84,8 +84,19 @@ class AuraExecutor:
         if not prompt:
             raise RuntimeError("Failed to render chitchat prompt")
 
+        # Detect any images attached to the latest user message
+        latest_user_message = next(
+            (msg for msg in reversed(recent_history or []) if (msg or {}).get("role") == "user"),
+            None,
+        )
+        attachments = []
+        if latest_user_message:
+            attachments = list((latest_user_message or {}).get("images") or [])
+
+        prompt_payload = {"text": prompt, "images": attachments} if attachments else prompt
+
         try:
-            stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt)
+            stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt_payload)
         except Exception as exc:
             logger.error("Streaming chitchat reply failed: %s", exc, exc_info=True)
             raise RuntimeError("Failed to stream conversational reply.") from exc

@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import List, Dict, Any, Generator
+from typing import Any, Dict, Generator, List, Optional
 
 import google.generativeai as genai
 
@@ -29,6 +29,29 @@ class GeminiProvider(LLMProvider):
                 logger.error(f"Failed to configure Gemini API: {e}", exc_info=True)
                 self.configured = False
 
+    @staticmethod
+    def _build_parts(text: Optional[str], images: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """
+        Combine text and optional images into Gemini content parts.
+        """
+        parts: List[Dict[str, Any]] = []
+        if text:
+            parts.append({"text": text})
+        for image in images or []:
+            data = image.get("data")
+            if not data:
+                continue
+            mime_type = image.get("mime_type") or "image/png"
+            parts.append({
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": data,
+                }
+            })
+        if not parts:
+            parts.append({"text": ""})
+        return parts
+
     @property
     def provider_name(self) -> str:
         """Returns the name of the provider."""
@@ -56,7 +79,7 @@ class GeminiProvider(LLMProvider):
     def stream_chat(
         self,
         model_name: str,
-        prompt: str,
+        prompt: Any,
         config: Dict[str, Any]
     ) -> Generator[str, None, None]:
         """
@@ -73,7 +96,17 @@ class GeminiProvider(LLMProvider):
                 top_p=config.get("top_p", 1.0)
             )
             model = genai.GenerativeModel(model_name, generation_config=generation_config)
-            response_stream = model.generate_content(prompt, stream=True)
+
+            if isinstance(prompt, dict):
+                text_prompt = prompt.get("text")
+                image_payloads = prompt.get("images") or []
+                parts = self._build_parts(text_prompt, image_payloads)
+                response_stream = model.generate_content(
+                    [{"role": "user", "parts": parts}],
+                    stream=True
+                )
+            else:
+                response_stream = model.generate_content(prompt, stream=True)
 
             for chunk in response_stream:
                 try:
@@ -90,7 +123,7 @@ class GeminiProvider(LLMProvider):
     def stream_chat_structured(
         self,
         model_name: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         config: Dict[str, Any]
     ) -> Generator[str, None, None]:
         """
@@ -109,15 +142,20 @@ class GeminiProvider(LLMProvider):
             
             # Extract system instruction and convert messages to Gemini format
             system_instruction = None
-            chat_history = []
+            chat_history: List[Dict[str, Any]] = []
             
             for message in messages:
-                if message['role'] == 'system':
-                    system_instruction = message['content']
-                elif message['role'] == 'user':
-                    chat_history.append({'role': 'user', 'parts': [message['content']]})
-                elif message['role'] == 'assistant':
-                    chat_history.append({'role': 'model', 'parts': [message['content']]})
+                role = message.get('role')
+                content = message.get('content')
+                images = message.get('images') or []
+
+                if role == 'system' and system_instruction is None:
+                    system_instruction = content
+                    continue
+
+                mapped_role = 'user' if role == 'user' else 'model'
+                parts = self._build_parts(content, images)
+                chat_history.append({'role': mapped_role, 'parts': parts})
             
             # Create model with system instruction
             model = genai.GenerativeModel(
@@ -126,19 +164,21 @@ class GeminiProvider(LLMProvider):
                 system_instruction=system_instruction
             )
             
-            # Start chat with history (excluding the last user message)
-            user_messages = [msg for msg in chat_history if msg['role'] == 'user']
-            if len(user_messages) > 1:
-                # If there's conversation history, use it
-                chat = model.start_chat(history=chat_history[:-1])
-                response_stream = chat.send_message(chat_history[-1]['parts'][0], stream=True)
-            else:
-                # First message - no history
-                if chat_history:
-                    response_stream = model.generate_content(chat_history[-1]['parts'][0], stream=True)
+            response_stream = None
+            if chat_history and chat_history[-1]['role'] == 'user':
+                last_message = chat_history[-1]
+                prior_history = chat_history[:-1]
+                if prior_history:
+                    chat = model.start_chat(history=prior_history)
+                    response_stream = chat.send_message(last_message['parts'], stream=True)
                 else:
-                    # Fallback to system instruction only
-                    response_stream = model.generate_content("Please respond", stream=True)
+                    response_stream = model.generate_content(
+                        [{"role": "user", "parts": last_message['parts']}],
+                        stream=True
+                    )
+            else:
+                # Fallback: send entire history as a single request
+                response_stream = model.generate_content(chat_history or [{"role": "user", "parts": self._build_parts(None, None)}], stream=True)
 
             for chunk in response_stream:
                 try:

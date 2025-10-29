@@ -11,7 +11,7 @@ AVAILABLE ACTIONS:
 
 CONVERSATION HISTORY:
 {% for message in conversation_history %}
-- {{ message.role }}: {{ message.content }}
+- {{ message.role }}: {{ message.content | default('') }}{% if message.images %} [Image attached]{% endif %}
 {% endfor %}
 
 USER REQUEST:

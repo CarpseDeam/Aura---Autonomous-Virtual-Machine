@@ -1,7 +1,7 @@
 import logging
 import json
 import copy
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.aura.app.event_bus import EventBus
 from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
@@ -94,14 +94,14 @@ class LLMService:
         return provider, model_name, config
 
     # ------------------- Public Dispatcher APIs -------------------
-    def stream_chat_for_agent(self, agent_name: str, prompt: str):
+    def stream_chat_for_agent(self, agent_name: str, prompt: Any):
         """Return a generator streaming chunks for the configured agent."""
         provider, model_name, config = self._get_provider_for_agent(agent_name)
         if not provider or not model_name:
             raise ValueError(f"Agent '{agent_name}' is not configured with a valid model.")
         return provider.stream_chat(model_name, prompt, config)
 
-    def stream_structured_for_agent(self, agent_name: str, messages: List[Dict[str, str]]):
+    def stream_structured_for_agent(self, agent_name: str, messages: List[Dict[str, Any]]):
         provider, model_name, config = self._get_provider_for_agent(agent_name)
         if not provider or not model_name:
             raise ValueError(f"Agent '{agent_name}' is not configured with a valid model.")
@@ -111,7 +111,10 @@ class LLMService:
         prompt_parts = []
         for m in messages:
             role_prefix = f"{m['role'].capitalize()}: " if m['role'] != 'system' else ""
-            prompt_parts.append(f"{role_prefix}{m['content']}")
+            content = m.get("content", "")
+            if m.get("images"):
+                content = f"{content} [Image attached]" if content else "[Image attached]"
+            prompt_parts.append(f"{role_prefix}{content}")
         return provider.stream_chat(model_name, "\n\n".join(prompt_parts), config)
 
     def run_for_agent(self, agent_name: str, prompt: str) -> str:
@@ -133,3 +136,13 @@ class LLMService:
             payload={"models": models_by_provider}
         ))
 
+    # ------------------- Capability Queries -------------------
+    def get_provider_name_for_agent(self, agent_name: str) -> Optional[str]:
+        provider, _, _ = self._get_provider_for_agent(agent_name)
+        if provider:
+            return provider.provider_name
+        return None
+
+    def provider_supports_vision(self, agent_name: str) -> bool:
+        provider_name = (self.get_provider_name_for_agent(agent_name) or "").lower()
+        return provider_name == "google"

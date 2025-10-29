@@ -76,13 +76,27 @@ class AuraInterface:
         )
 
     def _handle_user_message(self, event: Event) -> None:
-        user_text = (event.payload or {}).get("text", "").strip()
-        if not user_text:
+        payload = event.payload or {}
+        user_text_raw = payload.get("text") or ""
+        image_attachment = payload.get("image")
+        user_text = user_text_raw.strip()
+
+        if not user_text and not image_attachment:
             self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Empty user request received."}))
             return
 
+        if image_attachment and not self.executor.llm.provider_supports_vision("lead_companion_agent"):
+            self.event_bus.dispatch(Event(
+                event_type="MODEL_ERROR",
+                payload={
+                    "message": "Image attachments are only supported when a Gemini model is selected. "
+                               "Please switch to a Gemini model in Settings."
+                }
+            ))
+            return
+
         # Run heavy logic on a background thread
-        worker = BrainExecutorWorker(self, user_text)
+        worker = BrainExecutorWorker(self, user_text, image_attachment=image_attachment)
         worker.signals.error.connect(lambda msg: self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": msg})))
         # finished signal available for potential UI hooks; no-op here
         worker.signals.finished.connect(lambda: None)

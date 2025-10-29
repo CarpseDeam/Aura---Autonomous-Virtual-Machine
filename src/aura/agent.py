@@ -72,7 +72,11 @@ class AuraAgent:
         """Kick off the cyclical think-act-observe loop with the user request."""
         # Initialize state with user input as the first message
         messages = list(context.conversation_history or [])
-        messages.append({"role": "user", "content": request})
+        latest_images = (context.extras or {}).get("latest_user_images")
+        user_message = {"role": "user", "content": request}
+        if latest_images:
+            user_message["images"] = latest_images
+        messages.append(user_message)
 
         state: AgentState = {
             "input": request,

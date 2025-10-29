@@ -1,6 +1,6 @@
 import logging
 from html import escape
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import markdown
 
 from PySide6.QtWidgets import (
@@ -360,16 +360,36 @@ class MainWindow(QMainWindow):
                 self._display_system_message("WORKSPACE", f"Importing project from: {project_path}")
 
     # Input/Output
-    def _log_user_message(self, user_text: str):
+    def _log_user_message(self, user_text: str, image: Optional[Dict[str, Any]] = None):
         """Display a single user bubble using basic block HTML."""
-        safe_text = escape(user_text).replace("\n", "<br>")
+        safe_text = escape(user_text).replace("\n", "<br>") if user_text else ""
+
+        content_parts: List[str] = []
+        if safe_text:
+            content_parts.append(safe_text)
+
+        if image and image.get("data"):
+            mime_type = image.get("mime_type") or "image/png"
+            image_html = (
+                '<div style="margin-top: 10px; text-align: center;">'
+                f'<img src="data:{mime_type};base64,{image["data"]}" '
+                'style="max-width: 260px; max-height: 180px; border-radius: 6px; '
+                'border: 1px solid rgba(255, 255, 255, 0.2); display: block; margin: 0 auto;" '
+                'alt="User attached image" />'
+                '</div>'
+            )
+            content_parts.append(image_html)
+
+        if not content_parts:
+            content_parts.append('<span style="color: #7CC4FF;">[Image attached]</span>')
+
         user_html = (
             '<div style="margin: 15px 0; text-align: right;">'
             '<div style="display: inline-block; max-width: 65%; background-color: #34536d; '
             'color: #f5f8ff; padding: 14px; border-radius: 8px; text-align: left; '
             "font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.55;\">"
             '<strong style="color: #7CC4FF; font-size: 11px;">YOU</strong><br>'
-            f"{safe_text}"
+            f"{''.join(content_parts)}"
             "</div>"
             "</div>"
             "<br>"
@@ -430,17 +450,23 @@ class MainWindow(QMainWindow):
         self.chat_display.ensureCursorVisible()
 
     def _send_message(self):
-        user_text = self.chat_input.toPlainText().strip()
-        if not user_text:
+        raw_text = self.chat_input.toPlainText()
+        image_attachment = self.chat_input.take_attached_image()
+        user_text = raw_text.strip()
+        if not user_text and not image_attachment:
             return
+
         self.chat_input.clear()
         self.chat_input.setEnabled(False)
 
         # Display user message instantly
-        self._log_user_message(user_text)
+        self._log_user_message(user_text, image_attachment)
 
         self.thinking_indicator.start_thinking("Analyzing your request...")
-        self.event_bus.dispatch(Event(event_type="SEND_USER_MESSAGE", payload={"text": user_text}))
+        payload: Dict[str, Any] = {"text": user_text}
+        if image_attachment:
+            payload["image"] = image_attachment
+        self.event_bus.dispatch(Event(event_type="SEND_USER_MESSAGE", payload=payload))
 
     def _handle_model_chunk(self, chunk: str):
         if not self.is_streaming_response:

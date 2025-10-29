@@ -1,5 +1,7 @@
 import logging
 
+from typing import Any, Dict, Optional
+
 from PySide6.QtCore import QObject, Signal, QRunnable
 
 from src.aura.models.events import Event
@@ -23,21 +25,27 @@ class BrainExecutorWorker(QRunnable):
     and emits signals on error and completion.
     """
 
-    def __init__(self, interface, user_text: str):
+    def __init__(self, interface, user_text: str, image_attachment: Optional[Dict[str, Any]] = None):
         super().__init__()
         self.interface = interface
         self.user_text = user_text
+        self.image_attachment = image_attachment
         self.signals = WorkerSignals()
 
     def run(self):
         try:
             try:
-                self.interface.conversations.add_message("user", self.user_text)
+                images = [self.image_attachment] if self.image_attachment else None
+                self.interface.conversations.add_message("user", self.user_text, images=images)
             except Exception:
                 logger.debug("Failed to append to conversation history; continuing.")
 
             try:
                 ctx = self.interface._build_context()
+                if self.image_attachment:
+                    ctx_extras = dict(ctx.extras or {})
+                    ctx_extras["latest_user_images"] = [self.image_attachment]
+                    ctx.extras = ctx_extras
                 self.interface.agent.invoke(self.user_text, ctx)
             except Exception as e:
                 logger.error(f"Failed to process user message: {e}", exc_info=True)
