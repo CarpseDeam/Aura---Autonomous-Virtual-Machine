@@ -364,11 +364,11 @@ class MainWindow(QMainWindow):
         """Display user message instantly using HTML."""
         processed_user_text = escape(user_text).replace('\n', '<br>')
         user_html = f"""
-        <div style="margin: 16px 0; text-align: right;">
-            <span style="display: inline-block; max-width: 70%; background-color: #2c3e50; color: #ffffff; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(100, 181, 246, 0.15); word-wrap: break-word;">
+        <div style="display: block; clear: both; margin: 16px 0;">
+            <div style="display: inline-block; float: right; max-width: 70%; background-color: #2c3e50; color: #ffffff; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(100, 181, 246, 0.15); word-wrap: break-word;">
                 <span style="display: block; font-weight: bold; margin-bottom: 8px; color: #9bd0ff;">[USER]</span>
                 <span style="white-space: pre-wrap;">{processed_user_text}</span>
-            </span>
+            </div>
         </div>
         """
         self.chat_display.moveCursor(QTextCursor.End)
@@ -399,8 +399,8 @@ class MainWindow(QMainWindow):
 
         styled_html = f"""
         {AURA_RESPONSE_CSS}
-        <div style="margin: 16px 0; text-align: left;">
-            <div style="display: inline-block; max-width: 80%; background-color: #3a2b1f; color: #FFB74D; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(255, 183, 77, 0.12); word-wrap: break-word;">
+        <div style="display: block; clear: both; margin: 16px 0;">
+            <div style="display: inline-block; float: left; max-width: 80%; background-color: #3a2b1f; color: #FFB74D; padding: 12px 16px; border-radius: 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; text-align: left; box-shadow: 0 0 6px rgba(255, 183, 77, 0.12); word-wrap: break-word;">
                 <div style="font-weight: bold; margin-bottom: 8px; color: #FFB74D;">[AURA]</div>
                 <div class="aura-response-content">
                     {html_content}
