@@ -365,9 +365,10 @@ class MainWindow(QMainWindow):
         safe_text = escape(user_text).replace("\n", "<br>")
         user_html = (
             '<div style="margin: 15px 0; text-align: right;">'
-            '<div style="display: inline-block; max-width: 65%; background-color: #2c3e50; '
-            'color: #ecf0f1; padding: 12px; border-radius: 8px; text-align: left;">'
-            '<strong style="color: #64B5F6; font-size: 11px;">YOU</strong><br>'
+            '<div style="display: inline-block; max-width: 65%; background-color: #34536d; '
+            'color: #f5f8ff; padding: 14px; border-radius: 8px; text-align: left; '
+            "font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.55;\">"
+            '<strong style="color: #7CC4FF; font-size: 11px;">YOU</strong><br>'
             f"{safe_text}"
             "</div>"
             "</div>"
@@ -389,11 +390,36 @@ class MainWindow(QMainWindow):
             ],
             output_format="html5",
         )
+        heading_styles = {
+            "h1": "color: #FFF3D2; font-size: 18px; margin: 10px 0 6px 0;",
+            "h2": "color: #FFEFC5; font-size: 17px; margin: 10px 0 6px 0;",
+            "h3": "color: #FFEBC0; font-size: 16px; margin: 8px 0 4px 0;",
+            "h4": "color: #FFE7B8; font-size: 15px; margin: 8px 0 4px 0;",
+            "h5": "color: #FFE3B0; font-size: 14px; margin: 6px 0 4px 0;",
+            "h6": "color: #FFDFA6; font-size: 13px; margin: 6px 0 4px 0;",
+        }
+        for tag, style in heading_styles.items():
+            html_content = html_content.replace(
+                f"<{tag}>", f"<{tag} style=\"{style}\">"
+            )
+        html_content = html_content.replace(
+            "<pre>",
+            "<pre style=\"background-color: #211207; color: #FFEBD2; padding: 10px; "
+            "border-radius: 6px; border-left: 3px solid #FFCF8C; margin: 8px 0; "
+            "white-space: pre-wrap; font-family: 'JetBrains Mono', monospace; font-size: 13px;\">",
+        )
+        html_content = html_content.replace(
+            "<code>",
+            "<code style=\"background-color: #3a2310; color: #FFEBD2; padding: 2px 6px; "
+            "border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 13px;\">",
+        )
+        html_content = html_content.replace("<p>", "<p style=\"margin: 6px 0;\">")
         aura_html = (
             '<div style="margin: 15px 0; text-align: left;">'
-            '<div style="display: inline-block; max-width: 70%; background-color: #3a2818; '
-            'color: #FFB74D; padding: 12px; border-radius: 8px;">'
-            '<strong style="color: #FFD27F; font-size: 11px;">AURA</strong><br>'
+            '<div style="display: inline-block; max-width: 70%; background-color: #2a170a; '
+            'color: #FFEBD2; padding: 14px; border-radius: 8px; '
+            "font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.55;\">"
+            '<strong style="color: #FFEFC5; font-size: 11px;">AURA</strong><br>'
             f"{html_content}"
             "</div>"
             "</div>"
