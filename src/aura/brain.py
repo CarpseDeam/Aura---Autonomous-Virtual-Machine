@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from src.aura.models.action import Action, ActionType
 from src.aura.models.project_context import ProjectContext
@@ -15,9 +15,96 @@ logger = logging.getLogger(__name__)
 class AuraBrain:
     """Brain layer: the single source of truth for decisions."""
 
+    _CODE_TASK_VERBS: Tuple[str, ...] = (
+        "add",
+        "build",
+        "change",
+        "create",
+        "extend",
+        "fix",
+        "generate",
+        "implement",
+        "modify",
+        "refactor",
+        "scaffold",
+        "update",
+        "upgrade",
+        "write",
+    )
+    _CODE_TASK_NOUNS: Tuple[str, ...] = (
+        "api",
+        "app",
+        "application",
+        "blueprint",
+        "cli",
+        "command",
+        "component",
+        "config",
+        "endpoint",
+        "feature",
+        "file",
+        "flag",
+        "function",
+        "handler",
+        "library",
+        "module",
+        "pipeline",
+        "project",
+        "script",
+        "service",
+        "tool",
+        "ui",
+    )
+    _CODE_TASK_PHRASES: Tuple[str, ...] = (
+        "generate code",
+        "create a project",
+        "build me",
+        "scaffold",
+        "bootstrap",
+        "refactor the",
+        "fix the bug",
+        "add a feature",
+        "modify the code",
+        "update the code",
+        "change the code",
+        "implement the",
+    )
+    _CODE_FILE_EXT_PATTERN = re.compile(
+        r"\b[\w/\-]+\.(py|js|ts|tsx|jsx|java|go|rs|rb|swift|kt|c|cpp|cs|sh|ps1|json|yaml|yml|toml|ini|cfg|md|txt)\b"
+    )
+
     def __init__(self, llm: LLMService, prompts: PromptManager):
         self.llm = llm
         self.prompts = prompts
+
+    def is_code_request(self, user_text: str) -> bool:
+        """Heuristically determine whether the user is asking for code generation or edits."""
+        if not isinstance(user_text, str):
+            return False
+        normalized = " ".join(user_text.lower().split())
+        if not normalized:
+            return False
+
+        if any(phrase in normalized for phrase in self._CODE_TASK_PHRASES):
+            return True
+
+        if self._CODE_FILE_EXT_PATTERN.search(normalized):
+            return True
+
+        if "--" in normalized and any(verb in normalized for verb in ("add", "update", "enable", "introduce", "support")):
+            return True
+
+        verb_hit = any(re.search(rf"\b{re.escape(verb)}\b", normalized) for verb in self._CODE_TASK_VERBS)
+        if not verb_hit:
+            return False
+
+        if any(re.search(rf"\b{re.escape(noun)}\b", normalized) for noun in self._CODE_TASK_NOUNS):
+            return True
+
+        if "code" in normalized or "project" in normalized or "app" in normalized or "bug" in normalized:
+            return True
+
+        return False
 
     def decide(self, user_text: str, context: ProjectContext) -> Action:
         """Return the next Action based on the user input and context."""

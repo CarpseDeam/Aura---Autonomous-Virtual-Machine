@@ -70,6 +70,42 @@ class AuraExecutor:
             return Result(ok=False, kind="unknown", error="Unsupported action type", data={})
         return tool(action, project_context)
 
+    def execute_blueprint(self, user_request: str, project_context: ProjectContext) -> Dict[str, Any]:
+        """Run the full blueprint workflow (design + code generation) for a request."""
+        if not isinstance(user_request, str) or not user_request.strip():
+            raise ValueError("user_request must be a non-empty string")
+
+        request_text = user_request.strip()
+        logger.info("Executing blueprint workflow for routed code request.")
+
+        action = Action(type=ActionType.DESIGN_BLUEPRINT, params={"request": request_text})
+        blueprint = self.execute_design_blueprint(action, project_context)
+        blueprint_data = blueprint if isinstance(blueprint, dict) else {}
+
+        try:
+            self.event_bus.dispatch(Event(event_type="BLUEPRINT_GENERATED", payload=blueprint_data))
+        except Exception:
+            logger.debug("Failed to dispatch BLUEPRINT_GENERATED event.", exc_info=True)
+
+        planned_specs = self._files_from_blueprint(blueprint_data)
+        for spec in planned_specs:
+            try:
+                self.execute_generate_code_for_spec(spec, request_text)
+            except Exception as exc:
+                logger.error("Failed to generate code for spec %s: %s", spec.get("file_path"), exc, exc_info=True)
+
+        try:
+            self.event_bus.dispatch(Event(event_type="BUILD_COMPLETED", payload={}))
+        except Exception:
+            logger.debug("Failed to dispatch BUILD_COMPLETED event.", exc_info=True)
+
+        file_paths = [
+            spec.get("file_path")
+            for spec in planned_specs
+            if isinstance(spec, dict) and isinstance(spec.get("file_path"), str)
+        ]
+        return {"blueprint": blueprint_data, "planned_files": file_paths}
+
     # --------------- Workflows ---------------
     def execute_research(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
         topic = action.get_param("topic") or action.get_param("subject") or action.get_param("request", "")

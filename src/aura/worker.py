@@ -49,6 +49,20 @@ class BrainExecutorWorker(QRunnable):
                     ctx_extras = dict(ctx.extras or {})
                     ctx_extras["latest_user_images"] = [image_payload]
                     ctx.extras = ctx_extras
+
+                if self.interface.brain.is_code_request(self.user_text):
+                    logger.info("Routing request to executor blueprint workflow instead of agent loop.")
+                    try:
+                        outcome = self.interface.executor.execute_blueprint(self.user_text, ctx)
+                    except Exception as exc:
+                        logger.error("Blueprint workflow execution failed: %s", exc, exc_info=True)
+                        self.interface.event_bus.dispatch(
+                            Event(event_type="MODEL_ERROR", payload={"message": "Unable to generate code for your request."})
+                        )
+                        return
+                    self._record_blueprint_summary(outcome)
+                    return
+
                 final_state = self.interface.agent.invoke(self.user_text, ctx)
                 try:
                     final_messages = list((final_state or {}).get("messages") or [])
@@ -89,3 +103,39 @@ class BrainExecutorWorker(QRunnable):
             if "path" in image or "relative_path" in image or "data" in image:
                 return image
         return image
+
+    def _record_blueprint_summary(self, outcome: Optional[Dict[str, Any]]) -> None:
+        if not isinstance(outcome, dict):
+            return
+
+        planned_files = []
+        raw_files = outcome.get("planned_files")
+        if isinstance(raw_files, list):
+            planned_files = [
+                str(path)
+                for path in raw_files
+                if isinstance(path, (str, Path))
+            ]
+        summary: str
+        if planned_files:
+            preview = ", ".join(planned_files[:3])
+            if len(planned_files) > 3:
+                preview = f"{preview}, ..."
+            summary = f"Blueprint generated. Working on {len(planned_files)} file(s): {preview}"
+        else:
+            summary = "Blueprint generated. Working on the requested code changes."
+
+        try:
+            self.interface.conversations.add_message(
+                "assistant",
+                summary,
+                metadata={"action_type": "design_blueprint"},
+            )
+        except Exception:
+            logger.debug("Failed to append blueprint summary to conversation history.", exc_info=True)
+
+        try:
+            self.interface.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": summary}))
+            self.interface.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+        except Exception:
+            logger.debug("Failed to dispatch conversation stream events for blueprint summary.", exc_info=True)
