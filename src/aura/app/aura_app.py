@@ -51,7 +51,7 @@ class AuraApp:
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR, self.ast_service)
         self.context_retrieval_service = ContextRetrievalService(self.ast_service)
         # Phoenix Initiative: Initialize BlueprintValidator for Quality Gate
-        self.validation_service = BlueprintValidator()
+        self.validation_service = BlueprintValidator(self.event_bus)
         # Low-level LLM dispatcher
         self.llm_service = LLMService(self.event_bus, self.image_storage_service)
         # New 3-layer architecture
