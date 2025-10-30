@@ -2,6 +2,10 @@ import os
 import logging
 import difflib
 import uuid
+import shutil
+import atexit
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,11 +41,23 @@ class WorkspaceService:
         self.active_project_path: Optional[Path] = None
         self.auto_accept_changes: bool = get_auto_accept_changes()
         self._pending_changes: Dict[str, Dict[str, Any]] = {}
-        
+        self._backup_dir: Optional[Path] = None
+        self._change_history: List[Dict[str, Any]] = []
+
         # Ensure workspace root exists
         self.workspace_root.mkdir(parents=True, exist_ok=True)
-        
+
+        # Initialize backup directory
+        self._init_backup_dir()
+
+        # Register cleanup on shutdown
+        atexit.register(self._cleanup_backups)
+
         self._register_event_handlers()
+
+        # Load any persisted pending changes
+        self._load_pending_changes()
+
         logger.info(f"WorkspaceService initialized with workspace root: {self.workspace_root}")
 
     def _register_event_handlers(self):
@@ -378,6 +394,7 @@ class WorkspaceService:
             logger.info("Auto-accept disabled; staging change %s for review.", change_id)
             self._pending_changes[change_id] = change_entry
             self._emit_diff_ready(change_entry, pending=True, auto_applied=False)
+            self._save_pending_changes()
 
     def _build_change_entry(
         self,
@@ -534,19 +551,45 @@ class WorkspaceService:
         try:
             self._apply_change_files(change_entry)
             self._pending_changes.pop(change_id, None)
+            self._save_pending_changes()
             self._emit_diff_ready(change_entry, pending=False, auto_applied=auto_applied)
             self._emit_changes_applied(change_entry, auto_applied=auto_applied)
         except Exception as exc:
             logger.error(f"Failed to apply change {change_id}: {exc}", exc_info=True)
 
     def _apply_change_files(self, change_entry: Dict[str, Any]) -> None:
+        change_id = change_entry.get("change_id")
+        backup_entries = []
+
         for file_info in change_entry.get("files", []):
             relative_path = file_info.get("relative_path")
             code = file_info.get("code", "")
             if relative_path is None:
                 logger.warning("Skipping file without relative_path in change entry.")
                 continue
-            self._write_file(relative_path, code)
+
+            # Create backup before writing
+            target_file = self.active_project_path / relative_path
+            backup_path = self._backup_file(target_file)
+
+            # Store backup metadata
+            if backup_path:
+                file_info["backup_path"] = str(backup_path)
+                file_info["target_path"] = str(target_file)
+                backup_entries.append({
+                    "backup_path": str(backup_path),
+                    "target_path": str(target_file),
+                    "relative_path": relative_path
+                })
+
+            try:
+                self._write_file(relative_path, code)
+            except Exception as exc:
+                # If write fails, restore from backup
+                logger.error(f"Failed to write file {relative_path}, restoring backup: {exc}")
+                if backup_path:
+                    self._restore_backup(backup_path, target_file)
+                raise
 
             line_count = file_info.get("line_count", 0)
             self.event_bus.dispatch(Event(
@@ -559,6 +602,14 @@ class WorkspaceService:
                     "line_count": line_count,
                 }
             ))
+
+        # Add to change history if backups were created
+        if backup_entries:
+            self._change_history.append({
+                "change_id": change_id,
+                "files": backup_entries,
+                "timestamp": datetime.now().isoformat()
+            })
 
     def _write_file(self, relative_path: str, code: str) -> None:
         if not self.active_project_path:
@@ -631,5 +682,222 @@ class WorkspaceService:
             logger.warning("No pending changes found for id %s.", change_id)
             return
 
+        self._save_pending_changes()
         logger.info("Rejected pending change %s.", change_id)
         self._emit_changes_rejected(change_entry)
+
+    # ==================== Backup & Rollback System ====================
+
+    def _init_backup_dir(self) -> None:
+        """Initialize the backup directory for the current session."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._backup_dir = self.workspace_root / ".aura_backups" / f"session_{timestamp}"
+        self._backup_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Backup directory initialized: {self._backup_dir}")
+
+    def _backup_file(self, file_path: Path) -> Optional[Path]:
+        """
+        Create a backup of a file before modifying it.
+
+        Args:
+            file_path: Absolute path to the file to backup
+
+        Returns:
+            Path to the backup file, or None if backup failed or file doesn't exist
+        """
+        if not file_path.exists():
+            logger.debug(f"No backup needed for {file_path} (file does not exist)")
+            return None
+
+        if not self._backup_dir:
+            logger.error("Backup directory not initialized")
+            return None
+
+        try:
+            # Create a unique backup filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            relative_path = file_path.relative_to(self.active_project_path)
+            backup_path = self._backup_dir / f"{timestamp}_{relative_path.as_posix().replace('/', '_')}"
+
+            # Ensure backup directory exists
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Copy the file to backup location
+            shutil.copy2(file_path, backup_path)
+            logger.info(f"Created backup: {file_path} -> {backup_path}")
+
+            return backup_path
+
+        except Exception as exc:
+            logger.error(f"Failed to create backup for {file_path}: {exc}", exc_info=True)
+            return None
+
+    def _restore_backup(self, backup_path: Path, target_path: Path) -> bool:
+        """
+        Restore a file from backup.
+
+        Args:
+            backup_path: Path to the backup file
+            target_path: Path where the file should be restored
+
+        Returns:
+            True if restore succeeded, False otherwise
+        """
+        if not backup_path.exists():
+            logger.error(f"Backup file does not exist: {backup_path}")
+            return False
+
+        try:
+            # Ensure target directory exists
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Restore the file
+            shutil.copy2(backup_path, target_path)
+            logger.info(f"Restored file from backup: {backup_path} -> {target_path}")
+
+            return True
+
+        except Exception as exc:
+            logger.error(f"Failed to restore backup {backup_path} to {target_path}: {exc}", exc_info=True)
+            return False
+
+    def rollback_last_change(self) -> bool:
+        """
+        Rollback the most recent change by restoring from backup.
+
+        Returns:
+            True if rollback succeeded, False otherwise
+        """
+        if not self._change_history:
+            logger.warning("No changes to rollback")
+            return False
+
+        # Get the most recent change
+        last_change = self._change_history[-1]
+        change_id = last_change.get("change_id")
+
+        logger.info(f"Rolling back change {change_id}")
+
+        success = True
+        restored_files = []
+
+        try:
+            # Restore all files in the change
+            for file_entry in last_change.get("files", []):
+                backup_path = file_entry.get("backup_path")
+                target_path_str = file_entry.get("target_path")
+
+                if not backup_path or not target_path_str:
+                    logger.warning(f"Missing backup info for file in change {change_id}")
+                    continue
+
+                backup_path = Path(backup_path)
+                target_path = Path(target_path_str)
+
+                if self._restore_backup(backup_path, target_path):
+                    restored_files.append(str(target_path))
+                else:
+                    success = False
+
+            if success:
+                # Remove from history
+                self._change_history.pop()
+
+                # Emit rollback event
+                self.event_bus.dispatch(Event(
+                    event_type="CHANGE_ROLLED_BACK",
+                    payload={
+                        "change_id": change_id,
+                        "restored_files": restored_files
+                    }
+                ))
+
+                logger.info(f"Successfully rolled back change {change_id}")
+            else:
+                logger.error(f"Rollback of change {change_id} completed with errors")
+
+            return success
+
+        except Exception as exc:
+            logger.error(f"Failed to rollback change {change_id}: {exc}", exc_info=True)
+            return False
+
+    def _cleanup_backups(self) -> None:
+        """Clean up backup directory on shutdown."""
+        if not self._backup_dir or not self._backup_dir.exists():
+            return
+
+        try:
+            # Only remove the current session's backup directory
+            shutil.rmtree(self._backup_dir)
+            logger.info(f"Cleaned up backup directory: {self._backup_dir}")
+
+        except Exception as exc:
+            logger.warning(f"Failed to clean up backup directory: {exc}")
+
+    # ==================== Pending Changes Persistence ====================
+
+    def _get_pending_changes_file(self) -> Optional[Path]:
+        """Get the path to the pending changes JSON file."""
+        if not self.active_project_path:
+            return None
+        return self.active_project_path / "workspace_pending_changes.json"
+
+    def _save_pending_changes(self) -> None:
+        """Save pending changes to disk as JSON."""
+        pending_file = self._get_pending_changes_file()
+        if not pending_file:
+            logger.debug("No active project, cannot save pending changes")
+            return
+
+        try:
+            # Serialize pending changes to JSON
+            serializable_changes = {}
+            for change_id, change_entry in self._pending_changes.items():
+                serializable_changes[change_id] = {
+                    "change_id": change_entry.get("change_id"),
+                    "files": change_entry.get("files", []),
+                    "origin": change_entry.get("origin"),
+                    "task_id": change_entry.get("task_id"),
+                    "summary": change_entry.get("summary", {}),
+                    "timestamp": datetime.now().isoformat()
+                }
+
+            with open(pending_file, 'w', encoding='utf-8') as f:
+                json.dump(serializable_changes, f, indent=2)
+
+            logger.debug(f"Saved {len(self._pending_changes)} pending changes to {pending_file}")
+
+        except Exception as exc:
+            logger.error(f"Failed to save pending changes: {exc}", exc_info=True)
+
+    def _load_pending_changes(self) -> None:
+        """Load pending changes from disk on initialization."""
+        pending_file = self._get_pending_changes_file()
+        if not pending_file or not pending_file.exists():
+            logger.debug("No pending changes file found")
+            return
+
+        try:
+            with open(pending_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            if not isinstance(data, dict):
+                logger.warning("Invalid pending changes file format")
+                return
+
+            # Load changes back into memory
+            for change_id, change_entry in data.items():
+                self._pending_changes[change_id] = change_entry
+
+            logger.info(f"Loaded {len(self._pending_changes)} pending changes from disk")
+
+            # Emit FILE_DIFF_READY events for each loaded change so UI can display them
+            for change_entry in self._pending_changes.values():
+                self._emit_diff_ready(change_entry, pending=True, auto_applied=False)
+
+        except json.JSONDecodeError as exc:
+            logger.error(f"Corrupted pending changes file: {exc}")
+            # Don't fail initialization, just continue with empty pending changes
+        except Exception as exc:
+            logger.error(f"Failed to load pending changes: {exc}", exc_info=True)

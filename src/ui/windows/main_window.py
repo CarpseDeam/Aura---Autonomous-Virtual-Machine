@@ -770,18 +770,62 @@ class MainWindow(QMainWindow):
         )
 
     def _format_diff_lines(self, diff_text: str) -> str:
+        """
+        Format diff lines with syntax highlighting and line number extraction.
+
+        Parses unified diff headers (@@ -X,Y +A,B @@) to extract and display
+        line numbers for easier navigation in large files.
+        """
+        import re
+
         lines_html: List[str] = []
         for raw_line in (diff_text or "").splitlines():
             line = raw_line or ""
-            if line.startswith("+") and not line.startswith("+++"):
+
+            # Check if this is a hunk header with line numbers
+            if line.startswith("@@"):
+                # Parse the hunk header to extract line numbers
+                # Format: @@ -old_start,old_count +new_start,new_count @@
+                match = re.match(r'@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@', line)
+                if match:
+                    old_start = int(match.group(1))
+                    old_count = int(match.group(2)) if match.group(2) else 1
+                    new_start = int(match.group(3))
+                    new_count = int(match.group(4)) if match.group(4) else 1
+
+                    # Format line number info
+                    old_end = old_start + old_count - 1
+                    new_end = new_start + new_count - 1
+
+                    # Create a user-friendly line number display
+                    if old_count == 1:
+                        old_range = f"Line {old_start}"
+                    else:
+                        old_range = f"Lines {old_start}-{old_end}"
+
+                    if new_count == 1:
+                        new_range = f"Line {new_start}"
+                    else:
+                        new_range = f"Lines {new_start}-{new_end}"
+
+                    line_info = f"@@ {old_range} → {new_range} @@"
+                    lines_html.append(f"<span class='diff-line meta'>{escape(line_info)}</span>")
+                else:
+                    # Fallback if regex doesn't match
+                    lines_html.append(f"<span class='diff-line meta'>{escape(line)}</span>")
+
+            elif line.startswith("+") and not line.startswith("+++"):
                 css_class = "diff-line added"
+                lines_html.append(f"<span class='{css_class}'>{escape(line)}</span>")
             elif line.startswith("-") and not line.startswith("---"):
                 css_class = "diff-line removed"
-            elif line.startswith("@@") or line.startswith("diff ") or line.startswith("---") or line.startswith("+++"):
+                lines_html.append(f"<span class='{css_class}'>{escape(line)}</span>")
+            elif line.startswith("diff ") or line.startswith("---") or line.startswith("+++"):
                 css_class = "diff-line meta"
+                lines_html.append(f"<span class='{css_class}'>{escape(line)}</span>")
             else:
                 css_class = "diff-line neutral"
-            lines_html.append(f"<span class='{css_class}'>{escape(line)}</span>")
+                lines_html.append(f"<span class='{css_class}'>{escape(line)}</span>")
 
         if not lines_html:
             lines_html.append("<span class='diff-line neutral'>(no changes)</span>")
