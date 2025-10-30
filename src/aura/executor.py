@@ -122,10 +122,27 @@ class AuraExecutor:
         if not prompt:
             raise RuntimeError("Failed to render architect prompt")
 
+        try:
+            self.event_bus.dispatch(Event(
+                event_type="GENERATION_PROGRESS",
+                payload={"message": "Planning file structure...", "category": "SYSTEM"},
+            ))
+        except Exception:
+            logger.debug("Failed to dispatch planning progress event.", exc_info=True)
+
         response = self.llm.run_for_agent("architect_agent", prompt)
         data = self._parse_json_safely(response)
         if not self._blueprint_has_files(data):
             raise RuntimeError("Architect returned no files in blueprint")
+
+        files = self._files_from_blueprint(data)
+        try:
+            self.event_bus.dispatch(Event(
+                event_type="GENERATION_PROGRESS",
+                payload={"message": f"Blueprint ready: {len(files)} file{'s' if len(files) != 1 else ''}", "category": "SYSTEM"},
+            ))
+        except Exception:
+            logger.debug("Failed to dispatch blueprint progress event.", exc_info=True)
 
         return data
 
@@ -274,16 +291,17 @@ class AuraExecutor:
         def run():
             try:
                 logger.info(f"Streaming generation for {file_path} via {agent_name}")
+                try:
+                    self.event_bus.dispatch(Event(
+                        event_type="GENERATION_PROGRESS",
+                        payload={"message": f"Generating {file_path}...", "category": "SYSTEM"},
+                    ))
+                except Exception:
+                    logger.debug("Failed to dispatch generation start progress event.", exc_info=True)
+
                 stream = self.llm.stream_chat_for_agent(agent_name, prompt)
                 full_parts: List[str] = []
                 for chunk in stream:
-                    try:
-                        self.event_bus.dispatch(Event(
-                            event_type="CODE_CHUNK_GENERATED",
-                            payload={"file_path": file_path, "chunk": chunk or ""},
-                        ))
-                    except Exception:
-                        logger.warning("Failed to dispatch CODE_CHUNK_GENERATED; continuing.", exc_info=True)
                     if chunk:
                         full_parts.append(chunk)
 
@@ -293,8 +311,25 @@ class AuraExecutor:
                     return
 
                 code = self._sanitize_code(full_text)
+                line_count = len(code.splitlines()) if code else 0
+
+                try:
+                    self.event_bus.dispatch(Event(
+                        event_type="GENERATION_PROGRESS",
+                        payload={"message": f"Drafted {file_path} ({line_count} lines)", "category": "SUCCESS"},
+                    ))
+                except Exception:
+                    logger.debug("Failed to dispatch generation completion progress event.", exc_info=True)
+
                 if validate_with_spec:
-                    # Validation-first pipeline
+                    try:
+                        self.event_bus.dispatch(Event(
+                            event_type="GENERATION_PROGRESS",
+                            payload={"message": f"Validating {file_path}...", "category": "SYSTEM"},
+                        ))
+                    except Exception:
+                        logger.debug("Failed to dispatch validation progress event.", exc_info=True)
+
                     self.event_bus.dispatch(Event(
                         event_type="VALIDATE_CODE",
                         payload={
@@ -305,8 +340,10 @@ class AuraExecutor:
                         },
                     ))
                 else:
-                    # Legacy fast-lane
-                    self.event_bus.dispatch(Event(event_type="CODE_GENERATED", payload={"file_path": file_path, "code": code}))
+                    self.event_bus.dispatch(Event(
+                        event_type="CODE_GENERATED",
+                        payload={"file_path": file_path, "code": code},
+                    ))
             except Exception as e:
                 logger.error(f"Generation error for {file_path}: {e}", exc_info=True)
                 self._handle_error(f"A critical error occurred while generating code for {file_path}.")

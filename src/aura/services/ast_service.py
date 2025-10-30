@@ -205,8 +205,8 @@ class ASTService:
         """
         Register event handlers for dynamic index updates.
         """
-        self.event_bus.subscribe("CODE_GENERATED", self.update_index_for_file)
-        logger.info("ASTService subscribed to CODE_GENERATED events for dynamic updates")
+        self.event_bus.subscribe("VALIDATED_CODE_SAVED", self.update_index_for_file)
+        logger.info("ASTService subscribed to VALIDATED_CODE_SAVED events for dynamic updates")
 
     def update_index_for_file(self, event: Event):
         """

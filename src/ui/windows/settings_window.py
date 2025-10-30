@@ -1,12 +1,15 @@
 import logging
-import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QFormLayout, QComboBox,
                                QDoubleSpinBox, QPushButton, QGroupBox, QHBoxLayout,
-                               QScrollArea)
+                               QScrollArea, QCheckBox)
 from PySide6.QtCore import Qt, Signal, QObject, Slot
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
-from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
+from src.aura.config import AGENT_CONFIG
+from src.aura.services.user_settings_manager import (
+    load_user_settings,
+    save_user_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +136,36 @@ class SettingsWindow(QWidget):
         scroll_area.setWidget(scroll_widget)
         main_layout.addWidget(scroll_area)
 
-        for agent_name, config in AGENT_CONFIG.items():
+        settings_snapshot = load_user_settings()
+        agent_defaults = settings_snapshot.get("agents", {}) or {}
+
+        preferences_group = QGroupBox("Preferences")
+        preferences_layout = QVBoxLayout()
+        preferences_layout.setContentsMargins(10, 15, 10, 10)
+        preferences_layout.setSpacing(8)
+
+        self.auto_accept_checkbox = QCheckBox("Automatically apply generated changes")
+        self.auto_accept_checkbox.setToolTip(
+            "When enabled, AURA writes generated code to disk immediately. "
+            "When disabled, changes are staged for manual review."
+        )
+        self.auto_accept_checkbox.setChecked(True)
+        preferences_layout.addWidget(self.auto_accept_checkbox)
+        preferences_layout.addStretch()
+        preferences_group.setLayout(preferences_layout)
+        self.form_container_layout.addWidget(preferences_group)
+
+        ordered_agent_names = []
+        for name in AGENT_CONFIG.keys():
+            if name not in ordered_agent_names:
+                ordered_agent_names.append(name)
+        for name in agent_defaults.keys():
+            if name not in ordered_agent_names:
+                ordered_agent_names.append(name)
+
+        for agent_name in ordered_agent_names:
+            base_config = agent_defaults.get(agent_name, AGENT_CONFIG.get(agent_name, {}))
+
             group_box = QGroupBox(agent_name.replace("_", " ").title())
             form_layout = QFormLayout()
             form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
@@ -145,12 +177,12 @@ class SettingsWindow(QWidget):
             temperature_input = QDoubleSpinBox()
             temperature_input.setRange(0.0, 2.0)
             temperature_input.setSingleStep(0.1)
-            temperature_input.setValue(config.get("temperature", 0.7))
+            temperature_input.setValue(base_config.get("temperature", 0.7))
 
             top_p_input = QDoubleSpinBox()
             top_p_input.setRange(0.0, 1.0)
             top_p_input.setSingleStep(0.1)
-            top_p_input.setValue(config.get("top_p", 1.0))
+            top_p_input.setValue(base_config.get("top_p", 1.0))
 
             form_layout.addRow(QLabel("Model:"), model_input)
             form_layout.addRow(QLabel("Temperature:"), temperature_input)
@@ -164,6 +196,7 @@ class SettingsWindow(QWidget):
                 "temperature": temperature_input,
                 "top_p": top_p_input
             }
+
         self.form_container_layout.addStretch()
 
         button_layout = QHBoxLayout()
@@ -205,24 +238,27 @@ class SettingsWindow(QWidget):
     def _load_settings(self):
         """Loads settings from the JSON file or uses defaults."""
         try:
-            config_to_load = AGENT_CONFIG
-            if SETTINGS_FILE.exists():
-                logger.info(f"Loading user settings from {SETTINGS_FILE}")
-                with open(SETTINGS_FILE, 'r') as f:
-                    config_to_load = json.load(f)
+            settings = load_user_settings()
+            agent_configs = settings.get("agents", {}) or {}
+            preferences = settings.get("preferences", {}) or {}
+
+            self.auto_accept_checkbox.setChecked(bool(preferences.get("auto_accept_changes", True)))
 
             for agent_name, widgets in self.agent_widgets.items():
-                if agent_name in config_to_load:
-                    config = config_to_load[agent_name]
-                    model_name = config.get("model")
-                    if model_name:
-                        index = widgets["model"].findText(model_name)
-                        if index != -1:
-                            widgets["model"].setCurrentIndex(index)
-                    widgets["temperature"].setValue(config.get("temperature", 0.7))
-                    widgets["top_p"].setValue(config.get("top_p", 1.0))
-        except (IOError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to load settings from {SETTINGS_FILE}: {e}")
+                config = agent_configs.get(agent_name, {})
+                if not isinstance(config, dict):
+                    logger.debug("Skipping non-dict config for agent '%s' during load.", agent_name)
+                    continue
+
+                model_name = config.get("model")
+                if model_name:
+                    index = widgets["model"].findText(model_name)
+                    if index != -1:
+                        widgets["model"].setCurrentIndex(index)
+                widgets["temperature"].setValue(config.get("temperature", 0.7))
+                widgets["top_p"].setValue(config.get("top_p", 1.0))
+        except Exception as e:
+            logger.error(f"Failed to load user settings: {e}")
 
     def _save_settings(self):
         """Saves the current settings from the UI to a JSON file."""
@@ -238,13 +274,22 @@ class SettingsWindow(QWidget):
                 "top_p": widgets["top_p"].value()
             }
         try:
-            with open(SETTINGS_FILE, 'w') as f:
-                json.dump(new_config, f, indent=4)
-            logger.info(f"Successfully saved user settings to {SETTINGS_FILE}")
-            # Dispatch an event to tell the LLMService to reload its config
+            settings = load_user_settings()
+            settings["agents"] = new_config
+            preferences = settings.setdefault("preferences", {})
+            preferences["auto_accept_changes"] = self.auto_accept_checkbox.isChecked()
+
+            save_user_settings(settings)
+            logger.info("Successfully saved user settings.")
+
+            # Notify services to refresh configurations/preference state
             self.event_bus.dispatch(Event(event_type="RELOAD_LLM_CONFIG"))
-        except IOError as e:
-            logger.error(f"Failed to save settings to {SETTINGS_FILE}: {e}")
+            self.event_bus.dispatch(Event(
+                event_type="USER_PREFERENCES_UPDATED",
+                payload={"preferences": preferences}
+            ))
+        except Exception as e:
+            logger.error(f"Failed to save user settings: {e}")
         self.close()
 
     def showEvent(self, event):

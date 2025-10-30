@@ -1,13 +1,16 @@
 import os
 import logging
+import difflib
+import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 # Application-specific imports
 from src.aura.config import ROOT_DIR
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.services.ast_service import ASTService
+from src.aura.services.user_settings_manager import get_auto_accept_changes
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,8 @@ class WorkspaceService:
         self.ast_service = ast_service
         self.active_project: Optional[str] = None
         self.active_project_path: Optional[Path] = None
+        self.auto_accept_changes: bool = get_auto_accept_changes()
+        self._pending_changes: Dict[str, Dict[str, Any]] = {}
         
         # Ensure workspace root exists
         self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -46,6 +51,9 @@ class WorkspaceService:
         # Legacy: Keep CODE_GENERATED for non-spec tasks
         self.event_bus.subscribe("CODE_GENERATED", self._handle_code_generated)
         self.event_bus.subscribe("IMPORT_PROJECT_REQUESTED", self._handle_import_project_requested)
+        self.event_bus.subscribe("USER_PREFERENCES_UPDATED", self._handle_preferences_updated)
+        self.event_bus.subscribe("APPLY_FILE_CHANGES", self._handle_apply_changes)
+        self.event_bus.subscribe("REJECT_FILE_CHANGES", self._handle_reject_changes)
         logger.info("WorkspaceService subscribed to validation and import events")
 
     def set_active_project(self, project_name: str):
@@ -224,40 +232,14 @@ class WorkspaceService:
 
     def save_code_to_project(self, file_path: str, code: str):
         """
-        Save code to a file within the active project directory.
-        
-        Args:
-            file_path: Relative file path within the project
-            code: Code content to save
+        Public API for writing code that respects the auto-accept preference.
         """
-        if not self.active_project or not self.active_project_path:
-            raise RuntimeError("No active project set. Call set_active_project() first.")
-        
-        # Ensure file_path is relative and safe
-        file_path = file_path.lstrip('/')  # Remove leading slashes
-        target_file = self.active_project_path / file_path
-        
-        # Ensure parent directories exist
-        target_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        try:
-            # Write code to file
-            target_file.write_text(code, encoding='utf-8')
-            logger.info(f"Code saved to project file: {target_file}")
-            
-            # Dispatch file saved event
-            self.event_bus.dispatch(Event(
-                event_type="FILE_SAVED_TO_PROJECT",
-                payload={
-                    "project_name": self.active_project,
-                    "file_path": str(target_file),
-                    "relative_path": file_path
-                }
-            ))
-            
-        except Exception as e:
-            logger.error(f"Failed to save code to {target_file}: {e}")
-            raise RuntimeError(f"Failed to save code to project: {e}") from e
+        self._handle_change_request(
+            file_path=file_path,
+            code=code,
+            task_id=None,
+            origin="manual_save",
+        )
 
     def get_active_project_info(self) -> dict:
         """
@@ -297,47 +279,25 @@ class WorkspaceService:
 
     def _handle_code_generated(self, event: Event):
         """
-        Handle CODE_GENERATED events by surgically inserting a code snippet into the target file.
-        
-        Args:
-            event: Event containing file_path and code payload
+        Handle CODE_GENERATED events by staging or applying changes based on preferences.
         """
         file_path = event.payload.get("file_path")
         code = event.payload.get("code")
-        
-        if not file_path or not code:
+
+        if not file_path or code is None:
             logger.warning("CODE_GENERATED event missing file_path or code payload")
             return
-        
+
         if not self.active_project:
-            logger.warning("No active project set, cannot save generated code")
+            logger.warning("No active project set, cannot process generated code.")
             return
-        
-        try:
-            # Extract just the filename if it's a full path
-            if os.path.sep in file_path:
-                filename = os.path.basename(file_path)
-            else:
-                filename = file_path
 
-            # Overwrite the target file with the new content
-            self.save_code_to_project(filename, code)
-            logger.info(f"Automatically saved generated code to active project: {filename}")
-
-            # Notify UI: send final saved content (for viewer updates)
-            self.event_bus.dispatch(Event(
-                event_type="VALIDATED_CODE_SAVED",
-                payload={
-                    "task_id": None,
-                    "file_path": file_path,
-                    "code": code,
-                    "project_name": self.active_project,
-                    "line_count": len(code.strip().split('\n')) if code.strip() else 0
-                }
-            ))
-            
-        except Exception as e:
-            logger.error(f"Failed to auto-save generated code: {e}")
+        self._handle_change_request(
+            file_path=file_path,
+            code=code,
+            task_id=event.payload.get("task_id"),
+            origin="code_generated",
+        )
 
     def _handle_import_project_requested(self, event: Event):
         """
@@ -364,45 +324,312 @@ class WorkspaceService:
 
     def _handle_validation_successful(self, event: Event):
         """
-        Phoenix Initiative: Handle VALIDATION_SUCCESSFUL events by surgically inserting the validated snippet.
-        Only code that passes the Quality Gate gets inserted into the workspace file.
-        
-        Args:
-            event: Event containing validated code and file path
+        Handle VALIDATION_SUCCESSFUL events by staging or applying validated code.
         """
         file_path = event.payload.get("file_path")
         validated_code = event.payload.get("validated_code")
         task_id = event.payload.get("task_id")
-        
-        if not file_path or not validated_code:
+
+        if not file_path or validated_code is None:
             logger.warning("VALIDATION_SUCCESSFUL event missing file_path or validated_code payload")
             return
-        
+
         if not self.active_project:
             logger.warning("No active project set, cannot save validated code")
             return
-        
+
+        self._handle_change_request(
+            file_path=file_path,
+            code=validated_code,
+            task_id=task_id,
+            origin="validation_successful",
+        )
+
+    def _handle_change_request(
+        self,
+        file_path: str,
+        code: str,
+        task_id: Optional[str] = None,
+        origin: str = "generated",
+    ) -> None:
+        """
+        Central handler for any generated or validated code writes.
+        """
+        if not code:
+            logger.info("Empty code payload received for %s; skipping.", file_path)
+            return
+
         try:
-            # Extract just the filename if it's a full path
-            if os.path.sep in file_path:
-                filename = os.path.basename(file_path)
+            change_entry = self._build_change_entry(file_path, code, task_id=task_id, origin=origin)
+        except Exception as exc:
+            logger.error(f"Failed to prepare change entry for {file_path}: {exc}", exc_info=True)
+            return
+
+        if not change_entry:
+            logger.info("No changes detected for %s; nothing to stage or apply.", file_path)
+            return
+
+        change_id = change_entry["change_id"]
+
+        if self.auto_accept_changes:
+            logger.info("Auto-accept enabled; applying change %s immediately.", change_id)
+            self._apply_change_entry(change_entry, auto_applied=True)
+        else:
+            logger.info("Auto-accept disabled; staging change %s for review.", change_id)
+            self._pending_changes[change_id] = change_entry
+            self._emit_diff_ready(change_entry, pending=True, auto_applied=False)
+
+    def _build_change_entry(
+        self,
+        file_path: str,
+        code: str,
+        task_id: Optional[str],
+        origin: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not self.active_project_path:
+            raise RuntimeError("Active project path is not set.")
+
+        sanitized_relative = self._sanitize_relative_path(file_path)
+        display_path = file_path
+        target_file = self.active_project_path / sanitized_relative
+        existing_code = ""
+        file_exists = target_file.exists()
+
+        if file_exists:
+            try:
+                existing_code = target_file.read_text(encoding="utf-8")
+            except Exception as exc:
+                logger.warning("Failed to read existing contents of %s: %s", target_file, exc)
+                existing_code = ""
+
+        diff_result = self._compute_diff(sanitized_relative, existing_code, code)
+        if diff_result is None:
+            return None
+
+        diff_text, additions, deletions = diff_result
+        line_count = len(code.strip().split("\n")) if code.strip() else 0
+
+        change_id = str(uuid.uuid4())
+        file_entry = {
+            "display_path": display_path,
+            "relative_path": sanitized_relative,
+            "diff": diff_text,
+            "additions": additions,
+            "deletions": deletions,
+            "line_count": line_count,
+            "is_new_file": not file_exists,
+            "code": code,
+        }
+
+        change_entry = {
+            "change_id": change_id,
+            "files": [file_entry],
+            "origin": origin,
+            "task_id": task_id,
+            "summary": {
+                "total_files": 1,
+                "total_additions": additions,
+                "total_deletions": deletions,
+                "total_lines": line_count,
+            },
+        }
+
+        return change_entry
+
+    def _compute_diff(
+        self,
+        relative_path: str,
+        existing_code: str,
+        new_code: str,
+    ) -> Optional[tuple]:
+        old_lines = (existing_code or "").splitlines()
+        new_lines = (new_code or "").splitlines()
+
+        diff_lines = list(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=f"a/{relative_path}",
+                tofile=f"b/{relative_path}",
+                lineterm="",
+            )
+        )
+
+        if not diff_lines:
+            return None
+
+        additions = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+        deletions = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+        diff_text = "\n".join(diff_lines)
+        return diff_text, additions, deletions
+
+    def _sanitize_relative_path(self, file_path: str) -> str:
+        if not file_path:
+            raise ValueError("File path cannot be empty.")
+
+        normalized = str(file_path).strip()
+        if not normalized:
+            raise ValueError("File path cannot be whitespace.")
+
+        normalized = normalized.replace("\\", "/")
+        path_obj = Path(normalized)
+
+        if path_obj.is_absolute():
+            if self.active_project_path:
+                try:
+                    path_obj = path_obj.relative_to(self.active_project_path)
+                except ValueError:
+                    path_obj = Path(path_obj.name)
             else:
-                filename = file_path
+                path_obj = Path(path_obj.name)
 
-            self.save_code_to_project(filename, validated_code)
-            logger.info(f"Phoenix Initiative: Saved validated code for task {task_id} to {filename}")
+        safe_parts: List[str] = []
+        for part in path_obj.parts:
+            if part in ("", "."):
+                continue
+            if part == "..":
+                raise ValueError("Parent directory traversal is not allowed in file paths.")
+            safe_parts.append(part)
 
-            # Dispatch a special event indicating validated code was saved
+        if not safe_parts:
+            safe_parts.append(path_obj.name or "generated.py")
+
+        return "/".join(safe_parts)
+
+    def _emit_diff_ready(self, change_entry: Dict[str, Any], *, pending: bool, auto_applied: bool) -> None:
+        payload = self._serialize_change_entry(change_entry)
+        payload.update({
+            "change_id": change_entry["change_id"],
+            "pending": pending,
+            "auto_applied": auto_applied,
+        })
+        self.event_bus.dispatch(Event(event_type="FILE_DIFF_READY", payload=payload))
+
+    def _serialize_change_entry(self, change_entry: Dict[str, Any]) -> Dict[str, Any]:
+        files_payload = []
+        for file_info in change_entry.get("files", []):
+            files_payload.append({
+                "display_path": file_info.get("display_path"),
+                "relative_path": file_info.get("relative_path"),
+                "diff": file_info.get("diff"),
+                "additions": file_info.get("additions"),
+                "deletions": file_info.get("deletions"),
+                "line_count": file_info.get("line_count"),
+                "is_new_file": file_info.get("is_new_file"),
+            })
+
+        return {
+            "files": files_payload,
+            "summary": change_entry.get("summary", {}),
+            "origin": change_entry.get("origin"),
+            "task_id": change_entry.get("task_id"),
+        }
+
+    def _apply_change_entry(self, change_entry: Dict[str, Any], *, auto_applied: bool) -> None:
+        change_id = change_entry.get("change_id")
+        if not change_id:
+            logger.warning("Cannot apply change entry without an ID.")
+            return
+
+        try:
+            self._apply_change_files(change_entry)
+            self._pending_changes.pop(change_id, None)
+            self._emit_diff_ready(change_entry, pending=False, auto_applied=auto_applied)
+            self._emit_changes_applied(change_entry, auto_applied=auto_applied)
+        except Exception as exc:
+            logger.error(f"Failed to apply change {change_id}: {exc}", exc_info=True)
+
+    def _apply_change_files(self, change_entry: Dict[str, Any]) -> None:
+        for file_info in change_entry.get("files", []):
+            relative_path = file_info.get("relative_path")
+            code = file_info.get("code", "")
+            if relative_path is None:
+                logger.warning("Skipping file without relative_path in change entry.")
+                continue
+            self._write_file(relative_path, code)
+
+            line_count = file_info.get("line_count", 0)
             self.event_bus.dispatch(Event(
                 event_type="VALIDATED_CODE_SAVED",
                 payload={
-                    "task_id": task_id,
-                    "file_path": file_path,
-                    "code": validated_code,
+                    "task_id": change_entry.get("task_id"),
+                    "file_path": file_info.get("display_path"),
+                    "code": code,
                     "project_name": self.active_project,
-                    "line_count": len(validated_code.strip().split('\n')) if validated_code.strip() else 0
+                    "line_count": line_count,
                 }
             ))
 
-        except Exception as e:
-            logger.error(f"Failed to save validated code for task {task_id}: {e}")
+    def _write_file(self, relative_path: str, code: str) -> None:
+        if not self.active_project_path:
+            raise RuntimeError("Active project path is not set.")
+
+        target_file = self.active_project_path / relative_path
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        target_file.write_text(code, encoding="utf-8")
+        logger.info("Saved code to project file: %s", target_file)
+
+        self.event_bus.dispatch(Event(
+            event_type="FILE_SAVED_TO_PROJECT",
+            payload={
+                "project_name": self.active_project,
+                "file_path": str(target_file),
+                "relative_path": relative_path,
+            }
+        ))
+
+    def _emit_changes_applied(self, change_entry: Dict[str, Any], *, auto_applied: bool) -> None:
+        payload = self._serialize_change_entry(change_entry)
+        payload.update({
+            "change_id": change_entry.get("change_id"),
+            "auto_applied": auto_applied,
+        })
+        self.event_bus.dispatch(Event(event_type="FILE_CHANGES_APPLIED", payload=payload))
+
+    def _emit_changes_rejected(self, change_entry: Dict[str, Any]) -> None:
+        payload = self._serialize_change_entry(change_entry)
+        payload.update({
+            "change_id": change_entry.get("change_id"),
+        })
+        self.event_bus.dispatch(Event(event_type="FILE_CHANGES_REJECTED", payload=payload))
+
+    def _handle_preferences_updated(self, event: Event) -> None:
+        preferences = (event.payload or {}).get("preferences") or {}
+        if "auto_accept_changes" in preferences:
+            new_value = bool(preferences.get("auto_accept_changes"))
+            if new_value != self.auto_accept_changes:
+                self.auto_accept_changes = new_value
+                if new_value:
+                    logger.info(
+                        "Auto-accept of generated changes enabled. %d pending change(s) remain staged.",
+                        len(self._pending_changes),
+                    )
+                else:
+                    logger.info("Auto-accept of generated changes disabled.")
+
+    def _handle_apply_changes(self, event: Event) -> None:
+        change_id = (event.payload or {}).get("change_id")
+        if not change_id:
+            logger.warning("APPLY_FILE_CHANGES event missing change_id.")
+            return
+
+        change_entry = self._pending_changes.get(change_id)
+        if not change_entry:
+            logger.warning("No pending changes found for id %s.", change_id)
+            return
+
+        self._apply_change_entry(change_entry, auto_applied=False)
+
+    def _handle_reject_changes(self, event: Event) -> None:
+        change_id = (event.payload or {}).get("change_id")
+        if not change_id:
+            logger.warning("REJECT_FILE_CHANGES event missing change_id.")
+            return
+
+        change_entry = self._pending_changes.pop(change_id, None)
+        if not change_entry:
+            logger.warning("No pending changes found for id %s.", change_id)
+            return
+
+        logger.info("Rejected pending change %s.", change_id)
+        self._emit_changes_rejected(change_entry)

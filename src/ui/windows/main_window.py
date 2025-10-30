@@ -5,15 +5,16 @@ from typing import Any, Dict, List, Optional, Union
 import markdown
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QLabel, QTextEdit, QHBoxLayout,
+    QMainWindow, QWidget, QVBoxLayout, QLabel, QTextBrowser, QHBoxLayout,
     QApplication, QPushButton, QFileDialog
 )
-from PySide6.QtGui import QFont, QTextCursor, QIcon, QTextOption
-from PySide6.QtCore import Qt, QTimer, Signal, QObject
+from PySide6.QtGui import QFont, QTextCursor, QIcon, QTextOption, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QUrl, QUrlQuery
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.config import ASSETS_DIR
+from src.aura.services.user_settings_manager import get_auto_accept_changes
 from src.aura.services.image_storage_service import ImageStorageService
 from src.ui.widgets.chat_input import ChatInputTextEdit
 from src.ui.windows.settings_window import SettingsWindow
@@ -103,6 +104,71 @@ AURA_RESPONSE_CSS = """
         color: #64B5F6;
         text-decoration: underline;
     }
+    .diff-message {
+        border: 1px solid #4a4a4a;
+        border-radius: 6px;
+        padding: 10px;
+        margin: 12px 0;
+        background: rgba(20, 20, 20, 0.85);
+    }
+    .diff-header {
+        font-weight: bold;
+        color: #FFD27F;
+        margin-bottom: 6px;
+    }
+    .diff-file-list {
+        list-style: none;
+        margin: 0 0 8px 0;
+        padding: 0;
+        color: #FFB74D;
+        font-size: 12px;
+    }
+    .diff-file-list li {
+        margin: 2px 0;
+    }
+    .diff-block {
+        background-color: #0e0e0e;
+        border-radius: 4px;
+        padding: 8px;
+        border: 1px solid #333;
+        font-size: 12px;
+        overflow-x: auto;
+    }
+    .diff-line {
+        display: block;
+        white-space: pre;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .diff-line.added { color: #66BB6A; }
+    .diff-line.removed { color: #EF5350; }
+    .diff-line.meta { color: #64B5F6; }
+    .diff-line.neutral { color: #dcdcdc; }
+    .diff-actions {
+        margin-top: 10px;
+        text-align: right;
+    }
+    .diff-actions a {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 4px 10px;
+        border-radius: 4px;
+        text-decoration: none;
+        font-weight: bold;
+    }
+    .diff-actions a.accept {
+        background-color: #2E7D32;
+        color: #ffffff;
+    }
+    .diff-actions a.reject {
+        background-color: #C62828;
+        color: #ffffff;
+    }
+    .diff-status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #64B5F6;
+        text-align: right;
+    }
 </style>
 """
 
@@ -141,7 +207,12 @@ class MainWindow(QMainWindow):
             font-size: 10px;
             padding-bottom: 10px;
         }
-        QTextEdit#chat_display {
+        QLabel#auto_accept_label {
+            color: #64B5F6;
+            font-weight: bold;
+            padding-left: 12px;
+        }
+        QTextBrowser#chat_display, QTextEdit#chat_display {
             background-color: #000000;
             border-top: 1px solid #4a4a4a;
             border-bottom: none;
@@ -183,8 +254,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.event_bus = event_bus
         self.image_storage = image_storage
-        self.code_viewer_window = None
         self.settings_window = None
+        self.auto_accept_enabled = get_auto_accept_changes()
+        self.pending_change_states: Dict[str, str] = {}
         self.setWindowTitle("Aura - Command Deck")
         self.setGeometry(100, 100, 700, 820)
 
@@ -193,6 +265,7 @@ class MainWindow(QMainWindow):
 
         self.is_streaming_response = False
         self.signaller = Signaller()
+        self._styles_injected = False
         
 
         self._init_ui()
@@ -216,11 +289,13 @@ class MainWindow(QMainWindow):
         banner_label.setFont(QFont("JetBrains Mono", 10))
         banner_label.setAlignment(Qt.AlignCenter)
 
-        self.chat_display = QTextEdit()
+        self.chat_display = QTextBrowser()
         # Prevent chat display from receiving keyboard focus to avoid
         # conflicts between user selection and caret/auto-scrolling
         self.chat_display.setFocusPolicy(Qt.NoFocus)
         self.chat_display.setObjectName("chat_display")
+        self.chat_display.setOpenLinks(False)
+        self.chat_display.anchorClicked.connect(self._handle_anchor_clicked)
         # Ensure word wrapping occurs at word boundaries for readability
         self.chat_display.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.chat_display.setReadOnly(True)
@@ -244,10 +319,6 @@ class MainWindow(QMainWindow):
         btn_new_session.setObjectName("top_bar_button")
         btn_new_session.clicked.connect(self._start_new_session)
 
-        btn_code_workspace = QPushButton("Code Workspace")
-        btn_code_workspace.setObjectName("top_bar_button")
-        btn_code_workspace.clicked.connect(self._open_code_workspace)
-
         btn_import_project = QPushButton("Import Project...")
         btn_import_project.setObjectName("top_bar_button")
         btn_import_project.clicked.connect(self._import_project)
@@ -256,12 +327,25 @@ class MainWindow(QMainWindow):
         btn_configure_agents.setObjectName("top_bar_button")
         btn_configure_agents.clicked.connect(self._open_settings_dialog)
 
+        self.auto_accept_label = QLabel()
+        self.auto_accept_label.setObjectName("auto_accept_label")
+        self.auto_accept_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._update_auto_accept_label()
+
         hl.addWidget(btn_new_session)
         hl.addStretch()
-        hl.addWidget(btn_code_workspace)
         hl.addWidget(btn_import_project)
         hl.addWidget(btn_configure_agents)
+        hl.addWidget(self.auto_accept_label)
         return widget
+
+    def _update_auto_accept_label(self):
+        state_text = "ON" if self.auto_accept_enabled else "OFF"
+        color = "#66BB6A" if self.auto_accept_enabled else "#FF7043"
+        if hasattr(self, "auto_accept_label") and self.auto_accept_label:
+            self.auto_accept_label.setText(
+                f"<span style='color: {color}; font-weight:bold;'>Auto-Accept: {state_text}</span>"
+            )
 
     def _create_input_area(self):
         container = QWidget()
@@ -276,6 +360,11 @@ class MainWindow(QMainWindow):
         hl.addWidget(self.chat_input, 1)
         return container
 
+    def _ensure_chat_styles(self):
+        if not self._styles_injected:
+            self.chat_display.insertHtml(AURA_RESPONSE_CSS)
+            self._styles_injected = True
+
     def _register_event_handlers(self):
         self.signaller.chunk_received.connect(self._handle_model_chunk)
         self.signaller.stream_ended.connect(self._handle_stream_end)
@@ -288,11 +377,16 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("DISPATCH_TASK", self._handle_task_dispatch)
         # Legacy UI status updates are deprecated in favor of MainWindow-driven narrative logging
         self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
+        self.event_bus.subscribe("GENERATION_PROGRESS", self._handle_generation_progress)
 
         self.event_bus.subscribe("PROJECT_ACTIVATED", self._handle_project_activated)
         self.event_bus.subscribe("PROJECT_IMPORTED", self._handle_project_imported)
         self.event_bus.subscribe("PROJECT_IMPORT_ERROR", self._handle_project_import_error)
         self.event_bus.subscribe("VALIDATED_CODE_SAVED", self._handle_validated_code_saved)
+        self.event_bus.subscribe("FILE_DIFF_READY", self._handle_file_diff_ready)
+        self.event_bus.subscribe("FILE_CHANGES_APPLIED", self._handle_file_changes_applied)
+        self.event_bus.subscribe("FILE_CHANGES_REJECTED", self._handle_file_changes_rejected)
+        self.event_bus.subscribe("USER_PREFERENCES_UPDATED", self._handle_preferences_updated)
         # New: listen for generated blueprints to display summary
         self.event_bus.subscribe("BLUEPRINT_GENERATED", self._handle_blueprint_generated)
         # Build lifecycle completion signal
@@ -302,6 +396,8 @@ class MainWindow(QMainWindow):
     # Boot
     def _start_boot_sequence(self):
         self.chat_display.clear()
+        self._styles_injected = False
+        self._ensure_chat_styles()
         for item in self.BOOT_SEQUENCE:
             text = item.get("text", "")
             if text:
@@ -311,6 +407,7 @@ class MainWindow(QMainWindow):
 
     def _log_system_message(self, category: str, message: str):
         """Display system messages as centered blocks."""
+        self._ensure_chat_styles()
         color_map = {
             "KERNEL": "#64B5F6",
             "SYSTEM": "#66BB6A",
@@ -345,11 +442,6 @@ class MainWindow(QMainWindow):
             self.settings_window = SettingsWindow(self.event_bus)
         self.settings_window.show()
 
-    def _open_code_workspace(self):
-        if self.code_viewer_window:
-            self.code_viewer_window.show()
-            QTimer.singleShot(0, self._update_code_viewer_position)
-
     def _import_project(self):
         dialog = QFileDialog(self)
         dialog.setFileMode(QFileDialog.Directory)
@@ -365,6 +457,7 @@ class MainWindow(QMainWindow):
     # Input/Output
     def _log_user_message(self, user_text: str, image: Optional[Union[str, Dict[str, Any]]] = None):
         """Display a single user bubble using basic block HTML."""
+        self._ensure_chat_styles()
         safe_text = escape(user_text).replace("\n", "<br>") if user_text else ""
 
         content_parts: List[str] = []
@@ -592,6 +685,187 @@ class MainWindow(QMainWindow):
     def _display_system_message(self, category: str, message: str):
         self._log_system_message(category, message)
 
+    def _short_change_id(self, change_id: Optional[str]) -> str:
+        if not change_id:
+            return "N/A"
+        return change_id[:8].upper()
+
+    def _handle_generation_progress(self, event: Event):
+        payload = event.payload or {}
+        message = payload.get("message")
+        if not message:
+            return
+        category = (payload.get("category") or "SYSTEM").upper()
+        details = payload.get("details") or []
+        self._display_system_message(category, message)
+        for detail in details:
+            self._display_system_message("DEFAULT", f"  {detail}")
+
+    def _display_diff_message(self, payload: Dict[str, Any], *, pending: bool, auto_applied: bool):
+        self._ensure_chat_styles()
+        diff_html = self._build_diff_html(payload, pending=pending, auto_applied=auto_applied)
+        self.chat_display.moveCursor(QTextCursor.End)
+        self.chat_display.insertHtml(diff_html)
+        self.chat_display.insertHtml("<br>")
+        self.chat_display.ensureCursorVisible()
+
+    def _build_diff_html(self, payload: Dict[str, Any], *, pending: bool, auto_applied: bool) -> str:
+        change_id = payload.get("change_id")
+        summary = payload.get("summary") or {}
+        files = payload.get("files") or []
+
+        total_files = summary.get("total_files") or len(files)
+        additions = summary.get("total_additions", 0)
+        deletions = summary.get("total_deletions", 0)
+
+        header_parts = [
+            f"Change {self._short_change_id(change_id)}",
+            f"{total_files} file{'s' if total_files != 1 else ''}",
+            f"+{additions} / -{deletions}",
+        ]
+        header_html = " | ".join(header_parts)
+
+        file_items = []
+        for file_info in files:
+            path = file_info.get("display_path") or file_info.get("relative_path") or "unknown"
+            add = file_info.get("additions", 0)
+            remove = file_info.get("deletions", 0)
+            badge = " (new)" if file_info.get("is_new_file") else ""
+            file_items.append(f"<li><strong>{escape(path)}</strong> (+{add} / -{remove}){badge}</li>")
+
+        file_list_html = "".join(file_items) or "<li><strong>Unknown file</strong></li>"
+
+        diff_sections = []
+        for file_info in files:
+            path = file_info.get("display_path") or file_info.get("relative_path") or "unknown"
+            diff_text = file_info.get("diff", "")
+            diff_lines_html = self._format_diff_lines(diff_text)
+            diff_sections.append(
+                "<div>"
+                f"<div style='font-size:12px; color:#64B5F6; margin-bottom:4px;'>{escape(path)}</div>"
+                f"<pre class='diff-block'>{diff_lines_html}</pre>"
+                "</div>"
+            )
+
+        actions_html = ""
+        status_html = ""
+        if pending:
+            actions_html = (
+                "<div class='diff-actions'>"
+                f"<a href='aura://reject?change_id={change_id}' class='reject'>Reject</a>"
+                f"<a href='aura://accept?change_id={change_id}' class='accept'>Accept</a>"
+                "</div>"
+            )
+        else:
+            status_text = "Changes applied automatically." if auto_applied else "Changes applied."
+            status_html = f"<div class='diff-status'>{escape(status_text)}</div>"
+
+        return (
+            "<div class='diff-message'>"
+            f"<div class='diff-header'>{escape(header_html)}</div>"
+            f"<ul class='diff-file-list'>{file_list_html}</ul>"
+            f"{''.join(diff_sections)}"
+            f"{actions_html}{status_html}"
+            "</div>"
+        )
+
+    def _format_diff_lines(self, diff_text: str) -> str:
+        lines_html: List[str] = []
+        for raw_line in (diff_text or "").splitlines():
+            line = raw_line or ""
+            if line.startswith("+") and not line.startswith("+++"):
+                css_class = "diff-line added"
+            elif line.startswith("-") and not line.startswith("---"):
+                css_class = "diff-line removed"
+            elif line.startswith("@@") or line.startswith("diff ") or line.startswith("---") or line.startswith("+++"):
+                css_class = "diff-line meta"
+            else:
+                css_class = "diff-line neutral"
+            lines_html.append(f"<span class='{css_class}'>{escape(line)}</span>")
+
+        if not lines_html:
+            lines_html.append("<span class='diff-line neutral'>(no changes)</span>")
+
+        return "\n".join(lines_html)
+
+    def _handle_file_diff_ready(self, event: Event):
+        payload = event.payload or {}
+        change_id = payload.get("change_id")
+        files = payload.get("files") or []
+        if not change_id or not files:
+            return
+
+        pending = bool(payload.get("pending"))
+        auto_applied = bool(payload.get("auto_applied"))
+
+        state = "pending" if pending else ("applied_auto" if auto_applied else "applied")
+        self.pending_change_states[change_id] = state
+
+        self._display_diff_message(payload, pending=pending, auto_applied=auto_applied)
+
+        if pending:
+            self._log_system_message(
+                "SYSTEM",
+                f"Review pending change {self._short_change_id(change_id)} and choose Accept or Reject."
+            )
+        elif auto_applied:
+            self._log_system_message(
+                "SUCCESS",
+                f"Changes auto-applied ({self._short_change_id(change_id)})."
+            )
+
+    def _handle_file_changes_applied(self, event: Event):
+        payload = event.payload or {}
+        change_id = payload.get("change_id")
+        auto_applied = bool(payload.get("auto_applied"))
+        if change_id:
+            self.pending_change_states[change_id] = "applied"
+
+        status = "Changes auto-applied" if auto_applied else "Changes written to workspace"
+        self._log_system_message("SUCCESS", f"{status} ({self._short_change_id(change_id)})")
+
+    def _handle_file_changes_rejected(self, event: Event):
+        payload = event.payload or {}
+        change_id = payload.get("change_id")
+        if change_id:
+            self.pending_change_states[change_id] = "rejected"
+        self._log_system_message("SYSTEM", f"Discarded change {self._short_change_id(change_id)}.")
+
+    def _handle_preferences_updated(self, event: Event):
+        prefs = (event.payload or {}).get("preferences") or {}
+        if "auto_accept_changes" not in prefs:
+            return
+        new_value = bool(prefs.get("auto_accept_changes"))
+        if new_value != self.auto_accept_enabled:
+            self.auto_accept_enabled = new_value
+            self._update_auto_accept_label()
+            status_text = "Auto-accept enabled" if new_value else "Auto-accept disabled"
+            self._log_system_message("SYSTEM", status_text)
+
+    def _handle_anchor_clicked(self, url: QUrl):
+        if url.scheme() != "aura":
+            QDesktopServices.openUrl(url)
+            return
+
+        action = url.host() or url.path().lstrip("/")
+        query = QUrlQuery(url)
+        change_id = query.queryItemValue("change_id")
+        if not change_id:
+            return
+
+        current_state = self.pending_change_states.get(change_id, "pending")
+        if current_state != "pending":
+            return
+
+        if action == "accept":
+            self.pending_change_states[change_id] = "applying"
+            self._log_system_message("SYSTEM", f"Applying change {self._short_change_id(change_id)}...")
+            self.event_bus.dispatch(Event(event_type="APPLY_FILE_CHANGES", payload={"change_id": change_id}))
+        elif action == "reject":
+            self.pending_change_states[change_id] = "rejecting"
+            self._log_system_message("SYSTEM", f"Rejecting change {self._short_change_id(change_id)}...")
+            self.event_bus.dispatch(Event(event_type="REJECT_FILE_CHANGES", payload={"change_id": change_id}))
+
     def _handle_workflow_status_update(self, event):
         message = event.payload.get("message", "")
         status = event.payload.get("status", "info")
@@ -653,31 +927,6 @@ class MainWindow(QMainWindow):
         self._log_system_message("SUCCESS", "Build completed successfully. Aura is ready.")
         self.chat_input.setEnabled(True)
         self.chat_input.setFocus()
-
-    # Child window positioning
-    def _update_child_window_positions(self):
-        self._update_code_viewer_position()
-
-    def _update_code_viewer_position(self):
-        if not self.isVisible() or not self.code_viewer_window or not self.code_viewer_window.isVisible():
-            return
-        main_pos = self.pos()
-        new_x = main_pos.x() + self.width() + 8
-        new_y = main_pos.y()
-        self.code_viewer_window.move(new_x, new_y)
-        self.code_viewer_window.resize(self.code_viewer_window.width(), self.height())
-
-    def moveEvent(self, event):
-        super().moveEvent(event)
-        self._update_child_window_positions()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._update_child_window_positions()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        QTimer.singleShot(0, self._update_child_window_positions)
 
     def closeEvent(self, event):
         QApplication.quit()

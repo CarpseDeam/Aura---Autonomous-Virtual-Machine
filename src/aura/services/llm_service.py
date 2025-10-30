@@ -1,10 +1,10 @@
 import logging
-import json
 import copy
 from typing import Any, Dict, List, Optional
 
 from src.aura.app.event_bus import EventBus
-from src.aura.config import AGENT_CONFIG, SETTINGS_FILE
+from src.aura.config import AGENT_CONFIG
+from src.aura.services.user_settings_manager import load_user_settings
 from src.aura.models.events import Event
 from src.aura.services.image_storage_service import ImageStorageService
 from src.providers.gemini_provider import GeminiProvider
@@ -53,19 +53,18 @@ class LLMService:
         config = copy.deepcopy(AGENT_CONFIG)
         logger.info("Loading default agent configurations.")
 
-        if SETTINGS_FILE.exists():
-            try:
-                logger.info(f"Found user settings file at {SETTINGS_FILE}, merging...")
-                with open(SETTINGS_FILE, 'r') as f:
-                    user_config = json.load(f)
-                for agent_name, user_settings in user_config.items():
-                    if agent_name in config:
-                        if user_settings.get("model"):
-                            config[agent_name].update(user_settings)
-                    else:
-                        config[agent_name] = user_settings
-            except (IOError, json.JSONDecodeError) as e:
-                logger.error(f"Failed to load or parse user settings: {e}. Using defaults.")
+        try:
+            user_settings = load_user_settings()
+            user_agents = user_settings.get("agents", {})
+            for agent_name, user_agent_config in (user_agents or {}).items():
+                if not isinstance(user_agent_config, dict):
+                    logger.debug("Skipping non-dict agent config for '%s'.", agent_name)
+                    continue
+                base_config = config.setdefault(agent_name, {})
+                if user_agent_config.get("model"):
+                    base_config.update(user_agent_config)
+        except Exception as e:
+            logger.error(f"Failed to load or merge user agent settings: {e}. Using defaults.")
 
         self.agent_config = config
         logger.info("Final agent configurations loaded.")

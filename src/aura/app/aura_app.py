@@ -19,7 +19,6 @@ from src.aura.executor import AuraExecutor
 from src.aura.interface import AuraInterface
 from src.aura.config import ASSETS_DIR, WORKSPACE_DIR
 from src.ui.windows.main_window import MainWindow
-from src.ui.windows.code_viewer_window import CodeViewerWindow
 
 
 class AuraApp:
@@ -78,10 +77,6 @@ class AuraApp:
             thread_pool=thread_pool,
         )
         self.main_window = MainWindow(self.event_bus, self.image_storage_service)
-        self.code_viewer_window = CodeViewerWindow(self.event_bus, self.ast_service)
-
-        # Give the main window reference to the code viewer for positioning
-        self.main_window.code_viewer_window = self.code_viewer_window
 
         self._register_event_handlers()
         self._initialize_workspace()
