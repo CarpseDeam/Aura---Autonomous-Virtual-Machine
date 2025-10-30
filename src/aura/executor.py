@@ -30,6 +30,9 @@ class AuraExecutor:
     - Never decides which Action to run; that’s the Brain’s job.
     """
 
+    _MAX_EXISTING_FILES_FOR_PROMPT = 200
+    _DEFAULT_PROJECT_NAME = "default_project"
+
     def __init__(
         self,
         event_bus: EventBus,
@@ -46,6 +49,9 @@ class AuraExecutor:
         self.context = context
         self.workspace = workspace
         self.research_service = ResearchService()
+        self._current_generation_mode: str = "create"
+        self._current_project_name: Optional[str] = None
+        self._current_project_files: List[str] = []
         self._tools = {
             ActionType.DESIGN_BLUEPRINT: self.execute_design_blueprint,
             ActionType.REFINE_CODE: self.execute_refine_code,
@@ -118,7 +124,14 @@ class AuraExecutor:
 
     def execute_design_blueprint(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
         user_text = action.get_param("request", "")
-        prompt = self.prompts.render("architect.jinja2", user_text=user_text)
+        generation_context = self._determine_generation_context(user_text, ctx)
+        prompt = self.prompts.render(
+            "architect.jinja2",
+            user_text=user_text,
+            generation_mode=generation_context["mode"],
+            target_project=generation_context.get("project_name"),
+            existing_files=generation_context.get("existing_files", []),
+        )
         if not prompt:
             raise RuntimeError("Failed to render architect prompt")
 
@@ -132,6 +145,13 @@ class AuraExecutor:
 
         response = self.llm.run_for_agent("architect_agent", prompt)
         data = self._parse_json_safely(response)
+        if isinstance(data, dict):
+            data["_aura_mode"] = generation_context["mode"]
+            if generation_context["mode"] == "edit" and generation_context.get("project_name"):
+                target_name = generation_context["project_name"]
+                data.setdefault("project_name", target_name)
+                data.setdefault("project_slug", target_name)
+        self._activate_project_from_blueprint(data if isinstance(data, dict) else {}, generation_context, user_text)
         if not self._blueprint_has_files(data):
             raise RuntimeError("Architect returned no files in blueprint")
 
@@ -160,6 +180,12 @@ class AuraExecutor:
         except Exception:
             source_code = ""
 
+        project_files = []
+        try:
+            project_files = self.workspace.get_project_files()[: self._MAX_EXISTING_FILES_FOR_PROMPT]
+        except Exception:
+            project_files = []
+
         prompt = self.prompts.render(
             "engineer.jinja2",
             file_path=file_path,
@@ -169,6 +195,10 @@ class AuraExecutor:
             context_files=[],
             parent_class_name=None,
             parent_class_source=None,
+            generation_mode="edit",
+            existing_project=getattr(self.workspace, "active_project", None),
+            file_already_exists=bool(source_code),
+            project_file_index=project_files,
         )
         if not prompt:
             return Result(ok=False, kind="code", error="Failed to render engineer prompt", data={})
@@ -195,6 +225,7 @@ class AuraExecutor:
 
         # Gather AST/RAG context
         context_data = self.context.get_context_for_task(description, file_path)
+        file_already_exists = self.workspace.file_exists(file_path)
 
         # Parent class lookup if applicable
         parent_class_name = None
@@ -215,7 +246,8 @@ class AuraExecutor:
             except Exception:
                 parent_class_source = None
 
-        current_source = self.context._read_file_content(file_path) or ""
+        workspace_source = self.workspace.get_file_content(file_path)
+        current_source = workspace_source if workspace_source is not None else self.context._read_file_content(file_path) or ""
         prompt = self.prompts.render(
             "engineer.jinja2",
             file_path=file_path,
@@ -225,6 +257,10 @@ class AuraExecutor:
             context_files=context_data,
             parent_class_name=parent_class_name,
             parent_class_source=parent_class_source,
+            generation_mode=self._current_generation_mode,
+            existing_project=self._current_project_name,
+            file_already_exists=file_already_exists,
+            project_file_index=self._current_project_files,
         )
         if not prompt:
             self._handle_error("Failed to render engineer prompt for spec.")
@@ -286,6 +322,211 @@ class AuraExecutor:
             raise
 
         return {"file_path": file_path, "status": "written"}
+
+    def _determine_generation_context(self, user_text: str, ctx: ProjectContext) -> Dict[str, Any]:
+        projects = self.workspace.list_workspace_projects()
+        matched_project = self._match_project_name(user_text, projects)
+
+        if not matched_project:
+            matched_project = self._match_project_from_context(ctx, projects, user_text)
+
+        if matched_project:
+            self._ensure_active_project(matched_project)
+            try:
+                available_files = self.workspace.get_project_files()
+            except Exception:
+                available_files = []
+
+            limited_files = available_files[: self._MAX_EXISTING_FILES_FOR_PROMPT]
+            self._current_generation_mode = "edit"
+            self._current_project_name = matched_project
+            self._current_project_files = limited_files
+            return {
+                "mode": "edit",
+                "project_name": matched_project,
+                "existing_files": limited_files,
+            }
+
+        self._current_generation_mode = "create"
+        self._current_project_name = None
+        self._current_project_files = []
+        return {
+            "mode": "create",
+            "project_name": None,
+            "existing_files": [],
+        }
+
+    def _match_project_from_context(
+        self,
+        ctx: ProjectContext,
+        projects: List[Dict[str, Any]],
+        user_text: str,
+    ) -> Optional[str]:
+        if not ctx:
+            return None
+        active_project = (ctx.active_project or "").strip()
+        if not active_project:
+            return None
+        if not self._project_exists(active_project, projects):
+            return None
+        if active_project == self._DEFAULT_PROJECT_NAME:
+            return None
+
+        if self._looks_like_edit_request(user_text):
+            return active_project
+
+        non_default_projects = [
+            (project or {}).get("name")
+            for project in projects
+            if (project or {}).get("name") and (project or {}).get("name") != self._DEFAULT_PROJECT_NAME
+        ]
+        if len(non_default_projects) == 1 and non_default_projects[0] == active_project:
+            if not self._looks_like_creation_request(user_text):
+                return active_project
+        return None
+
+    def _match_project_name(self, user_text: str, projects: List[Dict[str, Any]]) -> Optional[str]:
+        if not user_text:
+            return None
+
+        raw_lower = user_text.lower()
+        normalized_request = self._normalize_for_match(user_text)
+        collapsed_request = normalized_request.replace(" ", "")
+
+        for entry in projects:
+            name = (entry or {}).get("name")
+            if not name:
+                continue
+            slug = name.lower()
+            if slug and slug in raw_lower:
+                return name
+
+            normalized_name = self._normalize_for_match(name)
+            if normalized_name and normalized_name in normalized_request:
+                return name
+
+            collapsed_name = normalized_name.replace(" ", "") if normalized_name else ""
+            if collapsed_name and collapsed_name in collapsed_request:
+                return name
+
+        return None
+
+    @staticmethod
+    def _normalize_for_match(text: str) -> str:
+        tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+        return " ".join(tokens)
+
+    @staticmethod
+    def _looks_like_edit_request(user_text: str) -> bool:
+        tokens = set(AuraExecutor._normalize_for_match(user_text).split())
+        edit_keywords = {
+            "add",
+            "update",
+            "modify",
+            "change",
+            "enhance",
+            "extend",
+            "fix",
+            "improve",
+            "refine",
+            "refactor",
+            "patch",
+        }
+        return bool(tokens.intersection(edit_keywords))
+
+    @staticmethod
+    def _looks_like_creation_request(user_text: str) -> bool:
+        tokens = set(AuraExecutor._normalize_for_match(user_text).split())
+        creation_keywords = {
+            "create",
+            "build",
+            "generate",
+            "start",
+            "scaffold",
+            "bootstrap",
+            "make",
+            "init",
+            "initialize",
+            "launch",
+            "new",
+        }
+        return bool(tokens.intersection(creation_keywords))
+
+    @staticmethod
+    def _project_exists(project_name: str, projects: List[Dict[str, Any]]) -> bool:
+        for entry in projects:
+            if (entry or {}).get("name") == project_name:
+                return True
+        return False
+
+    def _ensure_active_project(self, project_name: str) -> None:
+        if not project_name:
+            return
+        if getattr(self.workspace, "active_project", None) == project_name:
+            return
+        try:
+            self.workspace.set_active_project(project_name)
+        except Exception as exc:
+            logger.error("Failed to activate project '%s': %s", project_name, exc, exc_info=True)
+
+    def _activate_project_from_blueprint(
+        self,
+        blueprint: Dict[str, Any],
+        generation_context: Dict[str, Any],
+        user_text: str,
+    ) -> None:
+        if generation_context["mode"] == "edit":
+            return
+
+        project_label: Optional[str] = None
+        if isinstance(blueprint, dict):
+            for key in ("project_slug", "project_name", "slug", "name"):
+                value = blueprint.get(key)
+                if isinstance(value, str) and value.strip():
+                    project_label = value.strip()
+                    break
+
+        if not project_label:
+            project_label = user_text.strip()
+
+        project_slug = self._to_project_slug(project_label)
+        project_slug = self._ensure_unique_slug(project_slug)
+
+        try:
+            self.workspace.set_active_project(project_slug)
+        except Exception as exc:
+            logger.error("Failed to activate project '%s' from blueprint: %s", project_slug, exc, exc_info=True)
+            return
+
+        self._current_project_name = project_slug
+        self._current_project_files = []
+
+        if isinstance(blueprint, dict):
+            blueprint.setdefault("project_slug", project_slug)
+            blueprint.setdefault("project_name", project_label)
+
+    def _ensure_unique_slug(self, slug: str) -> str:
+        existing_names = {
+            (entry or {}).get("name")
+            for entry in self.workspace.list_workspace_projects()
+        }
+        existing_names.discard(None)
+
+        if slug not in existing_names:
+            return slug
+
+        counter = 2
+        candidate = f"{slug}-{counter}"
+        while candidate in existing_names:
+            counter += 1
+            candidate = f"{slug}-{counter}"
+        return candidate
+
+    @staticmethod
+    def _to_project_slug(text: str) -> str:
+        tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+        slug = "-".join(tokens)
+        return slug or "project"
 
     def _stream_and_finalize(self, prompt: str, agent_name: str, file_path: str, validate_with_spec: Optional[Dict[str, Any]]):
         def run():
@@ -360,14 +601,43 @@ class AuraExecutor:
     @staticmethod
     def _files_from_blueprint(blueprint_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         files: List[Dict[str, Any]] = []
-        if isinstance(blueprint_data.get("files"), list):
-            files = [f for f in blueprint_data.get("files", []) if isinstance(f, dict)]
-        elif isinstance(blueprint_data.get("blueprint"), dict):
-            for file_path, spec in (blueprint_data.get("blueprint") or {}).items():
-                if isinstance(spec, dict):
-                    item = {"file_path": file_path}
-                    item.update(spec)
-                    files.append(item)
+        if not isinstance(blueprint_data, dict):
+            return files
+
+        project_metadata: Dict[str, Any] = {}
+        for key in ("project_slug", "project_name", "slug", "name"):
+            value = blueprint_data.get(key)
+            if isinstance(value, str) and value.strip():
+                project_metadata[key] = value.strip()
+
+        def _augment_spec(raw_spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if not isinstance(raw_spec, dict):
+                return None
+            spec_copy: Dict[str, Any] = dict(raw_spec)
+            if "file_path" not in spec_copy or not isinstance(spec_copy["file_path"], str):
+                return None
+            for meta_key, meta_value in project_metadata.items():
+                spec_copy.setdefault(meta_key, meta_value)
+            return spec_copy
+
+        file_entries = blueprint_data.get("files")
+        if isinstance(file_entries, list):
+            for entry in file_entries:
+                spec_copy = _augment_spec(entry)
+                if spec_copy:
+                    files.append(spec_copy)
+            return files
+
+        blueprint_entries = blueprint_data.get("blueprint")
+        if isinstance(blueprint_entries, dict):
+            for file_path, spec in blueprint_entries.items():
+                if not isinstance(file_path, str):
+                    continue
+                spec_copy = dict(spec) if isinstance(spec, dict) else {}
+                spec_copy["file_path"] = file_path
+                augmented = _augment_spec(spec_copy)
+                if augmented:
+                    files.append(augmented)
         return files
 
     @staticmethod

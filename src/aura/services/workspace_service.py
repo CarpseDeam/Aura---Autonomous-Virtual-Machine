@@ -5,6 +5,7 @@ import uuid
 import shutil
 import atexit
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -257,6 +258,91 @@ class WorkspaceService:
             origin="manual_save",
         )
 
+    def get_file_content(self, relative_path: str) -> Optional[str]:
+        """
+        Read a file within the active project and return its contents.
+
+        Args:
+            relative_path: Relative path to the file from the project root.
+
+        Returns:
+            The file contents as a string, or None if the file is missing or unreadable.
+        """
+        if not self.active_project_path:
+            logger.warning("Attempted to read file without an active project.")
+            return None
+
+        try:
+            sanitized_path = self._sanitize_relative_path(relative_path)
+        except ValueError as exc:
+            logger.warning("Rejected unsafe file path '%s': %s", relative_path, exc)
+            return None
+
+        target = self.active_project_path / sanitized_path
+        if not target.exists() or not target.is_file():
+            logger.info("Requested file does not exist: %s", target)
+            return None
+
+        try:
+            return target.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            logger.warning("UTF-8 decode failed for %s: %s", target, exc)
+            try:
+                with target.open("r", encoding="utf-8", errors="replace") as fp:
+                    return fp.read()
+            except Exception as nested_exc:
+                logger.error("Failed to read file %s after decode fallback: %s", target, nested_exc, exc_info=True)
+        except Exception as exc:
+            logger.error("Failed to read file %s: %s", target, exc, exc_info=True)
+        return None
+
+    def file_exists(self, relative_path: str) -> bool:
+        """
+        Check whether a file exists within the active project.
+
+        Args:
+            relative_path: Relative path to the file from the project root.
+
+        Returns:
+            True if the file exists, False otherwise.
+        """
+        if not self.active_project_path:
+            logger.debug("file_exists called without an active project.")
+            return False
+
+        try:
+            sanitized_path = self._sanitize_relative_path(relative_path)
+        except ValueError as exc:
+            logger.warning("Rejected unsafe file existence check for '%s': %s", relative_path, exc)
+            return False
+
+        target = self.active_project_path / sanitized_path
+        exists = target.is_file()
+        logger.debug("File existence check for %s: %s", target, exists)
+        return exists
+
+    def get_project_files(self) -> List[str]:
+        """
+        Retrieve a list of all files within the active project directory.
+
+        Returns:
+            A list of file paths relative to the project root.
+        """
+        if not self.active_project_path:
+            logger.warning("Attempted to list project files without an active project.")
+            return []
+
+        try:
+            files = [
+                path.relative_to(self.active_project_path).as_posix()
+                for path in self.active_project_path.rglob("*")
+                if path.is_file()
+            ]
+            return sorted(files)
+        except Exception as exc:
+            logger.error("Failed to enumerate files for project %s: %s", self.active_project_path, exc, exc_info=True)
+            return []
+
     def get_active_project_info(self) -> dict:
         """
         Get information about the currently active project.
@@ -345,6 +431,7 @@ class WorkspaceService:
         file_path = event.payload.get("file_path")
         validated_code = event.payload.get("validated_code")
         task_id = event.payload.get("task_id")
+        spec = event.payload.get("spec")
 
         if not file_path or validated_code is None:
             logger.warning("VALIDATION_SUCCESSFUL event missing file_path or validated_code payload")
@@ -359,6 +446,7 @@ class WorkspaceService:
             code=validated_code,
             task_id=task_id,
             origin="validation_successful",
+            spec=spec,
         )
 
     def _handle_change_request(
@@ -367,6 +455,7 @@ class WorkspaceService:
         code: str,
         task_id: Optional[str] = None,
         origin: str = "generated",
+        spec: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Central handler for any generated or validated code writes.
@@ -376,7 +465,7 @@ class WorkspaceService:
             return
 
         try:
-            change_entry = self._build_change_entry(file_path, code, task_id=task_id, origin=origin)
+            change_entry = self._build_change_entry(file_path, code, task_id=task_id, origin=origin, spec=spec)
         except Exception as exc:
             logger.error(f"Failed to prepare change entry for {file_path}: {exc}", exc_info=True)
             return
@@ -402,13 +491,16 @@ class WorkspaceService:
         code: str,
         task_id: Optional[str],
         origin: str,
+        spec: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         if not self.active_project_path:
             raise RuntimeError("Active project path is not set.")
 
         sanitized_relative = self._sanitize_relative_path(file_path)
-        display_path = file_path
-        target_file = self.active_project_path / sanitized_relative
+        project_directory = self._resolve_project_directory(spec, sanitized_relative)
+        relative_path = self._compose_relative_path(sanitized_relative, project_directory)
+        display_path = relative_path
+        target_file = self.active_project_path / relative_path
         existing_code = ""
         file_exists = target_file.exists()
 
@@ -419,7 +511,7 @@ class WorkspaceService:
                 logger.warning("Failed to read existing contents of %s: %s", target_file, exc)
                 existing_code = ""
 
-        diff_result = self._compute_diff(sanitized_relative, existing_code, code)
+        diff_result = self._compute_diff(relative_path, existing_code, code)
         if diff_result is None:
             return None
 
@@ -429,7 +521,7 @@ class WorkspaceService:
         change_id = str(uuid.uuid4())
         file_entry = {
             "display_path": display_path,
-            "relative_path": sanitized_relative,
+            "relative_path": relative_path,
             "diff": diff_text,
             "additions": additions,
             "deletions": deletions,
@@ -437,6 +529,8 @@ class WorkspaceService:
             "is_new_file": not file_exists,
             "code": code,
         }
+        if project_directory:
+            file_entry["project_directory"] = project_directory
 
         change_entry = {
             "change_id": change_id,
@@ -512,6 +606,74 @@ class WorkspaceService:
             safe_parts.append(path_obj.name or "generated.py")
 
         return "/".join(safe_parts)
+
+    def _resolve_project_directory(self, spec: Optional[Dict[str, Any]], sanitized_relative: str) -> Optional[str]:
+        """
+        Determine the directory name that should isolate generated artifacts for a project.
+
+        Attempts to read explicit identifiers from the provided spec payload and falls back
+        to inferring the name from the file path when the spec does not include metadata.
+        """
+        explicit = self._extract_project_directory_from_spec(spec)
+        if explicit:
+            return explicit
+        return self._infer_project_directory_from_path(sanitized_relative)
+
+    def _extract_project_directory_from_spec(self, spec: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not isinstance(spec, dict):
+            return None
+
+        def read_from_mapping(mapping: Dict[str, Any]) -> Optional[str]:
+            for key in ("project_slug", "slug"):
+                value = mapping.get(key)
+                if isinstance(value, str):
+                    slug = self._slugify_project_name(value)
+                    if slug:
+                        return slug
+            for key in ("project_name", "name"):
+                value = mapping.get(key)
+                if isinstance(value, str):
+                    slug = self._slugify_project_name(value)
+                    if slug:
+                        return slug
+            return None
+
+        for mapping in (spec, spec.get("metadata") if isinstance(spec.get("metadata"), dict) else None):
+            if isinstance(mapping, dict):
+                slug = read_from_mapping(mapping)
+                if slug:
+                    return slug
+        return None
+
+    def _infer_project_directory_from_path(self, sanitized_relative: str) -> Optional[str]:
+        parts = [part for part in sanitized_relative.split("/") if part]
+        if len(parts) >= 3 and parts[0] == "src":
+            return self._slugify_project_name(parts[1])
+        return None
+
+    @staticmethod
+    def _compose_relative_path(relative_path: str, project_directory: Optional[str]) -> str:
+        if not project_directory:
+            return relative_path
+        combined = Path(project_directory)
+        combined_path = combined.joinpath(*Path(relative_path).parts)
+        return combined_path.as_posix()
+
+    @staticmethod
+    def _slugify_project_name(name: str) -> Optional[str]:
+        if not isinstance(name, str):
+            return None
+        candidate = name.strip().lower()
+        if not candidate:
+            return None
+        candidate = candidate.replace("\\", " ").replace("/", " ")
+        candidate = re.sub(r"[^\w\s-]", "", candidate)
+        candidate = candidate.replace("-", " ")
+        candidate = re.sub(r"\s+", "_", candidate)
+        candidate = re.sub(r"_+", "_", candidate).strip("_")
+        if not candidate or candidate in {".", ".."}:
+            return None
+        return candidate
 
     def _emit_diff_ready(self, change_entry: Dict[str, Any], *, pending: bool, auto_applied: bool) -> None:
         payload = self._serialize_change_entry(change_entry)
