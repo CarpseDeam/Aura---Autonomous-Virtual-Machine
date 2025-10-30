@@ -1,8 +1,9 @@
+import difflib
 import json
 import logging
 import re
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.action import Action, ActionType
@@ -32,6 +33,40 @@ class AuraExecutor:
 
     _MAX_EXISTING_FILES_FOR_PROMPT = 200
     _DEFAULT_PROJECT_NAME = "default_project"
+    _COMMON_NAME_PREFIXES = ("test", "demo", "example")
+    _MATCH_STOPWORDS = {
+        "add",
+        "update",
+        "modify",
+        "change",
+        "create",
+        "build",
+        "generate",
+        "start",
+        "scaffold",
+        "bootstrap",
+        "make",
+        "please",
+        "the",
+        "a",
+        "an",
+        "to",
+        "with",
+        "using",
+        "use",
+        "for",
+        "on",
+        "in",
+        "of",
+        "and",
+        "new",
+        "project",
+        "app",
+        "application",
+        "module",
+        "code",
+        "feature",
+    }
 
     def __init__(
         self,
@@ -422,30 +457,169 @@ class AuraExecutor:
         return None
 
     def _match_project_name(self, user_text: str, projects: List[Dict[str, Any]]) -> Optional[str]:
+        """Find the best project match for a request using normalized tokens and similarity scoring."""
         if not user_text:
             return None
 
         raw_lower = user_text.lower()
         normalized_request = self._normalize_for_match(user_text)
-        collapsed_request = normalized_request.replace(" ", "")
+        request_tokens = self._tokenize_for_match(user_text)
+        if not request_tokens:
+            return None
+
+        focus_tokens = self._filter_stopwords(request_tokens)
+        if not focus_tokens:
+            focus_tokens = request_tokens
+
+        request_full_collapsed = "".join(request_tokens)
+        focus_collapsed = "".join(focus_tokens)
+        request_canonical_tokens = self._canonicalize_tokens(request_tokens)
+
+        candidates: List[Dict[str, Any]] = []
 
         for entry in projects:
             name = (entry or {}).get("name")
             if not name:
                 continue
+
             slug = name.lower()
             if slug and slug in raw_lower:
+                logger.debug("Matched project '%s' via direct substring.", name)
                 return name
 
             normalized_name = self._normalize_for_match(name)
             if normalized_name and normalized_name in normalized_request:
+                logger.debug("Matched project '%s' via normalized substring.", name)
                 return name
 
             collapsed_name = normalized_name.replace(" ", "") if normalized_name else ""
-            if collapsed_name and collapsed_name in collapsed_request:
+            if collapsed_name and collapsed_name in request_full_collapsed:
+                logger.debug("Matched project '%s' via collapsed substring.", name)
                 return name
 
+            tokens = normalized_name.split() if normalized_name else []
+            if not tokens:
+                continue
+
+            stripped_tokens = self._strip_common_prefix_tokens(tokens)
+            if not stripped_tokens:
+                stripped_tokens = tokens
+
+            canonical_tokens = self._canonicalize_tokens(stripped_tokens)
+            if not canonical_tokens:
+                continue
+
+            overlap = len(canonical_tokens & request_canonical_tokens)
+            required_overlap = 1 if len(canonical_tokens) <= 2 else 2
+            token_score = overlap / max(len(canonical_tokens), 1)
+
+            base_collapsed = "".join(stripped_tokens)
+            sequence_score = 0.0
+            if base_collapsed and focus_collapsed:
+                sequence_score = difflib.SequenceMatcher(None, base_collapsed, focus_collapsed).ratio()
+
+            collapse_score = 0.0
+            if base_collapsed and focus_collapsed and base_collapsed in focus_collapsed:
+                collapse_score = 1.0
+            elif base_collapsed and request_full_collapsed and base_collapsed in request_full_collapsed:
+                collapse_score = max(collapse_score, 0.9)
+
+            # Prefer overlapping tokens but allow close sequence matches as a fallback.
+            score = max(token_score, sequence_score, collapse_score)
+            candidates.append(
+                {
+                    "name": name,
+                    "score": score,
+                    "token_score": token_score,
+                    "sequence_score": sequence_score,
+                    "collapse_score": collapse_score,
+                    "overlap": overlap,
+                    "required_overlap": required_overlap,
+                    "token_count": len(canonical_tokens),
+                }
+            )
+
+        if not candidates:
+            available = [
+                (project or {}).get("name")
+                for project in projects
+                if (project or {}).get("name")
+            ]
+            if available:
+                logger.debug(
+                    "No project match candidates for request '%s'. Projects available: %s",
+                    user_text,
+                    available,
+                )
+            return None
+
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        log_candidates = ", ".join(f"{cand['name']}:{cand['score']:.2f}" for cand in candidates[:5])
+        # Log the top candidates to make it easier to debug match decisions in production.
+        logger.debug("Project match candidates for request '%s': %s", user_text, log_candidates)
+
+        best = candidates[0]
+        meets_overlap = best["overlap"] >= best["required_overlap"]
+        sequence_ok = best["sequence_score"] >= 0.85
+        collapse_ok = best["collapse_score"] >= 0.95
+        if best["score"] >= 0.55 and (meets_overlap or sequence_ok or collapse_ok):
+            logger.debug(
+                "Selected project '%s' (score=%.2f, overlap=%d/%d, sequence=%.2f).",
+                best["name"],
+                best["score"],
+                best["overlap"],
+                best["token_count"],
+                best["sequence_score"],
+            )
+            return best["name"]
+
+        available = [
+            (project or {}).get("name")
+            for project in projects
+            if (project or {}).get("name")
+        ]
+        logger.debug(
+            "No project matched request '%s' (best candidate '%s' score=%.2f). Projects available: %s",
+            user_text,
+            best["name"],
+            best["score"],
+            available,
+        )
         return None
+
+    @classmethod
+    def _tokenize_for_match(cls, text: str) -> List[str]:
+        normalized = cls._normalize_for_match(text)
+        return normalized.split() if normalized else []
+
+    @classmethod
+    def _filter_stopwords(cls, tokens: List[str]) -> List[str]:
+        return [token for token in tokens if token not in cls._MATCH_STOPWORDS]
+
+    @classmethod
+    def _strip_common_prefix_tokens(cls, tokens: List[str]) -> List[str]:
+        idx = 0
+        while idx < len(tokens) and tokens[idx] in cls._COMMON_NAME_PREFIXES:
+            idx += 1
+        return tokens[idx:]
+
+    @classmethod
+    def _canonicalize_tokens(cls, tokens: List[str]) -> Set[str]:
+        canonical: Set[str] = set()
+        for token in tokens:
+            canonical.add(token)
+            canonical.add(cls._singularize_token(token))
+        return {token for token in canonical if token}
+
+    @staticmethod
+    def _singularize_token(token: str) -> str:
+        if len(token) > 4 and token.endswith("ies"):
+            return f"{token[:-3]}y"
+        if len(token) > 4 and token.endswith("ses"):
+            return token[:-2]
+        if len(token) > 3 and token.endswith("s"):
+            return token[:-1]
+        return token
 
     @staticmethod
     def _normalize_for_match(text: str) -> str:
