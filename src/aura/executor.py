@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.action import Action, ActionType
+from src.aura.models.exceptions import LLMServiceError
 from src.aura.models.project_context import ProjectContext
 from src.aura.models.result import Result
 from src.aura.models.events import Event
@@ -173,17 +174,19 @@ class AuraExecutor:
 
         prompt_payload = {"text": prompt, "images": attachments} if attachments else prompt
 
+        fallback_message = (
+            "I'm having connection issues right now. Please check your API key and network connection."
+        )
+
         try:
             stream = self.llm.stream_chat_for_agent("lead_companion_agent", prompt_payload)
-        except Exception as exc:
-            logger.error("Streaming chitchat reply failed: %s", exc, exc_info=True)
-            raise RuntimeError("Failed to stream conversational reply.") from exc
-
-        chunks: List[str] = []
-        try:
+            chunks: List[str] = []
             for chunk in stream:
                 if chunk:
                     chunks.append(chunk)
+        except LLMServiceError as exc:
+            logger.error("Streaming chitchat reply failed after retries: %s", exc, exc_info=True)
+            return fallback_message
         except Exception as exc:
             logger.error("Error while gathering chitchat stream: %s", exc, exc_info=True)
             raise RuntimeError("Failed to gather conversational reply stream.") from exc
@@ -241,6 +244,17 @@ class AuraExecutor:
 
         try:
             response = self.llm.run_for_agent("lead_companion_agent", prompt)
+        except LLMServiceError as exc:
+            logger.error(
+                "DISCUSS response generation failed after retries: %s",
+                exc,
+                exc_info=True,
+            )
+            return self._build_discuss_fallback_response(
+                clarifying_questions,
+                unclear_aspects,
+                understood_summary,
+            )
         except Exception as exc:
             logger.error("Failed formatting DISCUSS response: %s", exc, exc_info=True)
             return self._build_discuss_fallback_response(

@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from src.aura.models.action import Action, ActionType
+from src.aura.models.exceptions import LLMServiceError
 from src.aura.models.intent import Intent
 from src.aura.models.project_context import ProjectContext
 from src.aura.prompts.prompt_manager import PromptManager
@@ -187,6 +188,13 @@ class AuraBrain:
 
         try:
             raw_response = self.llm.run_for_agent("intent_detection_agent", prompt)
+        except LLMServiceError as exc:
+            logger.warning(
+                "Intent detection failed after retries for agent 'intent_detection_agent': %s. "
+                "Defaulting to CASUAL_CHAT.",
+                exc,
+            )
+            return Intent.CASUAL_CHAT
         except Exception as exc:
             logger.error("Intent detection agent call failed: %s", exc, exc_info=True)
             return Intent.CASUAL_CHAT
@@ -282,7 +290,23 @@ class AuraBrain:
         if not prompt:
             raise RuntimeError("Failed to render reasoning prompt")
 
-        raw = self.llm.run_for_agent("reasoning_agent", prompt)
+        try:
+            raw = self.llm.run_for_agent("reasoning_agent", prompt)
+        except LLMServiceError as exc:
+            logger.error(
+                "Reasoning agent call failed after retries; returning SIMPLE_REPLY fallback. Error: %s",
+                exc,
+                exc_info=True,
+            )
+            return Action(
+                type=ActionType.SIMPLE_REPLY,
+                params={
+                    "request": (
+                        "I'm having trouble connecting to my reasoning engine right now. "
+                        "Let me try to help you anyway - what do you need?"
+                    )
+                },
+            )
         clean = self._extract_json_from_response(raw)
         try:
             data = json.loads(clean) if clean else {}
