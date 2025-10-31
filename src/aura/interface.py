@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -216,6 +217,30 @@ class AuraInterface:
             self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
             return
 
+        # Check for natural language project creation commands
+        natural_project_response = self._handle_natural_project_command(user_text)
+        if natural_project_response:
+            logger.info("Processing natural language project command: %s", user_text)
+            try:
+                self.conversations.add_message("user", user_text)
+            except Exception:
+                logger.debug("Failed to record natural project command user message.", exc_info=True)
+            try:
+                self.conversations.add_message(
+                    "assistant",
+                    natural_project_response,
+                    metadata={"action_type": "project_management"}
+                )
+            except Exception:
+                logger.debug("Failed to record natural project command response.", exc_info=True)
+            self._persist_project_conversation_turn(
+                user_text,
+                [{"role": "assistant", "content": natural_project_response, "metadata": {"action_type": "project_management"}}],
+            )
+            self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": natural_project_response}))
+            self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+            return
+
         if image_attachment and not self.executor.llm.provider_supports_vision("lead_companion_agent"):
             self.event_bus.dispatch(Event(
                 event_type="MODEL_ERROR",
@@ -241,12 +266,31 @@ class AuraInterface:
 
         parts = command.split()
         if len(parts) < 2:
-            return "Usage: /project [list|switch <name>|info]"
+            return "Usage: /project [list|switch <name>|create <name>|new <name>|info]"
 
         action = parts[1].lower()
         if action == "list":
             projects = self.project_manager.list_projects()
             return self._format_project_list(projects)
+
+        if action in ("create", "new"):
+            if len(parts) < 3:
+                return f"Usage: /project {action} <name>"
+            project_name = parts[2]
+            try:
+                project = self.project_manager.create_and_switch_project(project_name)
+            except ValueError as exc:
+                return f"Failed to create project: {exc}"
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Failed to create project '%s': %s", project_name, exc, exc_info=True)
+                return f"Failed to create project '{project_name}': {exc}"
+
+            try:
+                self.workspace.set_active_project(project.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Workspace activation failed for project '%s': %s", project.name, exc, exc_info=True)
+
+            return f"Created new project '{project.name}'!\n\nYou're all set up and ready to go. What would you like to build?"
 
         if action == "switch":
             if len(parts) < 3:
@@ -274,7 +318,95 @@ class AuraInterface:
                 return "No project is currently active."
             return self._format_project_info(project)
 
-        return "Unsupported project command. Use '/project list', '/project switch <name>', or '/project info'."
+        return "Unsupported project command. Use '/project list', '/project switch <name>', '/project create <name>', or '/project info'."
+
+    def _handle_natural_project_command(self, user_text: str) -> Optional[str]:
+        """
+        Handle natural language project creation commands.
+
+        Detects patterns like:
+        - "create a new project called fastapi-backend"
+        - "start a fresh project for my saas app"
+        - "make me a new project named website-redesign"
+
+        Args:
+            user_text: The raw user message
+
+        Returns:
+            Response message if a project command was detected and handled, None otherwise
+        """
+        if not self.project_manager:
+            return None
+
+        # Pattern to detect natural language project creation
+        patterns = [
+            r"(?:create|make|start)\s+(?:a\s+)?(?:new\s+)?project\s+(?:called|named)\s+(.+)",
+            r"(?:create|make|start)\s+(?:a\s+)?(?:new\s+)?project\s+for\s+(?:my\s+)?(.+)",
+            r"(?:new|fresh)\s+project\s+(?:called|named|for)\s+(.+)",
+        ]
+
+        project_name = None
+        for pattern in patterns:
+            match = re.search(pattern, user_text, re.IGNORECASE)
+            if match:
+                project_name = match.group(1).strip()
+                break
+
+        if not project_name:
+            return None
+
+        # Sanitize the project name to be filesystem-safe
+        sanitized_name = self._sanitize_project_name(project_name)
+
+        if not sanitized_name:
+            return "I couldn't extract a valid project name. Please provide a name with alphanumeric characters."
+
+        try:
+            project = self.project_manager.create_and_switch_project(sanitized_name)
+
+            # Activate workspace
+            try:
+                self.workspace.set_active_project(project.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Workspace activation failed for project '%s': %s", project.name, exc, exc_info=True)
+
+            return f"Created new project '{project.name}'!\n\nYou're all set up and ready to go. What would you like to build?"
+
+        except ValueError as exc:
+            # Project might already exist
+            if "already exists" in str(exc).lower():
+                return f"Project '{sanitized_name}' already exists. Would you like to switch to it? Try: /project switch {sanitized_name}"
+            return f"Failed to create project: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to create project '%s': %s", sanitized_name, exc, exc_info=True)
+            return f"An error occurred while creating the project: {exc}"
+
+    def _sanitize_project_name(self, name: str) -> str:
+        """
+        Sanitize a project name to be filesystem-safe.
+
+        Args:
+            name: Raw project name from user input
+
+        Returns:
+            Sanitized project name with only safe characters
+        """
+        # Remove invalid filesystem characters
+        sanitized = re.sub(r'[<>:"/\\|?*]', '', name)
+
+        # Replace spaces and underscores with hyphens
+        sanitized = re.sub(r'[\s_]+', '-', sanitized)
+
+        # Remove leading/trailing hyphens
+        sanitized = sanitized.strip('-')
+
+        # Convert to lowercase for consistency
+        sanitized = sanitized.lower()
+
+        # Keep only alphanumeric and hyphens
+        sanitized = re.sub(r'[^a-z0-9-]', '', sanitized)
+
+        return sanitized
 
     def _format_project_list(self, projects: List[ProjectSummary]) -> str:
         """Format project summaries for display."""

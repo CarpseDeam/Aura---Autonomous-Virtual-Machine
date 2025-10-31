@@ -6,7 +6,7 @@ import markdown
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QTextBrowser, QHBoxLayout,
-    QApplication, QPushButton, QFileDialog
+    QApplication, QPushButton, QFileDialog, QInputDialog
 )
 from PySide6.QtGui import QFont, QTextCursor, QIcon, QTextOption, QDesktopServices
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QUrl, QUrlQuery
@@ -319,6 +319,10 @@ class MainWindow(QMainWindow):
         btn_new_session.setObjectName("top_bar_button")
         btn_new_session.clicked.connect(self._start_new_session)
 
+        btn_new_project = QPushButton("New Project")
+        btn_new_project.setObjectName("top_bar_button")
+        btn_new_project.clicked.connect(self._create_new_project)
+
         btn_import_project = QPushButton("Import Project...")
         btn_import_project.setObjectName("top_bar_button")
         btn_import_project.clicked.connect(self._import_project)
@@ -334,6 +338,7 @@ class MainWindow(QMainWindow):
 
         hl.addWidget(btn_new_session)
         hl.addStretch()
+        hl.addWidget(btn_new_project)
         hl.addWidget(btn_import_project)
         hl.addWidget(btn_configure_agents)
         hl.addWidget(self.auto_accept_label)
@@ -453,6 +458,30 @@ class MainWindow(QMainWindow):
                 logger.info(f"User selected project for import: {project_path}")
                 self.event_bus.dispatch(Event(event_type="IMPORT_PROJECT_REQUESTED", payload={"path": project_path}))
                 self._display_system_message("WORKSPACE", f"Importing project from: {project_path}")
+
+    def _create_new_project(self):
+        """Show dialog to create a new project."""
+        project_name, ok = QInputDialog.getText(
+            self,
+            "New Project",
+            "Enter project name:",
+            text=""
+        )
+
+        if ok and project_name:
+            project_name = project_name.strip()
+            if not project_name:
+                self._log_system_message("ERROR", "Project name cannot be empty.")
+                return
+
+            logger.info(f"User requested new project: {project_name}")
+            # Use the /project create command to create and switch to the new project
+            self.event_bus.dispatch(
+                Event(
+                    event_type="SEND_USER_MESSAGE",
+                    payload={"text": f"/project create {project_name}"}
+                )
+            )
 
     # Input/Output
     def _log_user_message(self, user_text: str, image: Optional[Union[str, Dict[str, Any]]] = None):

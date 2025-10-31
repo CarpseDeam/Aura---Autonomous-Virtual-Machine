@@ -222,6 +222,54 @@ class ProjectManager:
         logger.debug("Project '%s' exists: %s", project_name, exists)
         return exists
 
+    def create_and_switch_project(self, name: str, root_path: Optional[str] = None) -> Project:
+        """
+        Create a new project and immediately switch to it.
+
+        Args:
+            name: Filesystem-safe project name
+            root_path: Optional absolute path (defaults to WORKSPACE_DIR/name)
+
+        Returns:
+            The newly created and activated Project instance
+
+        Raises:
+            ValueError: If project name is invalid or already exists
+        """
+        self._validate_project_name(name)
+
+        if self.project_exists(name):
+            logger.warning("Project '%s' already exists. Switching to existing project.", name)
+            return self.switch_project(name)
+
+        # If no root_path provided, create a default workspace directory
+        if root_path is None:
+            workspace_root = Path.home() / "aura_workspace"
+            try:
+                workspace_root.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.error("Failed to create workspace root %s: %s", workspace_root, exc)
+                raise ValueError(f"Failed to create workspace root: {exc}") from exc
+
+            root_path = str(workspace_root / name)
+
+        # Ensure root_path is absolute
+        root = Path(root_path).expanduser()
+        if not root.is_absolute():
+            logger.error("Root path for project '%s' must be absolute: %s", name, root_path)
+            raise ValueError("Project root_path must be absolute.")
+
+        # Create the project root directory if it doesn't exist
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.error("Failed to create project root directory %s: %s", root, exc)
+            raise ValueError(f"Failed to create project directory: {exc}") from exc
+
+        project = self.create_project(name, str(root))
+        logger.info("Created and switched to new project '%s' at %s.", name, root)
+        return project
+
     def _validate_project_name(self, project_name: str) -> None:
         """Ensure project names are filesystem-safe."""
         if not project_name or not project_name.strip():
