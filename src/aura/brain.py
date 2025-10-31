@@ -109,11 +109,13 @@ class AuraBrain:
     def decide(self, user_text: str, context: ProjectContext) -> Action:
         """Return the next Action based on the user input and context."""
         history = context.conversation_history or []
+        clarification_context = self._build_clarification_context(history, user_text)
 
         prompt = self.prompts.render(
             "reasoning_prompt.jinja2",
             user_text=user_text,
             conversation_history=history,
+            clarification_context=clarification_context,
         )
         if not prompt:
             raise RuntimeError("Failed to render reasoning prompt")
@@ -137,7 +139,156 @@ class AuraBrain:
         if not isinstance(action_payload, dict):
             raise RuntimeError("Reasoning response missing 'action' object")
 
-        return self._action_from_payload(action_payload)
+        proposed_action = self._action_from_payload(action_payload)
+
+        confidence, unclear_aspects, clarifying_questions = self._extract_confidence_data(data)
+        if unclear_aspects:
+            logger.info(
+                "LLM confidence %.2f; unclear aspects: %s",
+                confidence,
+                "; ".join(unclear_aspects),
+            )
+        else:
+            logger.info("LLM confidence %.2f; no unclear aspects flagged.", confidence)
+
+        if confidence < 0.7:
+            if clarifying_questions:
+                logger.info(
+                    "Confidence below threshold; overriding to DISCUSS with %d questions.",
+                    len(clarifying_questions),
+                )
+                return Action(
+                    type=ActionType.DISCUSS,
+                    params={
+                        "questions": clarifying_questions,
+                        "unclear_aspects": unclear_aspects,
+                        "original_action": action_payload,
+                        "original_confidence": confidence,
+                    },
+                )
+
+            logger.warning(
+                "Confidence below threshold but no clarifying questions provided; requesting additional detail via simple reply."
+            )
+            fallback_message = self._build_fallback_request(unclear_aspects)
+            return Action(
+                type=ActionType.SIMPLE_REPLY,
+                params={"request": fallback_message},
+            )
+
+        return proposed_action
+
+    def _build_clarification_context(self, history: List[Dict[str, Any]], _latest_user_text: str) -> str:
+        """Summarize prior DISCUSS rounds so the LLM knows what was unclear."""
+        if not history:
+            return ""
+
+        for idx in range(len(history) - 1, -1, -1):
+            message = history[idx] or {}
+            role = str(message.get("role") or "").lower()
+            if role != "assistant":
+                continue
+
+            action_marker = str(
+                message.get("action_type")
+                or (message.get("metadata") or {}).get("action_type")
+                or ""
+            ).lower()
+            if action_marker != ActionType.DISCUSS.value:
+                continue
+
+            unclear_aspects = self._coerce_list_of_str(message.get("unclear_aspects"))
+            clarifying_questions = self._coerce_list_of_str(
+                message.get("clarifying_questions") or message.get("questions")
+            )
+            original_action = message.get("original_action") if isinstance(message, dict) else None
+
+            previous_user = next(
+                (
+                    msg
+                    for msg in reversed(history[:idx])
+                    if (msg or {}).get("role") == "user"
+                ),
+                None,
+            )
+
+            parts: List[str] = []
+            if previous_user and isinstance(previous_user.get("content"), str):
+                previous_content = previous_user["content"].strip()
+                if previous_content:
+                    parts.append(f"Previous user request: {previous_content}")
+
+            if unclear_aspects:
+                parts.append("Unclear aspects noted: " + "; ".join(unclear_aspects))
+
+            if clarifying_questions:
+                formatted_questions = "\n".join(f"- {question}" for question in clarifying_questions)
+                parts.append("Questions previously asked:\n" + formatted_questions)
+
+            if isinstance(original_action, dict):
+                orig_type = original_action.get("type")
+                if isinstance(orig_type, str) and orig_type:
+                    parts.append(f"Original intended action after clarification: {orig_type}")
+
+            parts.append(
+                "The current user message likely addresses these questions. Incorporate the new details before deciding the next action."
+            )
+            return "\n".join(parts).strip()
+
+        return ""
+
+    def _extract_confidence_data(self, data: Dict[str, Any]) -> Tuple[float, List[str], List[str]]:
+        confidence = self._safe_float(data.get("confidence"), 0.8)
+        confidence = max(0.0, min(1.0, confidence))
+
+        unclear_aspects = self._coerce_list_of_str(data.get("unclear_aspects"))
+        clarifying_questions = self._coerce_list_of_str(data.get("clarifying_questions"))
+
+        return confidence, unclear_aspects, clarifying_questions
+
+    def _build_fallback_request(self, unclear_aspects: List[str]) -> str:
+        if unclear_aspects:
+            summary = "; ".join(unclear_aspects)
+            return (
+                "I'd love to help, but I need a bit more clarity first. "
+                f"Could you share more about {summary}?"
+            )
+        return "I'd love to help. Could you share a bit more detail so I know exactly how to proceed?"
+
+    @staticmethod
+    def _coerce_list_of_str(value: Any) -> List[str]:
+        if isinstance(value, list):
+            coerced: List[str] = []
+            for item in value:
+                if item is None:
+                    continue
+                if isinstance(item, dict):
+                    candidate = next(
+                        (
+                            item.get(key)
+                            for key in ("question", "text", "content", "value")
+                            if isinstance(item.get(key), str) and item.get(key).strip()
+                        ),
+                        None,
+                    )
+                    text = candidate if isinstance(candidate, str) else str(item)
+                else:
+                    text = str(item)
+                text = text.strip()
+                if text:
+                    coerced.append(text)
+            return coerced
+        if isinstance(value, str):
+            text = value.strip()
+            return [text] if text else []
+        return []
+
+    @staticmethod
+    def _safe_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     def _action_from_payload(self, payload: Dict[str, Any]) -> Action:
         type_value = payload.get("type")

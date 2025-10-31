@@ -17,6 +17,10 @@ from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
 from src.aura.interface import AuraInterface
+from src.aura.context.context_manager import ContextManager
+from src.aura.models.context_models import ContextConfig
+from src.aura.agent.iteration_controller import IterationController
+from src.aura.models.iteration_models import IterationConfig
 from src.aura.config import ASSETS_DIR, WORKSPACE_DIR
 from src.ui.windows.main_window import MainWindow
 
@@ -64,6 +68,42 @@ class AuraApp:
             context=self.context_retrieval_service,
             workspace=self.workspace_service,
         )
+
+        # Initialize Context Manager for intelligent context loading
+        self.context_manager = None
+        try:
+            context_config = ContextConfig(
+                max_tokens=8000,
+                min_relevance_threshold=0.3,
+                max_files=20
+            )
+            self.context_manager = ContextManager(
+                project_root=str(WORKSPACE_DIR),
+                config=context_config,
+                event_bus=self.event_bus
+            )
+            logging.info("ContextManager initialized successfully")
+        except Exception as e:
+            logging.warning(f"Failed to initialize ContextManager: {e}. Continuing with fallback behavior.")
+
+        # Initialize Iteration Controller for intelligent iteration control
+        self.iteration_controller = None
+        try:
+            iteration_config = IterationConfig(
+                bootstrap_max_iterations=15,
+                iterate_max_iterations=8,
+                loop_detection_threshold=3,
+                use_llm_reflection=True
+            )
+            self.iteration_controller = IterationController(
+                config=iteration_config,
+                llm_service=self.llm_service,
+                event_bus=self.event_bus
+            )
+            logging.info("IterationController initialized successfully")
+        except Exception as e:
+            logging.warning(f"Failed to initialize IterationController: {e}. Continuing with fallback behavior.")
+
         # Thread pool for background tasks
         thread_pool = QThreadPool.globalInstance()
 
@@ -75,6 +115,8 @@ class AuraApp:
             conversations=self.conversation_management_service,
             workspace=self.workspace_service,
             thread_pool=thread_pool,
+            context_manager=self.context_manager,
+            iteration_controller=self.iteration_controller,
         )
         self.main_window = MainWindow(self.event_bus, self.image_storage_service)
 

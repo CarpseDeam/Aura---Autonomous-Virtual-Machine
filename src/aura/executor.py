@@ -90,6 +90,7 @@ class AuraExecutor:
         self._tools = {
             ActionType.DESIGN_BLUEPRINT: self.execute_design_blueprint,
             ActionType.REFINE_CODE: self.execute_refine_code,
+            ActionType.DISCUSS: self.execute_discuss,
             ActionType.SIMPLE_REPLY: self.execute_simple_reply,
             ActionType.RESEARCH: self.execute_research,
             ActionType.LIST_FILES: self.execute_list_files,
@@ -192,6 +193,160 @@ class AuraExecutor:
             logger.warning("Chitchat model returned an empty reply.")
             raise RuntimeError("Chitchat model returned empty reply")
         return reply_text
+
+    def execute_discuss(self, action: Action, ctx: ProjectContext) -> str:
+        clarifying_questions = self._normalize_string_list(action.get_param("questions", []))
+        unclear_aspects = self._normalize_string_list(action.get_param("unclear_aspects", []))
+        original_action = action.get_param("original_action")
+        understood_summary = self._summarize_original_action(original_action)
+
+        if not clarifying_questions:
+            logger.warning("DISCUSS action missing clarifying questions; using generic clarification prompt.")
+            return (
+                "I want to make sure I build exactly what you have in mind. "
+                "Could you share a bit more detail about the specifics you need so I can continue confidently?"
+            )
+
+        latest_user_message = next(
+            (
+                (msg or {}).get("content")
+                for msg in reversed(ctx.conversation_history or [])
+                if (msg or {}).get("role") == "user"
+            ),
+            None,
+        )
+
+        prompt_lines = [
+            "You are Aura, a collaborative senior software engineer.",
+            "Compose a short, friendly message asking for clarification before you proceed with the work.",
+        ]
+        if latest_user_message:
+            prompt_lines.append(f"Latest user message: {latest_user_message.strip()}")
+        if understood_summary:
+            prompt_lines.append(f"What you believe the user wants: {understood_summary}")
+        if unclear_aspects:
+            prompt_lines.append("Still unclear details: " + "; ".join(unclear_aspects))
+        prompt_lines.append("Ask the developer the following clarifying questions in bullet form:")
+        for question in clarifying_questions:
+            prompt_lines.append(f"- {question}")
+        prompt_lines.append(
+            "Briefly explain why these answers matter so they know you're being thoughtful, then reassure them you'll continue once you have clarity."
+        )
+        prompt_lines.append(
+            "Tone guidelines: warm, collaborative, confident; no code fences; keep it concise but personable."
+        )
+        prompt_lines.append("Return only the final message you would send to the developer.")
+
+        prompt = "\n".join(prompt_lines)
+
+        try:
+            response = self.llm.run_for_agent("lead_companion_agent", prompt)
+        except Exception as exc:
+            logger.error("Failed formatting DISCUSS response: %s", exc, exc_info=True)
+            return self._build_discuss_fallback_response(
+                clarifying_questions,
+                unclear_aspects,
+                understood_summary,
+            )
+
+        formatted = self._strip_code_fences(response or "").strip()
+        if not formatted:
+            logger.warning("Empty DISCUSS response from companion agent; using fallback message.")
+            return self._build_discuss_fallback_response(
+                clarifying_questions,
+                unclear_aspects,
+                understood_summary,
+            )
+
+        return formatted
+
+    @staticmethod
+    def _normalize_string_list(value: Any) -> List[str]:
+        if isinstance(value, list):
+            items: List[str] = []
+            for item in value:
+                if item is None:
+                    continue
+                if isinstance(item, dict):
+                    candidate = next(
+                        (
+                            item.get(key)
+                            for key in ("question", "text", "content", "value")
+                            if isinstance(item.get(key), str) and item.get(key).strip()
+                        ),
+                        None,
+                    )
+                    text = candidate if isinstance(candidate, str) else str(item)
+                else:
+                    text = str(item)
+                text = text.strip()
+                if text:
+                    items.append(text)
+            return items
+        if isinstance(value, str):
+            text = value.strip()
+            return [text] if text else []
+        return []
+
+    @staticmethod
+    def _summarize_original_action(original_action: Any) -> Optional[str]:
+        if not isinstance(original_action, dict):
+            return None
+
+        action_type = original_action.get("type")
+        raw_params = original_action.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
+
+        action_label = ""
+        if isinstance(action_type, str) and action_type:
+            action_label = action_type.replace("_", " ").strip()
+
+        request_text = params.get("request")
+        if isinstance(request_text, str):
+            request_text = request_text.strip()
+        else:
+            request_text = None
+
+        target_file = params.get("file_path")
+        if isinstance(target_file, str):
+            target_file = target_file.strip()
+        else:
+            target_file = None
+
+        details: List[str] = []
+        if action_label:
+            details.append(action_label)
+        if request_text:
+            details.append(request_text)
+        elif target_file:
+            details.append(f"work involving {target_file}")
+
+        return " - ".join(details) if details else None
+
+    @staticmethod
+    def _build_discuss_fallback_response(
+        questions: List[str],
+        unclear_aspects: List[str],
+        understood_summary: Optional[str],
+    ) -> str:
+        intro_parts: List[str] = []
+        if understood_summary:
+            intro_parts.append(f"I'd love to help with {understood_summary}")
+        else:
+            intro_parts.append("I'd love to help out")
+        if unclear_aspects:
+            intro_parts.append("but I need a quick clarification first")
+        intro = " ".join(intro_parts) + "."
+
+        question_block = "\n".join(f"- {question}" for question in questions) if questions else "- Could you share a bit more detail?"
+
+        closing = "Once I have these details I'll jump right back into it."
+
+        clarification_note = ""
+        if unclear_aspects:
+            clarification_note = "I'm specifically unsure about: " + "; ".join(unclear_aspects) + "\n\n"
+
+        return f"{intro}\n\n{clarification_note}To get moving, could you help me with:\n{question_block}\n\n{closing}"
 
     def execute_design_blueprint(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
         user_text = action.get_param("request", "")

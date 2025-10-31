@@ -55,6 +55,7 @@ class AuraAgent:
             ActionType.SIMPLE_REPLY: "execute_simple_reply",
             ActionType.DESIGN_BLUEPRINT: "execute_design_blueprint",
             ActionType.REFINE_CODE: "execute_refine_code",
+            ActionType.DISCUSS: "execute_discuss",
             ActionType.LIST_FILES: "execute_list_files",
             ActionType.READ_FILE: "execute_read_file",
             ActionType.WRITE_FILE: "execute_write_file",
@@ -334,7 +335,12 @@ class AuraAgent:
             return "end"
 
         # Final actions that complete the user's turn
-        FINAL_ACTIONS = {ActionType.SIMPLE_REPLY, ActionType.RESEARCH, ActionType.DESIGN_BLUEPRINT}
+        FINAL_ACTIONS = {
+            ActionType.SIMPLE_REPLY,
+            ActionType.RESEARCH,
+            ActionType.DESIGN_BLUEPRINT,
+            ActionType.DISCUSS,
+        }
 
         if action.type in FINAL_ACTIONS:
             logger.info(f"[Router] Final action {action.type} completed, ending cycle.")
@@ -366,6 +372,28 @@ class AuraAgent:
                 self.executor.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
             except Exception:
                 logger.debug("Failed to dispatch conversation events for simple reply.", exc_info=True)
+            return
+
+        if action.type == ActionType.DISCUSS:
+            discuss_text = str(result or "")
+            if not discuss_text:
+                raise RuntimeError("Discuss tool returned empty response")
+
+            message_payload = {
+                "role": "assistant",
+                "content": discuss_text,
+                "action_type": ActionType.DISCUSS.value,
+                "clarifying_questions": action.get_param("questions", []),
+                "unclear_aspects": action.get_param("unclear_aspects", []),
+                "original_action": action.get_param("original_action"),
+                "original_confidence": action.get_param("original_confidence"),
+            }
+            state.setdefault("messages", []).append(message_payload)
+            try:
+                self.executor.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": discuss_text}))
+                self.executor.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+            except Exception:
+                logger.debug("Failed to dispatch conversation events for discuss reply.", exc_info=True)
             return
 
         if action.type == ActionType.DESIGN_BLUEPRINT:

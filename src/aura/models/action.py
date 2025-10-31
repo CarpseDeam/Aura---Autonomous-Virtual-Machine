@@ -8,6 +8,7 @@ class ActionType(str, Enum):
     REFINE_CODE = "refine_code"
     SIMPLE_REPLY = "simple_reply"
     RESEARCH = "research"
+    DISCUSS = "discuss"
     LIST_FILES = "list_files"
     READ_FILE = "read_file"
     WRITE_FILE = "write_file"

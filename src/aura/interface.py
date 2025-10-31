@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from PySide6.QtCore import QThreadPool
 
@@ -36,6 +37,8 @@ class AuraInterface:
         conversations: ConversationManagementService,
         workspace: WorkspaceService,
         thread_pool: QThreadPool,
+        context_manager: Optional["ContextManager"] = None,
+        iteration_controller: Optional["IterationController"] = None,
     ) -> None:
         self.event_bus = event_bus
         self.brain = brain
@@ -44,7 +47,21 @@ class AuraInterface:
         self.conversations = conversations
         self.workspace = workspace
         self.thread_pool = thread_pool
-        self.agent = AuraAgent(brain=brain, executor=executor)
+        self.context_manager = context_manager
+        self.iteration_controller = iteration_controller
+
+        # Initialize AuraAgent with the new systems
+        self.agent = AuraAgent(
+            brain=brain,
+            executor=executor,
+            context_manager=context_manager,
+            iteration_controller=iteration_controller
+        )
+
+        # Log whether systems are enabled
+        logger.info(f"AuraInterface initialized with ContextManager: {'enabled' if context_manager else 'disabled'}")
+        logger.info(f"AuraInterface initialized with IterationController: {'enabled' if iteration_controller else 'disabled'}")
+
         # Default language until detection signals otherwise
         self.current_language: str = "python"
 
@@ -55,6 +72,17 @@ class AuraInterface:
         # Passive listener for detected language updates
         self.event_bus.subscribe("PROJECT_LANGUAGE_DETECTED", self._handle_project_language_detected)
 
+        # Subscribe to Context Manager events
+        if self.context_manager:
+            self.event_bus.subscribe("CONTEXT_LOADING_STARTED", self._handle_context_loading_started)
+            self.event_bus.subscribe("CONTEXT_LOADING_COMPLETED", self._handle_context_loading_completed)
+
+        # Subscribe to Iteration Controller events
+        if self.iteration_controller:
+            self.event_bus.subscribe("ITERATION_INITIALIZED", self._handle_iteration_initialized)
+            self.event_bus.subscribe("ITERATION_PROGRESS", self._handle_iteration_progress)
+            self.event_bus.subscribe("ITERATION_STOPPED", self._handle_iteration_stopped)
+
     def _handle_project_language_detected(self, event: Event) -> None:
         """Update current language from WorkspaceService detection events."""
         try:
@@ -64,6 +92,61 @@ class AuraInterface:
                 logger.info(f"Interface updated language -> {self.current_language}")
         except Exception:
             logger.debug("Failed to process PROJECT_LANGUAGE_DETECTED event; ignoring.")
+
+    def _handle_context_loading_started(self, event: Event) -> None:
+        """Handle context loading started event."""
+        try:
+            payload = event.payload or {}
+            mode = payload.get("mode", "unknown")
+            request = payload.get("request", "")
+            logger.info(f"Context loading started in {mode} mode for request: {request[:50]}...")
+        except Exception as e:
+            logger.debug(f"Failed to process CONTEXT_LOADING_STARTED event: {e}")
+
+    def _handle_context_loading_completed(self, event: Event) -> None:
+        """Handle context loading completed event."""
+        try:
+            payload = event.payload or {}
+            loaded_files_count = payload.get("loaded_files_count", 0)
+            total_tokens = payload.get("total_tokens", 0)
+            truncated = payload.get("truncated", False)
+            logger.info(
+                f"Context loaded: {loaded_files_count} files, {total_tokens} tokens"
+                f"{' (truncated)' if truncated else ''}"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to process CONTEXT_LOADING_COMPLETED event: {e}")
+
+    def _handle_iteration_initialized(self, event: Event) -> None:
+        """Handle iteration initialized event."""
+        try:
+            payload = event.payload or {}
+            mode = payload.get("mode", "unknown")
+            max_iterations = payload.get("max_iterations", 0)
+            logger.info(f"Iteration initialized in {mode} mode with max {max_iterations} iterations")
+        except Exception as e:
+            logger.debug(f"Failed to process ITERATION_INITIALIZED event: {e}")
+
+    def _handle_iteration_progress(self, event: Event) -> None:
+        """Handle iteration progress event."""
+        try:
+            payload = event.payload or {}
+            current = payload.get("current_iteration", 0)
+            max_iter = payload.get("max_iterations", 0)
+            action_type = payload.get("action_type", "unknown")
+            logger.info(f"Iteration progress: {current}/{max_iter} - Action: {action_type}")
+        except Exception as e:
+            logger.debug(f"Failed to process ITERATION_PROGRESS event: {e}")
+
+    def _handle_iteration_stopped(self, event: Event) -> None:
+        """Handle iteration stopped event."""
+        try:
+            payload = event.payload or {}
+            reason = payload.get("reason", "unknown")
+            completed = payload.get("completed_iterations", 0)
+            logger.info(f"Iteration stopped after {completed} iterations. Reason: {reason}")
+        except Exception as e:
+            logger.debug(f"Failed to process ITERATION_STOPPED event: {e}")
 
     def _build_context(self) -> ProjectContext:
         active_project = self.workspace.active_project
