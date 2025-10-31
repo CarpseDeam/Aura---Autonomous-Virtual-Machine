@@ -71,6 +71,10 @@ class BrainExecutorWorker(QRunnable):
                         new_messages = new_messages[1:]
                     if new_messages:
                         self.interface.conversations.add_messages(new_messages)
+                    try:
+                        self.interface._persist_project_conversation_turn(self.user_text, new_messages)
+                    except Exception:
+                        logger.debug("Failed to persist project conversation turn.", exc_info=True)
                 except Exception:
                     logger.debug("Failed to append agent messages to persistent history.", exc_info=True)
             except Exception as e:

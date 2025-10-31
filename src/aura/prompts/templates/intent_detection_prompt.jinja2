@@ -1,0 +1,22 @@
+You are analyzing a user's message to determine their intent.
+
+User's latest message: {{ user_text }}
+
+Recent conversation:
+{{ conversation_history }}
+
+Classify the user's intent as ONE of:
+- CASUAL_CHAT: Greeting, chitchat, expressing feelings, casual conversation
+- SEEKING_ADVICE: Asking for opinions, recommendations, "what do you think", "should I"
+- BRAINSTORM: Exploring approaches together, discussing trade-offs
+- BUILD_VAGUE: Wants you to build/modify code but request is ambiguous
+- BUILD_CLEAR: Clear, specific instruction to build/modify code
+
+Examples:
+"Hey what's up?" -> CASUAL_CHAT
+"Should I use Redis or Memcached?" -> SEEKING_ADVICE
+"How should we handle user sessions?" -> BRAINSTORM
+"Add payments" -> BUILD_VAGUE (no provider specified)
+"Add GET /health endpoint returning {status: 'ok'}" -> BUILD_CLEAR
+
+Return ONLY the intent name.

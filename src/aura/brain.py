@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from src.aura.models.action import Action, ActionType
+from src.aura.models.intent import Intent
 from src.aura.models.project_context import ProjectContext
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.llm_service import LLMService
@@ -106,16 +107,177 @@ class AuraBrain:
 
         return False
 
+    def _summarize_history_for_intent(self, history_slice: List[Dict[str, Any]]) -> str:
+        """Convert recent conversation messages into a compact textual summary."""
+        parts: List[str] = []
+        for message in history_slice:
+            if not isinstance(message, dict):
+                continue
+
+            role = str(message.get("role") or "unknown").lower()
+            content = message.get("content")
+            text = ""
+
+            if isinstance(content, str):
+                text = content.strip()
+            elif isinstance(content, list):
+                fragments = [
+                    fragment.strip()
+                    for fragment in content
+                    if isinstance(fragment, str) and fragment.strip()
+                ]
+                text = " ".join(fragments)
+            elif content is not None:
+                try:
+                    text = json.dumps(content)
+                except TypeError:
+                    text = str(content)
+
+            if not text:
+                text = "(no content provided)"
+
+            metadata = message.get("metadata")
+            action_type = None
+            if isinstance(metadata, dict):
+                raw_action_type = metadata.get("action_type")
+                if isinstance(raw_action_type, str) and raw_action_type:
+                    action_type = raw_action_type
+
+            if not action_type:
+                fallback_action_type = message.get("action_type")
+                if isinstance(fallback_action_type, str) and fallback_action_type:
+                    action_type = fallback_action_type
+
+            if action_type:
+                parts.append(f"{role}: {text} [action_type={action_type}]")
+            else:
+                parts.append(f"{role}: {text}")
+
+        if not parts:
+            return "No recent conversation history provided."
+
+        return "\n".join(parts)
+
+    def _detect_user_intent(self, user_text: str, conversation_history: List[Dict[str, Any]]) -> Intent:
+        """
+        Detect what the user actually wants before deciding action.
+
+        Uses the LLM to classify user intent based on:
+        - The latest user message
+        - Recent conversation history for context
+
+        Args:
+            user_text: Latest user message.
+            conversation_history: Recent conversation for context.
+
+        Returns:
+            Intent enum value.
+        """
+        recent_history = conversation_history[-5:] if conversation_history else []
+        serialized_history = self._summarize_history_for_intent(recent_history)
+
+        prompt = self.prompts.render(
+            "intent_detection_prompt.jinja2",
+            user_text=user_text,
+            conversation_history=serialized_history,
+        )
+        if not prompt:
+            logger.warning("Failed to render intent detection prompt; defaulting to CASUAL_CHAT.")
+            return Intent.CASUAL_CHAT
+
+        try:
+            raw_response = self.llm.run_for_agent("intent_detection_agent", prompt)
+        except Exception as exc:
+            logger.error("Intent detection agent call failed: %s", exc, exc_info=True)
+            return Intent.CASUAL_CHAT
+
+        if not isinstance(raw_response, str):
+            logger.warning(
+                "Intent detection agent returned non-string response; defaulting to CASUAL_CHAT."
+            )
+            return Intent.CASUAL_CHAT
+
+        normalized = raw_response.strip()
+        if not normalized:
+            logger.warning("Intent detection agent provided empty response; defaulting to CASUAL_CHAT.")
+            return Intent.CASUAL_CHAT
+
+        normalized_upper = normalized.upper()
+        normalized_lower = normalized.lower()
+
+        for intent in Intent:
+            if normalized_upper == intent.name or normalized_lower == intent.value:
+                logger.info("Detected user intent: %s", intent.name)
+                return intent
+
+        logger.warning("Unrecognized intent response '%s'; defaulting to CASUAL_CHAT.", normalized)
+        return Intent.CASUAL_CHAT
+
+    def _summarize_context_value(self, value: Any, empty_default: str) -> str:
+        """Convert context extras into a human-friendly summary string."""
+        if value is None:
+            return empty_default
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or empty_default
+
+        if isinstance(value, list):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(items) if items else empty_default
+
+        if isinstance(value, dict):
+            pairs = []
+            for key, item in value.items():
+                key_str = str(key).strip()
+                item_str = str(item).strip() if isinstance(item, str) else str(item)
+                if key_str and item_str:
+                    pairs.append(f"{key_str}: {item_str}")
+            return ", ".join(pairs) if pairs else empty_default
+
+        try:
+            return str(value)
+        except Exception:
+            return empty_default
+
+    def _project_relationship_context(self, context: ProjectContext) -> Tuple[str, str, str]:
+        """Extract project name and relationship notes for prompt conditioning."""
+        project_name = context.active_project or "Untitled project"
+        extras: Dict[str, Any] = context.extras or {}
+        recent_topics = self._summarize_context_value(
+            extras.get("recent_topics"),
+            "None yet.",
+        )
+        ongoing_work = self._summarize_context_value(
+            extras.get("ongoing_work"),
+            "No active tasks noted.",
+        )
+        return project_name, recent_topics, ongoing_work
+
     def decide(self, user_text: str, context: ProjectContext) -> Action:
         """Return the next Action based on the user input and context."""
         history = context.conversation_history or []
+        intent = self._detect_user_intent(user_text, history)
+
+        if intent in (Intent.CASUAL_CHAT, Intent.SEEKING_ADVICE):
+            logger.info("Routing to SIMPLE_REPLY for intent: %s", intent.name)
+            return Action(
+                type=ActionType.SIMPLE_REPLY,
+                params={"request": user_text},
+            )
+
         clarification_context = self._build_clarification_context(history, user_text)
+        project_name, recent_topics, ongoing_work = self._project_relationship_context(context)
 
         prompt = self.prompts.render(
             "reasoning_prompt.jinja2",
             user_text=user_text,
             conversation_history=history,
             clarification_context=clarification_context,
+            detected_intent=intent.name,
+            project_name=project_name,
+            recent_topics=recent_topics,
+            ongoing_work=ongoing_work,
         )
         if not prompt:
             raise RuntimeError("Failed to render reasoning prompt")

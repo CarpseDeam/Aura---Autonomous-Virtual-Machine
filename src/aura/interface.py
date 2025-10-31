@@ -1,17 +1,20 @@
 import logging
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QThreadPool
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
+from src.aura.models.project import Project, ProjectSummary
 from src.aura.agent import AuraAgent
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
 from src.aura.services.ast_service import ASTService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.workspace_service import WorkspaceService
+from src.aura.project.project_manager import ProjectManager
 from src.aura.worker import BrainExecutorWorker
 
 
@@ -37,6 +40,7 @@ class AuraInterface:
         conversations: ConversationManagementService,
         workspace: WorkspaceService,
         thread_pool: QThreadPool,
+        project_manager: Optional[ProjectManager] = None,
         context_manager: Optional["ContextManager"] = None,
         iteration_controller: Optional["IterationController"] = None,
     ) -> None:
@@ -47,6 +51,7 @@ class AuraInterface:
         self.conversations = conversations
         self.workspace = workspace
         self.thread_pool = thread_pool
+        self.project_manager = project_manager
         self.context_manager = context_manager
         self.iteration_controller = iteration_controller
 
@@ -61,6 +66,7 @@ class AuraInterface:
         # Log whether systems are enabled
         logger.info(f"AuraInterface initialized with ContextManager: {'enabled' if context_manager else 'disabled'}")
         logger.info(f"AuraInterface initialized with IterationController: {'enabled' if iteration_controller else 'disabled'}")
+        logger.info(f"AuraInterface initialized with ProjectManager: {'enabled' if project_manager else 'disabled'}")
 
         # Default language until detection signals otherwise
         self.current_language: str = "python"
@@ -148,14 +154,33 @@ class AuraInterface:
         except Exception as e:
             logger.debug(f"Failed to process ITERATION_STOPPED event: {e}")
 
+    def _collect_active_files(self) -> List[str]:
+        """Collect currently indexed project files from AST service."""
+        project_index = getattr(self.ast, "project_index", None)
+        if isinstance(project_index, dict):
+            return list(project_index.keys())
+        return []
+
     def _build_context(self) -> ProjectContext:
-        active_project = self.workspace.active_project
-        active_files = list(self.ast.project_index.keys()) if getattr(self.ast, "project_index", None) else []
+        if self.project_manager and self.project_manager.current_project:
+            project = self.project_manager.current_project
+            extras: Dict[str, Any] = dict(project.metadata or {})
+            extras["workspace_root"] = project.root_path
+            extras["current_language"] = self.current_language
+            return ProjectContext(
+                active_project=project.name,
+                active_files=list(project.active_files) if project.active_files else self._collect_active_files(),
+                conversation_history=list(project.conversation_history),
+                extras=extras,
+            )
+
         conversation_history = self.conversations.get_history()
+        extras = {"current_language": self.current_language}
         return ProjectContext(
-            active_project=active_project,
-            active_files=active_files,
+            active_project=self.workspace.active_project,
+            active_files=self._collect_active_files(),
             conversation_history=conversation_history,
+            extras=extras,
         )
 
     def _handle_user_message(self, event: Event) -> None:
@@ -166,6 +191,29 @@ class AuraInterface:
 
         if not user_text and not image_attachment:
             self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Empty user request received."}))
+            return
+
+        if user_text.startswith("/project"):
+            logger.info("Processing project command: %s", user_text)
+            response_text = self._handle_project_command(user_text)
+            try:
+                self.conversations.add_message("user", user_text)
+            except Exception:
+                logger.debug("Failed to record project command user message.", exc_info=True)
+            try:
+                self.conversations.add_message(
+                    "assistant",
+                    response_text,
+                    metadata={"action_type": "project_management"}
+                )
+            except Exception:
+                logger.debug("Failed to record project command response.", exc_info=True)
+            self._persist_project_conversation_turn(
+                user_text,
+                [{"role": "assistant", "content": response_text, "metadata": {"action_type": "project_management"}}],
+            )
+            self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": response_text}))
+            self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
             return
 
         if image_attachment and not self.executor.llm.provider_supports_vision("lead_companion_agent"):
@@ -185,3 +233,163 @@ class AuraInterface:
         worker.signals.finished.connect(lambda: None)
         self.thread_pool.start(worker)
 
+    def _handle_project_command(self, command: str) -> str:
+        """Handle /project commands."""
+        if not self.project_manager:
+            logger.warning("Project command received but ProjectManager is not configured.")
+            return "Project management is currently unavailable."
+
+        parts = command.split()
+        if len(parts) < 2:
+            return "Usage: /project [list|switch <name>|info]"
+
+        action = parts[1].lower()
+        if action == "list":
+            projects = self.project_manager.list_projects()
+            return self._format_project_list(projects)
+
+        if action == "switch":
+            if len(parts) < 3:
+                return "Usage: /project switch <name>"
+            target = parts[2]
+            try:
+                project = self.project_manager.switch_project(target)
+            except FileNotFoundError:
+                return f"Project '{target}' not found."
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Failed to switch to project '%s': %s", target, exc, exc_info=True)
+                return f"Failed to switch to project '{target}': {exc}"
+
+            try:
+                self.workspace.set_active_project(project.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Workspace activation failed for project '%s': %s", project.name, exc, exc_info=True)
+                return f"Switched to project '{project.name}', but activating the workspace failed: {exc}"
+
+            return f"Switched to project: {project.name}"
+
+        if action == "info":
+            project = self.project_manager.current_project
+            if not project:
+                return "No project is currently active."
+            return self._format_project_info(project)
+
+        return "Unsupported project command. Use '/project list', '/project switch <name>', or '/project info'."
+
+    def _format_project_list(self, projects: List[ProjectSummary]) -> str:
+        """Format project summaries for display."""
+        if not projects:
+            return "No projects found."
+
+        lines = ["Projects:"]
+        for summary in projects:
+            last_active = summary.last_active.isoformat()
+            topics_part = ""
+            if summary.recent_topics:
+                topics_preview = ", ".join(summary.recent_topics[:3])
+                if len(summary.recent_topics) > 3:
+                    topics_preview += ", ..."
+                topics_part = f" | topics: {topics_preview}"
+            lines.append(
+                f"- {summary.name} (last active {last_active}, messages {summary.message_count}){topics_part}"
+            )
+        return "\n".join(lines)
+
+    def _format_project_info(self, project: Project) -> str:
+        """Format current project details."""
+        lines = [
+            f"Project: {project.name}",
+            f"Root: {project.root_path}",
+            f"Created: {project.created_at.isoformat()}",
+            f"Last Active: {project.last_active.isoformat()}",
+            f"Messages: {len(project.conversation_history)}",
+        ]
+        if project.active_files:
+            preview = ", ".join(project.active_files[:5])
+            if len(project.active_files) > 5:
+                preview += ", ..."
+            lines.append(f"Active Files: {preview}")
+
+        metadata = project.metadata or {}
+        topics = metadata.get("recent_topics")
+        if isinstance(topics, list) and topics:
+            preview = ", ".join(str(topic) for topic in topics[:5])
+            if len(topics) > 5:
+                preview += ", ..."
+            lines.append(f"Recent Topics: {preview}")
+
+        language = metadata.get("current_language")
+        if isinstance(language, str) and language:
+            lines.append(f"Current Language: {language}")
+
+        return "\n".join(lines)
+
+    def _persist_project_conversation_turn(
+        self,
+        user_message: str,
+        agent_messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Update persistent project state after a conversation turn."""
+        if not self.project_manager or not self.project_manager.current_project:
+            return
+
+        project = self.project_manager.current_project
+        try:
+            new_entries: List[Dict[str, Any]] = []
+            timestamp = datetime.now(timezone.utc).isoformat()
+            new_entries.append({"role": "user", "content": user_message, "timestamp": timestamp})
+
+            collected_topics: List[str] = []
+            for message in agent_messages or []:
+                prepared = self._prepare_project_message(message)
+                new_entries.append(prepared)
+                metadata = message.get("metadata")
+                if isinstance(metadata, dict):
+                    topics = metadata.get("topics") or metadata.get("recent_topics")
+                    if isinstance(topics, list):
+                        collected_topics.extend(str(topic) for topic in topics if topic)
+
+            project.conversation_history.extend(new_entries)
+            max_history = 500
+            if len(project.conversation_history) > max_history:
+                project.conversation_history = project.conversation_history[-max_history:]
+            project.active_files = self._collect_active_files()
+            project.last_active = datetime.now(timezone.utc)
+
+            metadata = dict(project.metadata or {})
+            metadata["current_language"] = self.current_language
+            existing_topics = metadata.get("recent_topics")
+            topic_list = [str(topic) for topic in existing_topics] if isinstance(existing_topics, list) else []
+            if collected_topics:
+                merged = collected_topics + [topic for topic in topic_list if topic not in collected_topics]
+                metadata["recent_topics"] = merged[:10]
+            else:
+                metadata["recent_topics"] = topic_list[:10]
+            project.metadata = metadata
+
+            self.project_manager.save_project(project)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to persist project conversation turn: %s", exc, exc_info=True)
+
+    def _prepare_project_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize agent message payloads for project storage."""
+        entry: Dict[str, Any] = {
+            "role": message.get("role", "assistant"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        content = message.get("content")
+        if isinstance(content, (str, list, dict)) or content is None:
+            entry["content"] = content
+        else:
+            entry["content"] = str(content)
+
+        metadata = message.get("metadata")
+        if isinstance(metadata, dict):
+            entry["metadata"] = metadata
+
+        for key in ("action_type", "tool", "images"):
+            value = message.get(key)
+            if value is not None:
+                entry[key] = value
+
+        return entry

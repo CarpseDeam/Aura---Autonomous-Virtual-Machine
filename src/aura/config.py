@@ -29,6 +29,10 @@ AGENT_CONFIG = {
         "temperature": 0.0,
         "top_p": 1.0,
     },
+    "intent_detection_agent": {
+        "temperature": 0.0,
+        "top_p": 1.0,
+    },
     "cognitive_router": {
         "temperature": 0.0,  # Deterministic routing decisions
         "top_p": 1.0,

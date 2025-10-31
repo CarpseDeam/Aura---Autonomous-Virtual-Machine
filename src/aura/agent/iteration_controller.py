@@ -39,7 +39,8 @@ class IterationController:
     FINAL_ACTIONS = {
         ActionType.SIMPLE_REPLY,
         ActionType.RESEARCH,
-        ActionType.DESIGN_BLUEPRINT
+        ActionType.DESIGN_BLUEPRINT,
+        ActionType.DISCUSS
     }
 
     def __init__(

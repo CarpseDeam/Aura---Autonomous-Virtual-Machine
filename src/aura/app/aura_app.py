@@ -1,5 +1,7 @@
+import argparse
 import sys
 import logging
+from typing import List, Optional
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QThreadPool
 from PySide6.QtGui import QFontDatabase
@@ -17,12 +19,55 @@ from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
 from src.aura.interface import AuraInterface
+from src.aura.project.project_manager import ProjectManager
 from src.aura.context.context_manager import ContextManager
 from src.aura.models.context_models import ContextConfig
 from src.aura.agent.iteration_controller import IterationController
 from src.aura.models.iteration_models import IterationConfig
 from src.aura.config import ASSETS_DIR, WORKSPACE_DIR
 from src.ui.windows.main_window import MainWindow
+
+
+def get_project_from_args_or_prompt(argv: Optional[List[str]] = None) -> str:
+    """
+    Resolve the target project name from CLI args or interactive prompt.
+
+    Args:
+        argv: Optional list of CLI arguments to inspect.
+
+    Returns:
+        The selected project name, defaulting to 'default_project'.
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--project")
+    args, _ = parser.parse_known_args(argv)
+
+    if getattr(args, "project", None):
+        return args.project
+
+    stdin = getattr(sys, "stdin", None)
+    if stdin is not None and hasattr(stdin, "isatty") and stdin.isatty():
+        try:
+            user_input = input("Enter project name (default_project): ").strip()
+            if user_input:
+                return user_input
+        except EOFError:
+            pass
+
+    return "default_project"
+
+
+def get_project_root_path(project_name: str) -> str:
+    """
+    Determine the filesystem path for the given project within the workspace.
+
+    Args:
+        project_name: Name of the project.
+
+    Returns:
+        Absolute path to the project's root directory.
+    """
+    return str((WORKSPACE_DIR / project_name).expanduser().resolve())
 
 
 class AuraApp:
@@ -35,6 +80,27 @@ class AuraApp:
         LoggingService.setup_logging()
 
         logging.info("Initializing AuraApp...")
+        project_name = get_project_from_args_or_prompt(sys.argv[1:])
+        self.project_manager = ProjectManager(storage_dir="~/.aura/projects")
+        try:
+            if self.project_manager.project_exists(project_name):
+                project = self.project_manager.load_project(project_name)
+                logging.info(f"Loaded existing project: {project_name}")
+            else:
+                project_root = get_project_root_path(project_name)
+                project = self.project_manager.create_project(project_name, project_root)
+                logging.info(f"Created new project: {project_name}")
+        except Exception as exc:
+            logging.error(f"Failed to initialize project '{project_name}': {exc}")
+            raise
+
+        try:
+            self.project_manager.save_project(project)
+        except Exception as exc:
+            logging.warning(f"Unable to refresh project metadata for '{project_name}': {exc}")
+        self._active_project_name = project.name
+        self._active_project_root = project.root_path
+
         self.app = QApplication(sys.argv)
         self.app.setOrganizationName("Aura")
         self.app.setApplicationName("Autonomous Virtual Machine")
@@ -115,6 +181,7 @@ class AuraApp:
             conversations=self.conversation_management_service,
             workspace=self.workspace_service,
             thread_pool=thread_pool,
+            project_manager=self.project_manager,
             context_manager=self.context_manager,
             iteration_controller=self.iteration_controller,
         )
@@ -138,12 +205,24 @@ class AuraApp:
             logging.warning(f"Font file not found at {font_path}. Using default.")
 
     def _initialize_workspace(self):
-        """Initialize the workspace by setting up the default project."""
+        """Initialize the workspace by setting up the active project."""
+        project_name = getattr(self, "_active_project_name", "default_project")
         try:
-            logging.info("Initializing workspace with default project...")
+            logging.info(f"Initializing workspace with project '{project_name}'...")
             # PRIME DIRECTIVE: Set active project triggers automatic AST indexing
-            self.workspace_service.set_active_project("default_project")
-            logging.info("Workspace initialization complete: default_project activated and indexed")
+            self.workspace_service.set_active_project(project_name)
+            logging.info(f"Workspace initialization complete: {project_name} activated and indexed")
+
+            try:
+                if hasattr(self, "project_manager") and self.project_manager.current_project:
+                    current = self.project_manager.current_project
+                    current.root_path = getattr(self, "_active_project_root", current.root_path)
+                    project_index = getattr(self.ast_service, "project_index", {}) or {}
+                    if isinstance(project_index, dict):
+                        current.active_files = list(project_index.keys())
+                    self.project_manager.save_project(current)
+            except Exception as exc:
+                logging.warning(f"Failed to persist project state after workspace setup: {exc}")
         except Exception as e:
             logging.error(f"Failed to initialize workspace: {e}")
 
