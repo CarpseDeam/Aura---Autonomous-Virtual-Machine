@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, TypedDict
+from typing import Any, Dict, List, TypedDict, Optional
 
 from langgraph.graph import END, StateGraph
 
@@ -10,6 +10,10 @@ from src.aura.executor import AuraExecutor
 from src.aura.models.action import Action, ActionType
 from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
+from src.aura.context import ContextManager
+from src.aura.agent import IterationController
+from src.aura.models.context_models import ContextConfig, ContextMode
+from src.aura.models.iteration_models import IterationConfig, IterationState
 
 
 logger = logging.getLogger(__name__)
@@ -28,14 +32,25 @@ class AgentState(TypedDict, total=False):
     current_action: Action  # The action being executed in current iteration
     iteration_count: int  # Number of plan-execute cycles (safeguard against infinite loops)
     blueprint: Dict[str, Any]  # Special state for blueprint generation
+    iteration_state: IterationState  # Smart iteration control state
+    tool_output: Optional[str]  # Last tool output for reflection
 
 
 class AuraAgent:
     """High-level agent that orchestrates planning and execution via LangGraph."""
 
-    def __init__(self, brain: AuraBrain, executor: AuraExecutor) -> None:
+    def __init__(
+        self,
+        brain: AuraBrain,
+        executor: AuraExecutor,
+        context_manager: Optional[ContextManager] = None,
+        iteration_controller: Optional[IterationController] = None
+    ) -> None:
         self.brain = brain
         self.executor = executor
+        self.context_manager = context_manager
+        self.iteration_controller = iteration_controller
+
         self._tool_name_by_action = {
             ActionType.SIMPLE_REPLY: "execute_simple_reply",
             ActionType.DESIGN_BLUEPRINT: "execute_design_blueprint",
@@ -78,16 +93,27 @@ class AuraAgent:
             user_message["images"] = latest_images
         messages.append(user_message)
 
+        # Detect mode for iteration controller
+        mode = "iterate" if (context.active_project and context.active_files) else "bootstrap"
+
+        # Initialize iteration state if controller is available
+        iteration_state = None
+        if self.iteration_controller:
+            iteration_state = self.iteration_controller.initialize_state(request, mode)
+            logger.info(f"Initialized iteration controller in {mode} mode")
+
         state: AgentState = {
             "input": request,
             "messages": messages,
             "context": context,
             "iteration_count": 0,
+            "iteration_state": iteration_state,
         }
 
         final_state = self._graph_app.invoke(state)
         final_state.pop("context", None)
         final_state.pop("current_action", None)  # Don't expose internal action state
+        final_state.pop("iteration_state", None)  # Don't expose internal iteration state
         return final_state
 
     def plan(self, state: AgentState) -> AgentState:
@@ -108,9 +134,51 @@ class AuraAgent:
         # Increment iteration counter for loop safeguard
         state["iteration_count"] = state.get("iteration_count", 0) + 1
 
+        # Enrich context with smart context loading if available
+        enriched_context = context
+        if self.context_manager:
+            try:
+                # Determine mode based on project state
+                mode = ContextMode.ITERATE if (context.active_project and context.active_files) else ContextMode.BOOTSTRAP
+
+                # Load smart context
+                context_window = self.context_manager.load_context(
+                    input_request,
+                    context,
+                    mode
+                )
+
+                # Add context window info to context extras for brain to use
+                enriched_context = ProjectContext(
+                    active_project=context.active_project,
+                    active_files=context.active_files,
+                    conversation_history=context.conversation_history,
+                    extras={
+                        **(context.extras or {}),
+                        "context_window": {
+                            "loaded_files": [f.file_path for f in context_window.loaded_files],
+                            "total_tokens": context_window.total_tokens,
+                            "mode": context_window.mode.value,
+                            "relevance_scores": {
+                                f.file_path: f.relevance_score
+                                for f in context_window.loaded_files
+                            }
+                        }
+                    }
+                )
+
+                logger.info(
+                    f"[ContextManager] Loaded {len(context_window.loaded_files)} files "
+                    f"({context_window.total_tokens} tokens, {context_window.mode.value} mode)"
+                )
+            except Exception as exc:
+                logger.warning(f"Context enrichment failed: {exc}", exc_info=True)
+                # Fall back to original context
+                enriched_context = context
+
         try:
             # The brain analyzes the full message history to decide next action
-            next_action = self.brain.decide(input_request, context)
+            next_action = self.brain.decide(input_request, enriched_context)
             logger.info(f"[Plan] Iteration {state['iteration_count']}: Next action = {next_action.type if next_action else None}")
         except Exception as exc:
             logger.error("Failed to generate action via brain: %s", exc, exc_info=True)
@@ -144,10 +212,13 @@ class AuraAgent:
 
         try:
             result = self._invoke_executor_tool(action, context)
+            # Capture tool output for iteration controller reflection
+            state["tool_output"] = str(result)[:500] if result else None
         except Exception as exc:
             logger.error("Executor tool failed for action %s: %s", action.type, exc, exc_info=True)
             # Add error observation to messages
             error_msg = f"Tool execution failed for {action.type.value}: {str(exc)}"
+            state["tool_output"] = error_msg
             state.setdefault("messages", []).append({
                 "role": "system",
                 "content": error_msg,
@@ -169,6 +240,7 @@ class AuraAgent:
         except Exception as exc:
             logger.error("Post-processing failed for action %s: %s", action.type, exc, exc_info=True)
             error_msg = f"Post-processing failed for {action.type.value}: {str(exc)}"
+            state["tool_output"] = error_msg
             state.setdefault("messages", []).append({
                 "role": "system",
                 "content": error_msg,
@@ -191,15 +263,65 @@ class AuraAgent:
             "continue": Loop back to plan node for next iteration
             "end": Complete the current turn and return to user
         """
-        MAX_ITERATIONS = 10
-
         action = state.get("current_action")
         iteration_count = state.get("iteration_count", 0)
+        iteration_state = state.get("iteration_state")
+        tool_output = state.get("tool_output")
+
+        # Use IterationController if available
+        if self.iteration_controller and iteration_state:
+            try:
+                should_continue = self.iteration_controller.should_continue_iteration(
+                    iteration_state,
+                    action,
+                    tool_output
+                )
+
+                if not should_continue:
+                    # Log stopping reason
+                    if iteration_state.stopping_condition:
+                        logger.info(
+                            f"[IterationController] Stopping: {iteration_state.stopping_condition.value}"
+                        )
+
+                        # Add system message about why we stopped
+                        stop_messages = {
+                            "task_complete": "Task completed successfully.",
+                            "max_iterations": f"Maximum iteration limit ({iteration_state.max_iterations}) reached.",
+                            "loop_detected": f"Loop detected: repeated action '{iteration_state.loop_state.loop_action_type}'.",
+                            "no_progress": "No progress detected in recent iterations.",
+                            "final_action": f"Final action {action.type.value if action else 'N/A'} completed."
+                        }
+
+                        stop_msg = stop_messages.get(
+                            iteration_state.stopping_condition.value,
+                            "Iteration stopped."
+                        )
+
+                        state.setdefault("messages", []).append({
+                            "role": "system",
+                            "content": stop_msg,
+                        })
+
+                    return "end"
+
+                # Continue iterating
+                logger.debug(
+                    f"[IterationController] Continuing: iteration {iteration_state.current_iteration}/"
+                    f"{iteration_state.max_iterations}"
+                )
+                return "continue"
+
+            except Exception as exc:
+                logger.error(f"IterationController error: {exc}", exc_info=True)
+                # Fall through to default logic
+
+        # Fall back to original logic if controller not available
+        MAX_ITERATIONS = 10
 
         # Safeguard: Prevent infinite loops
         if iteration_count >= MAX_ITERATIONS:
             logger.warning(f"Maximum iterations ({MAX_ITERATIONS}) reached. Ending cycle.")
-            # Add a system message about the loop limit
             state.setdefault("messages", []).append({
                 "role": "system",
                 "content": f"Maximum iteration limit ({MAX_ITERATIONS}) reached. The agent has been stopped to prevent infinite loops.",

@@ -127,3 +127,5 @@ logs/
 /aura_conversations.db
 /aura_conversations.db-shm
 /aura_conversations.db-wal
+/ARCHITECTURE_UPGRADE.md
+/INTEGRATION_GUIDE.md
