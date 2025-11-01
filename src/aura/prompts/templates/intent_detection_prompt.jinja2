@@ -12,18 +12,43 @@ Classify the user's intent as ONE of:
 - BUILD_VAGUE: Wants you to build/modify code but request is ambiguous or lacks details
 - BUILD_CLEAR: Clear, specific instruction to build/modify code with sufficient details
 
-CRITICAL PRIORITIZATION RULES:
-1. If the message contains advice-seeking phrases ("what do you think", "not sure", "should I", "recommend", "your opinion", "what would you", "which is better", "evaluate"), classify as SEEKING_ADVICE even if they mention building or creating something.
-2. If the message is exploring options or comparing approaches ("vs", "or", "compared to"), classify as SEEKING_ADVICE or BRAINSTORM.
-3. Only classify as BUILD if the request is direct and actionable without needing your opinion first.
+ABSOLUTE PRIORITY RULE - READ THIS FIRST:
+If the message contains ANY of these advice-seeking phrases, classify as SEEKING_ADVICE immediately.
+Do NOT continue to other rules. Stop here and return SEEKING_ADVICE.
+
+Advice-seeking trigger phrases (ANY ONE triggers SEEKING_ADVICE):
+- "what do you think"
+- "what would you"
+- "what should"
+- "should I"
+- "not sure"
+- "not totally sure"
+- "not certain"
+- "recommend"
+- "recommendation"
+- "your opinion"
+- "your thoughts"
+- "advice on"
+- "thoughts on"
+- "which is better"
+- "vs" or "versus" (comparing options)
+- "evaluate"
+- "evaluating"
+- "considering"
+
+SECONDARY RULES (only apply if NO advice-seeking phrases found above):
+1. If exploring options or comparing approaches ("or", "compared to"), classify as SEEKING_ADVICE or BRAINSTORM
+2. If vague build request without details, classify as BUILD_VAGUE
+3. Only classify as BUILD_CLEAR if request is direct, actionable, and has NO advice-seeking signals
 
 Examples:
 "Hey what's up?" -> CASUAL_CHAT
-"Should I use Redis or Memcached?" -> SEEKING_ADVICE
-"I need to build auth but not sure about the approach. What do you think?" -> SEEKING_ADVICE
-"I'm thinking about using JWT for auth, what do you recommend?" -> SEEKING_ADVICE
-"How should we handle user sessions?" -> BRAINSTORM
-"Redis vs Memcached for caching?" -> SEEKING_ADVICE
+"Should I use Redis or Memcached?" -> SEEKING_ADVICE (contains "should I")
+"I need to build auth but not sure about the approach. What do you think?" -> SEEKING_ADVICE (contains "not sure" AND "what do you think")
+"I'm thinking about using JWT for auth, what do you recommend?" -> SEEKING_ADVICE (contains "recommend")
+"How should we handle user sessions?" -> SEEKING_ADVICE (contains "should")
+"Redis vs Memcached for caching?" -> SEEKING_ADVICE (contains "vs")
+"Evaluating JWT versus sessions for FastAPI. Your thoughts?" -> SEEKING_ADVICE (contains "evaluating" AND "your thoughts")
 "Add payments" -> BUILD_VAGUE
 "Add GET /health endpoint returning {status: 'ok'}" -> BUILD_CLEAR
 "Write a Python function to validate emails with regex" -> BUILD_CLEAR
