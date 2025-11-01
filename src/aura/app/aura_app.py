@@ -15,6 +15,8 @@ from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.services.blueprint_validator import BlueprintValidator
 from src.aura.services.image_storage_service import ImageStorageService
+from src.aura.services.file_registry import FileRegistry
+from src.aura.services.import_validator import ImportValidator
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
@@ -120,8 +122,19 @@ class AuraApp:
         self.ast_service = ASTService(self.event_bus)
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR, self.ast_service)
         self.context_retrieval_service = ContextRetrievalService(self.ast_service)
+
+        # File Registry and Import Validator: Production-ready code generation
+        self.file_registry = FileRegistry(self.event_bus, WORKSPACE_DIR)
+        self.import_validator = ImportValidator(
+            registry=self.file_registry,
+            workspace_root=WORKSPACE_DIR,
+            event_bus=self.event_bus,
+            auto_fix=True
+        )
+        logging.info("FileRegistry and ImportValidator initialized for production-quality validation")
+
         # Phoenix Initiative: Initialize BlueprintValidator for Quality Gate
-        self.validation_service = BlueprintValidator(self.event_bus)
+        self.validation_service = BlueprintValidator(self.event_bus, self.file_registry)
         # Low-level LLM dispatcher
         self.llm_service = LLMService(self.event_bus, self.image_storage_service)
         # New 3-layer architecture
@@ -133,6 +146,8 @@ class AuraApp:
             ast=self.ast_service,
             context=self.context_retrieval_service,
             workspace=self.workspace_service,
+            file_registry=self.file_registry,
+            import_validator=self.import_validator,
         )
 
         # Initialize Context Manager for intelligent context loading

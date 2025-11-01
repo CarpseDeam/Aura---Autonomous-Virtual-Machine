@@ -15,6 +15,8 @@ from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.workspace_service import WorkspaceService
+from src.aura.services.file_registry import FileRegistry
+from src.aura.services.import_validator import ImportValidator
 
 from .blueprint_handler import BlueprintHandler
 from .code_generator import CodeGenerator
@@ -42,8 +44,12 @@ class AuraExecutor:
         ast: ASTService,
         context: ContextRetrievalService,
         workspace: WorkspaceService,
+        file_registry: Optional[FileRegistry] = None,
+        import_validator: Optional[ImportValidator] = None,
     ) -> None:
         self.event_bus = event_bus
+        self.file_registry = file_registry
+        self.import_validator = import_validator
 
         code_sanitizer = CodeSanitizer()
         prompt_builder = PromptBuilder(prompts)
@@ -72,6 +78,7 @@ class AuraExecutor:
             project_resolver=project_resolver,
             prompt_builder=prompt_builder,
             code_sanitizer=code_sanitizer,
+            file_registry=file_registry,
         )
         self._tools: Dict[ActionType, Handler] = {
             ActionType.DESIGN_BLUEPRINT: self.blueprint_handler.execute_design_blueprint,
@@ -116,6 +123,42 @@ class AuraExecutor:
             except Exception as exc:
                 logger.error("Failed to generate code for spec %s: %s", spec.get("file_path"), exc, exc_info=True)
 
+        # VALIDATION GATE: Validate all generated files before marking build complete
+        validation_result = None
+        if self.file_registry and self.import_validator:
+            try:
+                logger.info("Running validation gate on generated files...")
+                self.event_bus.dispatch(Event(
+                    event_type="GENERATION_PROGRESS",
+                    payload={"message": "Validating generated code...", "category": "SYSTEM"}
+                ))
+
+                # End the generation session to finalize the registry
+                session_files = self.file_registry.end_generation_session()
+                logger.info("Generation session ended: %d files generated", len(session_files))
+
+                # Run validation and auto-fixing
+                validation_result = self.import_validator.validate_and_fix()
+
+                # Log validation results
+                if validation_result.files_auto_fixed > 0:
+                    logger.info("Auto-fixed %d file(s) during validation", validation_result.files_auto_fixed)
+                if validation_result.files_with_errors > 0:
+                    logger.warning("Validation completed with %d error(s)", validation_result.files_with_errors)
+                else:
+                    logger.info("All files passed validation")
+
+            except Exception as exc:
+                logger.error("Validation gate failed: %s", exc, exc_info=True)
+                # Don't fail the build if validation fails - just log it
+                try:
+                    self.event_bus.dispatch(Event(
+                        event_type="GENERATION_PROGRESS",
+                        payload={"message": f"Validation error: {exc}", "category": "WARNING"}
+                    ))
+                except Exception:
+                    pass
+
         try:
             self.event_bus.dispatch(Event(event_type="BUILD_COMPLETED", payload={}))
         except Exception:
@@ -126,7 +169,15 @@ class AuraExecutor:
             for spec in planned_specs
             if isinstance(spec, dict) and isinstance(spec.get("file_path"), str)
         ]
-        return {"blueprint": blueprint_data, "planned_files": file_paths}
+        result = {"blueprint": blueprint_data, "planned_files": file_paths}
+        if validation_result:
+            result["validation"] = {
+                "success": validation_result.success,
+                "files_validated": validation_result.files_validated,
+                "files_with_errors": validation_result.files_with_errors,
+                "files_auto_fixed": validation_result.files_auto_fixed,
+            }
+        return result
 
     def _build_generation_messages(
         self,

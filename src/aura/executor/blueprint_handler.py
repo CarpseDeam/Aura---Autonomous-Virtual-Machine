@@ -11,6 +11,7 @@ from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.llm_service import LLMService
+from src.aura.services.file_registry import FileRegistry
 
 from .code_sanitizer import CodeSanitizer
 from .project_resolver import GenerationContext, ProjectResolver
@@ -31,6 +32,7 @@ class BlueprintHandler:
         project_resolver: ProjectResolver,
         prompt_builder: PromptBuilder,
         code_sanitizer: CodeSanitizer,
+        file_registry: Optional[FileRegistry] = None,
     ) -> None:
         self.event_bus = event_bus
         self.llm = llm
@@ -38,6 +40,7 @@ class BlueprintHandler:
         self.project_resolver = project_resolver
         self.prompt_builder = prompt_builder
         self.code_sanitizer = code_sanitizer
+        self.file_registry = file_registry
 
     def execute_design_blueprint(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
         """Generate a project blueprint for a user request."""
@@ -81,6 +84,19 @@ class BlueprintHandler:
             raise RuntimeError("Architect returned no files in blueprint")
 
         files = self._files_from_blueprint(data)
+
+        # Register planned files in the file registry
+        if self.file_registry:
+            self.file_registry.start_generation_session()
+            for file_spec in files:
+                self.file_registry.register_planned(
+                    identifier=file_spec.get("description", file_spec.get("file_path", "")),
+                    planned_path=file_spec["file_path"],
+                    purpose=file_spec.get("description", "No description provided"),
+                    spec=file_spec
+                )
+            logger.info("Registered %d planned files in FileRegistry", len(files))
+
         try:
             self.event_bus.dispatch(Event(
                 event_type="GENERATION_PROGRESS",

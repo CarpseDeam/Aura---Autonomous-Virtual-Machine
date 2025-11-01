@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+from src.aura.services.file_registry import FileRegistry, FileSource
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
@@ -50,11 +51,12 @@ class BlueprintValidator:
     any tasks are created or code is generated.
     """
     
-    def __init__(self, event_bus: EventBus) -> None:
+    def __init__(self, event_bus: EventBus, file_registry: Optional[FileRegistry] = None) -> None:
         """
         Initialize the Blueprint Validator and subscribe to code validation events.
         """
         self.event_bus = event_bus
+        self.file_registry = file_registry
         self.event_bus.subscribe("VALIDATE_CODE", self._handle_validate_code)
         logger.info("Guardian Protocol: BlueprintValidator initialized and event handlers registered")
     
@@ -175,6 +177,19 @@ class BlueprintValidator:
         """
         Emit a VALIDATION_SUCCESSFUL event once all checks pass.
         """
+        # Register the actual file in the file registry
+        if self.file_registry:
+            try:
+                self.file_registry.register_actual(
+                    planned_identifier=payload.spec.get("description", payload.file_path),
+                    actual_path=payload.file_path,
+                    code=payload.generated_code,
+                    source=FileSource.BLUEPRINT
+                )
+                logger.debug("Registered actual file in FileRegistry: %s", payload.file_path)
+            except Exception as e:
+                logger.error("Failed to register actual file in FileRegistry: %s", e, exc_info=True)
+
         success_payload = ValidationSuccessfulPayload(
             task_id=payload.task_id,
             file_path=payload.file_path,
