@@ -265,6 +265,46 @@ class AuraBrain:
     def decide(self, user_text: str, context: ProjectContext) -> Action:
         """Return the next Action based on the user input and context."""
         history = context.conversation_history or []
+
+        # CRITICAL: Pre-check for advice-seeking phrases before LLM intent detection
+        # These phrases ALWAYS indicate seeking advice, regardless of other keywords
+        advice_trigger_phrases = [
+            "what do you think",
+            "what would you",
+            "what should",
+            "should i",
+            "not sure",
+            "not totally sure",
+            "not certain",
+            "uncertain",
+            "recommend",
+            "recommendation",
+            "your opinion",
+            "your thoughts",
+            "advice on",
+            "thoughts on",
+            "which is better",
+            " vs ",
+            " versus ",
+            "evaluate",
+            "evaluating",
+            "considering",
+            "or should",
+        ]
+
+        user_text_lower = user_text.lower()
+        has_advice_phrase = any(phrase in user_text_lower for phrase in advice_trigger_phrases)
+
+        if has_advice_phrase:
+            logger.info(
+                "PRE-CHECK: Advice-seeking phrase detected, routing directly to SIMPLE_REPLY (bypassing intent detection)"
+            )
+            return Action(
+                type=ActionType.SIMPLE_REPLY,
+                params={"request": user_text},
+            )
+
+        # No advice phrases found, proceed with normal intent detection
         intent = self._detect_user_intent(user_text, history)
 
         if intent in (Intent.CASUAL_CHAT, Intent.SEEKING_ADVICE):
