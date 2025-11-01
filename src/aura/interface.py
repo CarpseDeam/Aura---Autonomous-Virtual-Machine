@@ -7,6 +7,7 @@ from PySide6.QtCore import QThreadPool
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+from src.aura.models.action import Action, ActionType
 from src.aura.models.project_context import ProjectContext
 from src.aura.models.project import Project, ProjectSummary
 from src.aura.agent import AuraAgent
@@ -20,6 +21,30 @@ from src.aura.worker import BrainExecutorWorker
 
 
 logger = logging.getLogger(__name__)
+
+ADVICE_TRIGGER_PHRASES = [
+    "what do you think",
+    "what would you",
+    "what should",
+    "should i",
+    "not sure",
+    "not totally sure",
+    "not certain",
+    "uncertain",
+    "recommend",
+    "recommendation",
+    "your opinion",
+    "your thoughts",
+    "advice on",
+    "thoughts on",
+    "which is better",
+    " vs ",
+    " versus ",
+    "evaluate",
+    "evaluating",
+    "considering",
+    "or should",
+]
 
 
 class AuraInterface:
@@ -194,6 +219,12 @@ class AuraInterface:
             self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Empty user request received."}))
             return
 
+        if user_text:
+            user_text_lower = user_text.lower()
+            if any(phrase in user_text_lower for phrase in ADVICE_TRIGGER_PHRASES):
+                self._handle_advice_request(user_text, image_attachment)
+                return
+
         if user_text.startswith("/project"):
             logger.info("Processing project command: %s", user_text)
             response_text = self._handle_project_command(user_text)
@@ -257,6 +288,90 @@ class AuraInterface:
         # finished signal available for potential UI hooks; no-op here
         worker.signals.finished.connect(lambda: None)
         self.thread_pool.start(worker)
+
+    def _handle_advice_request(self, user_text: str, image_attachment: Optional[Any]) -> None:
+        logger.info("Advice-seeking phrase detected; routing directly to companion agent.")
+
+        image_payload = None
+        try:
+            image_payload = BrainExecutorWorker._normalize_image_attachment(image_attachment)
+            images = [image_payload] if image_payload else None
+            self.conversations.add_message("user", user_text, images=images)
+        except Exception:
+            logger.debug("Failed to record advice-seeking user message.", exc_info=True)
+
+        try:
+            context = self._build_context()
+        except Exception as exc:
+            logger.error("Failed to build context for advice reply: %s", exc, exc_info=True)
+            self.event_bus.dispatch(Event(
+                event_type="MODEL_ERROR",
+                payload={"message": "I'm having trouble responding right now. Please try again."},
+            ))
+            return
+
+        if image_payload:
+            extras = dict(context.extras or {})
+            extras["latest_user_images"] = [image_payload]
+            context.extras = extras
+
+        history = list(context.conversation_history or [])
+        user_entry: Dict[str, Any] = {"role": "user", "content": user_text}
+        if image_payload:
+            user_entry["images"] = [image_payload]
+
+        if history:
+            last_entry_raw = history[-1] or {}
+            last_entry = dict(last_entry_raw) if isinstance(last_entry_raw, dict) else {}
+            last_role = last_entry.get("role")
+            last_content = (last_entry.get("content") or "").strip()
+            if last_role == "user" and last_content == user_text:
+                if image_payload:
+                    last_entry["images"] = [image_payload]
+                    history[-1] = last_entry
+            else:
+                history.append(user_entry)
+        else:
+            history.append(user_entry)
+        context.conversation_history = history
+
+        action = Action(
+            type=ActionType.SIMPLE_REPLY,
+            params={"request": user_text},
+        )
+
+        try:
+            reply_text = self.executor.execute_simple_reply(action, context)
+        except Exception as exc:
+            logger.error("Companion agent failed to provide advice reply: %s", exc, exc_info=True)
+            self.event_bus.dispatch(Event(
+                event_type="MODEL_ERROR",
+                payload={"message": "I'm having trouble sharing advice right now. Please try again."},
+            ))
+            return
+
+        assistant_message = {
+            "role": "assistant",
+            "content": reply_text,
+            "metadata": {"action_type": ActionType.SIMPLE_REPLY.value},
+        }
+
+        try:
+            self.conversations.add_message(
+                "assistant",
+                reply_text,
+                metadata={"action_type": ActionType.SIMPLE_REPLY.value},
+            )
+        except Exception:
+            logger.debug("Failed to record advice companion reply.", exc_info=True)
+
+        self._persist_project_conversation_turn(user_text, [assistant_message])
+
+        try:
+            self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": reply_text}))
+            self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+        except Exception:
+            logger.debug("Failed to dispatch advice reply events.", exc_info=True)
 
     def _handle_project_command(self, command: str) -> str:
         """Handle /project commands."""

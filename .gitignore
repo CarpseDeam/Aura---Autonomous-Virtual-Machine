@@ -121,7 +121,6 @@ logs/
 /AGENTS.md
 /tmp_llm_service.txt
 /tmp_llm_service_segment.txt
-/tests/
 /assets/
 /image_cache/
 /aura_conversations.db
