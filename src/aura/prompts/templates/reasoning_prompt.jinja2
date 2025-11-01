@@ -16,6 +16,9 @@ AVAILABLE ACTIONS:
 - `LIST_FILES` - Inspect available files in the workspace. No params required.
 - `READ_FILE` - Retrieve the contents of a file. Requires `file_path`.
 - `WRITE_FILE` - Write code or text to a file. Requires `file_path` and `content`.
+REALITY VERIFICATION LOOP (MANDATORY):
+- Before emitting imports, method calls, DTO usage, or dependency wiring, gather fresh evidence with `LIST_FILES` and `READ_FILE` so you align with the real codebase.
+- Work iteratively: inspect reality → draft one cohesive change → verify it again → then proceed. Accuracy beats speed; never guess or rely on stale memory.
 
 CONVERSATION HISTORY:
 {% for message in conversation_history %}
@@ -49,7 +52,8 @@ REASONING CHECKLIST:
 2. If intent implies conversation or advice, focus on relationship-building and natural dialogue.
 3. If intent implies building, list missing details or ambiguities before selecting an action.
 4. Prepare required parameters for the chosen action. Keep strings concise; avoid markdown.
-5. Respond strictly as JSON using the schema below.
+5. For build-related actions, ensure the plan includes necessary `LIST_FILES`/`READ_FILE` steps before any `WRITE_FILE` call so every code change is grounded in verified reality.
+6. Respond strictly as JSON using the schema below.
 
 CONFIDENCE SCORING (build requests only):
 - Confidence scoring only applies when user intent is `BUILD_VAGUE` or `BUILD_CLEAR`. For casual chat or advice-seeking, confidence is not relevant.
