@@ -13,7 +13,16 @@ from src.aura.project.project_manager import ProjectManager
 class StubPromptManager:
     """Minimal prompt manager stub for tests."""
 
-    def render(self, template_name: str, **_: Any) -> str:
+    def render(self, template_name: str, **context: Any) -> str:
+        if template_name == "intent_detection_prompt.jinja2":
+            user_text = context.get("user_text")
+            if isinstance(user_text, str):
+                snippet = user_text
+            elif user_text is None:
+                snippet = ""
+            else:
+                snippet = str(user_text)
+            return f"rendered::{template_name}::{snippet}"
         return f"rendered::{template_name}"
 
 

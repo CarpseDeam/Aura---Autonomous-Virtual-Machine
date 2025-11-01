@@ -5,6 +5,10 @@ import pytest
 
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
+from src.aura.executor.conversation_utils import (
+    build_discuss_fallback_response,
+    summarize_original_action,
+)
 from src.aura.models.action import Action, ActionType
 from src.aura.models.events import Event
 from src.aura.models.exceptions import (
@@ -220,7 +224,7 @@ def test_execute_simple_reply_returns_fallback_on_stream_failure() -> None:
     ctx = ProjectContext(conversation_history=[{"role": "user", "content": "hello"}])
     action = Action(type=ActionType.SIMPLE_REPLY, params={"request": "hi"})
 
-    result = executor.execute_simple_reply(action, ctx)
+    result = executor.conversation_handler.execute_simple_reply(action, ctx)
 
     assert result == "I'm having connection issues right now. Please check your API key and network connection."
 
@@ -246,10 +250,10 @@ def test_execute_discuss_uses_fallback_on_llm_failure() -> None:
     )
     context = ProjectContext()
 
-    expected = executor._build_discuss_fallback_response(
+    expected = build_discuss_fallback_response(
         ["Can you clarify the API endpoints?"],
         ["Authentication flow"],
-        executor._summarize_original_action({"type": "WRITE_FILE", "params": {"request": "Create API docs"}}),
+        summarize_original_action({"type": "WRITE_FILE", "params": {"request": "Create API docs"}}),
     )
 
     result = executor.execute_discuss(action, context)

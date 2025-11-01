@@ -128,3 +128,4 @@ logs/
 /aura_conversations.db-wal
 /ARCHITECTURE_UPGRADE.md
 /INTEGRATION_GUIDE.md
+/pyproject.toml

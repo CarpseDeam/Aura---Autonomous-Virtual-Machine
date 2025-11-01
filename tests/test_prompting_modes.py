@@ -98,7 +98,7 @@ def test_matches_prototype_request_defaults_to_false() -> None:
 
 def test_executor_builds_messages_with_system_prompt_only() -> None:
     executor = _build_executor()
-    executor._update_prototype_mode("Build a durable event processor.")
+    executor.prompt_builder.update_prototype_mode("Build a durable event processor.")
     messages = executor._build_generation_messages("user prompt")
     assert len(messages) == 2
     assert messages[0]["role"] == "system"
@@ -108,7 +108,7 @@ def test_executor_builds_messages_with_system_prompt_only() -> None:
 
 def test_executor_builds_messages_with_prototype_override() -> None:
     executor = _build_executor()
-    executor._update_prototype_mode("Can you give me a quick prototype of the workflow?")
+    executor.prompt_builder.update_prototype_mode("Can you give me a quick prototype of the workflow?")
     messages = executor._build_generation_messages("user prompt")
     assert len(messages) == 3
     assert "SECTION 1 - NEVER BREAK PROD" in messages[0]["content"]
@@ -126,7 +126,7 @@ def test_execute_generate_code_for_spec_respects_prototype(monkeypatch: pytest.M
             prototype_override=prototype_override,
         )
 
-    monkeypatch.setattr(executor, "_stream_and_finalize", capture_stream)
+    monkeypatch.setattr(executor.code_generator, "_stream_and_finalize", capture_stream)
 
     spec: Dict[str, Any] = {"file_path": "workspace/api_client.py", "description": "Implements API client"}
     executor.execute_generate_code_for_spec(spec, "quick prototype of an async API fetch helper")
@@ -169,7 +169,7 @@ def test_integration_generation_includes_error_handling_when_enabled(monkeypatch
         code = executor._sanitize_code("".join(chunks))
         captured["code"] = code
 
-    monkeypatch.setattr(executor, "_stream_and_finalize", sync_stream)
+    monkeypatch.setattr(executor.code_generator, "_stream_and_finalize", sync_stream)
 
     spec = {"file_path": "workspace/api_client.py", "description": "HTTP client wrapper"}
     executor.execute_generate_code_for_spec(spec, "Build a function to fetch data from an API")
