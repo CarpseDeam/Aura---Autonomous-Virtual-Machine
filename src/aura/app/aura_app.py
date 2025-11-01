@@ -3,7 +3,7 @@ import sys
 import logging
 from typing import List, Optional
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QThreadPool
+from PySide6.QtCore import QThreadPool, QTimer
 from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
 from src.aura.services.logging_service import LoggingService
@@ -15,6 +15,9 @@ from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.services.file_registry import FileRegistry
 from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
+from src.aura.services.terminal_session_manager import TerminalSessionManager
+from src.aura.models.events import Event
+from src.aura.models.event_types import TRIGGER_AUTO_INTEGRATE
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
@@ -118,11 +121,26 @@ class AuraApp:
         )
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR)
         self.file_registry = FileRegistry(WORKSPACE_DIR)
+
+        # Load terminal agent configuration from user settings
+        from src.aura.services.user_settings_manager import load_user_settings
+        user_settings = load_user_settings()
+        terminal_config = user_settings.get("terminal_agent", {})
+        agent_command_template = terminal_config.get("command_template")
+
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
-            default_command=self._determine_default_agent_command(),
+            default_command=None,  # Will use template-based command building
+            agent_command_template=agent_command_template,
         )
         self.workspace_monitor = WorkspaceChangeMonitor(WORKSPACE_DIR)
+        self.terminal_session_manager = TerminalSessionManager(
+            workspace_root=WORKSPACE_DIR,
+            workspace_monitor=self.workspace_monitor,
+            event_bus=self.event_bus,
+            stabilization_seconds=10,
+            timeout_seconds=600,
+        )
 
         # Ensure the requested project is active
         try:
@@ -142,6 +160,7 @@ class AuraApp:
             file_registry=self.file_registry,
             terminal_service=self.terminal_agent_service,
             workspace_monitor=self.workspace_monitor,
+            terminal_session_manager=self.terminal_session_manager,
         )
 
         # Initialize Context Manager for intelligent context loading
@@ -193,10 +212,18 @@ class AuraApp:
             context_manager=self.context_manager,
             iteration_controller=self.iteration_controller,
         )
-        self.main_window = MainWindow(self.event_bus, self.image_storage_service)
+        self.main_window = MainWindow(
+            self.event_bus,
+            self.image_storage_service,
+            self.terminal_session_manager,
+        )
 
         self._register_event_handlers()
         self._initialize_workspace()
+
+        # Setup periodic session monitoring
+        self._setup_session_monitor()
+
         logging.info("AuraApp initialized successfully.")
 
     def _determine_default_agent_command(self) -> List[str]:
@@ -240,8 +267,45 @@ class AuraApp:
         """Example event handler for application start."""
         logging.info(f"AuraApp caught event: {event.event_type}")
 
+    def _setup_session_monitor(self):
+        """Setup periodic monitoring of terminal sessions."""
+        self.session_check_timer = QTimer()
+        self.session_check_timer.timeout.connect(self._check_terminal_sessions)
+        self.session_check_timer.start(5000)  # Check every 5 seconds
+        logging.info("Terminal session monitoring started (checking every 5s)")
+
+    def _check_terminal_sessions(self):
+        """Periodically check terminal sessions for completion."""
+        try:
+            completed_sessions = self.terminal_session_manager.check_all_sessions()
+
+            # Auto-integrate completed sessions if enabled
+            for session_status in completed_sessions:
+                if session_status.status == "completed":
+                    logging.info(
+                        "Session %s completed, dispatching auto-integrate event",
+                        session_status.session.task_id
+                    )
+                    self.event_bus.dispatch(
+                        Event(
+                            event_type=TRIGGER_AUTO_INTEGRATE,
+                            payload={"task_id": session_status.session.task_id}
+                        )
+                    )
+        except Exception as exc:
+            logging.error("Error checking terminal sessions: %s", exc)
+
+    def cleanup(self):
+        """Cleanup resources before application shutdown."""
+        logging.info("Cleaning up Aura application...")
+        # Terminate all active terminal sessions
+        count = self.terminal_session_manager.cleanup_all_sessions()
+        logging.info(f"Cleaned up {count} terminal sessions")
+
     def run(self):
         """Shows the main window and starts the application."""
         logging.info("Starting Aura application...")
+        # Register cleanup to run on application exit
+        self.app.aboutToQuit.connect(self.cleanup)
         self.main_window.show()
         sys.exit(self.app.exec())

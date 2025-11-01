@@ -6,7 +6,7 @@ import markdown
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QTextBrowser, QHBoxLayout,
-    QApplication, QPushButton, QFileDialog, QInputDialog
+    QApplication, QPushButton, QFileDialog, QInputDialog, QSplitter
 )
 from PySide6.QtGui import QFont, QTextCursor, QIcon, QTextOption, QDesktopServices
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QUrl, QUrlQuery
@@ -19,6 +19,7 @@ from src.aura.services.image_storage_service import ImageStorageService
 from src.ui.widgets.chat_input import ChatInputTextEdit
 from src.ui.windows.settings_window import SettingsWindow
 from src.ui.widgets.knight_rider_widget import ThinkingIndicator
+from src.ui.widgets.terminal_session_panel import TerminalSessionPanel
 
 
 logger = logging.getLogger(__name__)
@@ -250,10 +251,11 @@ class MainWindow(QMainWindow):
         {"text": "Enter your commands..."},
     ]
 
-    def __init__(self, event_bus: EventBus, image_storage: ImageStorageService):
+    def __init__(self, event_bus: EventBus, image_storage: ImageStorageService, terminal_session_manager=None):
         super().__init__()
         self.event_bus = event_bus
         self.image_storage = image_storage
+        self.terminal_session_manager = terminal_session_manager
         self.settings_window = None
         self.auto_accept_enabled = get_auto_accept_changes()
         self.pending_change_states: Dict[str, str] = {}
@@ -307,11 +309,34 @@ class MainWindow(QMainWindow):
 
         input_container = self._create_input_area()
 
-        layout.addWidget(self._create_top_bar())
-        layout.addWidget(banner_label)
-        layout.addWidget(self.chat_display, 1)
-        layout.addWidget(self.thinking_indicator)
-        layout.addWidget(input_container)
+        # Create terminal session panel if terminal_session_manager is available
+        if self.terminal_session_manager:
+            self.terminal_session_panel = TerminalSessionPanel(
+                self.event_bus,
+                self.terminal_session_manager,
+            )
+            self.terminal_session_panel.setMinimumWidth(250)
+            self.terminal_session_panel.setMaximumWidth(400)
+
+            # Create splitter for chat and terminal panel
+            splitter = QSplitter(Qt.Horizontal)
+            splitter.addWidget(self.chat_display)
+            splitter.addWidget(self.terminal_session_panel)
+            splitter.setStretchFactor(0, 3)  # Chat gets 75% of space
+            splitter.setStretchFactor(1, 1)  # Terminal panel gets 25%
+
+            layout.addWidget(self._create_top_bar())
+            layout.addWidget(banner_label)
+            layout.addWidget(splitter, 1)
+            layout.addWidget(self.thinking_indicator)
+            layout.addWidget(input_container)
+        else:
+            # Fallback: no terminal panel
+            layout.addWidget(self._create_top_bar())
+            layout.addWidget(banner_label)
+            layout.addWidget(self.chat_display, 1)
+            layout.addWidget(self.thinking_indicator)
+            layout.addWidget(input_container)
 
     def _create_top_bar(self):
         widget = QWidget()

@@ -11,6 +11,7 @@ from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.file_registry import FileRegistry
 from src.aura.services.llm_service import LLMService
 from src.aura.services.terminal_agent_service import TerminalAgentService
+from src.aura.services.terminal_session_manager import TerminalSessionManager
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor, WorkspaceChanges
 from src.aura.services.workspace_service import WorkspaceService
 
@@ -42,12 +43,14 @@ class AuraExecutor:
         file_registry: FileRegistry,
         terminal_service: TerminalAgentService,
         workspace_monitor: WorkspaceChangeMonitor,
+        terminal_session_manager: TerminalSessionManager,
     ) -> None:
         self.event_bus = event_bus
         self.workspace = workspace
         self.file_registry = file_registry
         self.terminal_service = terminal_service
         self.workspace_monitor = workspace_monitor
+        self.terminal_session_manager = terminal_session_manager
 
         self.code_sanitizer = CodeSanitizer()
         self.prompt_builder = PromptBuilder(prompts)
@@ -90,6 +93,20 @@ class AuraExecutor:
         spec = self.blueprint_handler.execute_design_blueprint(action, context)
         self.file_registry.refresh()
         context.active_files = self.file_registry.list_files()
+
+        # Auto-spawn terminal agent if enabled
+        auto_spawn = action.get_param("auto_spawn", True)  # Default to True
+        if auto_spawn and spec:
+            logger.info("Auto-spawning terminal agent for task %s", spec.task_id)
+            try:
+                session = self.terminal_service.spawn_agent(spec)
+                self.terminal_session_manager.register_session(session)
+                context.extras["last_terminal_session"] = session.model_dump()
+                logger.info("Auto-spawned terminal session %s", session.task_id)
+            except Exception as exc:
+                logger.error("Failed to auto-spawn terminal agent: %s", exc)
+                # Don't fail the whole operation, just log the error
+
         return spec
 
     def _handle_refine_code(self, action: Action, context: ProjectContext) -> AgentSpecification:
@@ -138,6 +155,11 @@ class AuraExecutor:
             specification,
             command_override=command,
         )
+
+        # Register the session for monitoring
+        self.terminal_session_manager.register_session(session)
+        logger.info("Registered terminal session %s for monitoring", session.task_id)
+
         context.extras["last_terminal_session"] = session.model_dump()
         return session
 

@@ -101,6 +101,9 @@ class AuraInterface:
         # Passive listener for detected language updates
         self.event_bus.subscribe("PROJECT_LANGUAGE_DETECTED", self._handle_project_language_detected)
 
+        # Subscribe to automation triggers
+        self.event_bus.subscribe("TRIGGER_AUTO_INTEGRATE", self._handle_auto_integrate_trigger)
+
         # Subscribe to Context Manager events
         if self.context_manager:
             self.event_bus.subscribe("CONTEXT_LOADING_STARTED", self._handle_context_loading_started)
@@ -121,6 +124,51 @@ class AuraInterface:
                 logger.info(f"Interface updated language -> {self.current_language}")
         except Exception:
             logger.debug("Failed to process PROJECT_LANGUAGE_DETECTED event; ignoring.")
+
+    def _handle_auto_integrate_trigger(self, event: Event) -> None:
+        """Handle automatic integration trigger after terminal session completion."""
+        try:
+            task_id = event.payload.get("task_id")
+            logger.info(f"Auto-integrate triggered for task {task_id}")
+
+            # Build a context snapshot
+            context = self._build_context(user_text="[Auto-integrate terminal results]")
+
+            # Create INTEGRATE_RESULTS action
+            from src.aura.models.action import Action, ActionType
+            action = Action(
+                type=ActionType.INTEGRATE_RESULTS,
+                parameters={"task_id": task_id},
+            )
+
+            # Execute the action directly
+            try:
+                result = self.executor.execute(action, context)
+                logger.info(f"Auto-integration completed for task {task_id}: {result}")
+
+                # Dispatch a system message to show in UI
+                self.event_bus.dispatch(
+                    Event(
+                        event_type="GENERATION_PROGRESS",
+                        payload={
+                            "message": f"✓ Integrated results from terminal session {task_id[:8]}",
+                            "type": "system"
+                        }
+                    )
+                )
+            except Exception as exc:
+                logger.error(f"Failed to auto-integrate task {task_id}: {exc}")
+                self.event_bus.dispatch(
+                    Event(
+                        event_type="GENERATION_PROGRESS",
+                        payload={
+                            "message": f"✗ Failed to integrate results from task {task_id[:8]}: {exc}",
+                            "type": "error"
+                        }
+                    )
+                )
+        except Exception as exc:
+            logger.error(f"Error handling auto-integrate trigger: {exc}")
 
     def _handle_context_loading_started(self, event: Event) -> None:
         """Handle context loading started event."""
