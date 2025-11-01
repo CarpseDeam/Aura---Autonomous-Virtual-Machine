@@ -258,7 +258,10 @@ class MainWindow(QMainWindow):
         self.auto_accept_enabled = get_auto_accept_changes()
         self.pending_change_states: Dict[str, str] = {}
         self.setWindowTitle("Aura - Command Deck")
-        self.setGeometry(100, 100, 700, 820)
+
+        # Set sensible default window size and minimum constraints
+        self.setGeometry(100, 100, 1100, 750)
+        self.setMinimumSize(800, 600)
 
         self.setStyleSheet(self.AURA_STYLESHEET)
         self._set_window_icon()
