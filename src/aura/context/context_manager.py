@@ -37,7 +37,8 @@ class ContextManager:
         self,
         project_root: str,
         config: Optional[ContextConfig] = None,
-        event_bus=None
+        event_bus=None,
+        memory_manager=None
     ):
         """
         Initialize the Context Manager.
@@ -46,10 +47,12 @@ class ContextManager:
             project_root: Absolute path to the project root
             config: Optional configuration (uses defaults if not provided)
             event_bus: Optional event bus for observability
+            memory_manager: Optional MemoryManager for loading project memory
         """
         self.project_root = Path(project_root).resolve()
         self.config = config or ContextConfig()
         self.event_bus = event_bus
+        self.memory_manager = memory_manager
 
         # Initialize sub-components
         self.relevance_scorer = RelevanceScorer(use_cache=True)
@@ -381,6 +384,22 @@ class ContextManager:
             loaded_files.append(file_rel)
             total_tokens += file_rel.estimated_tokens
 
+        # Build metadata with project memory if available
+        metadata = {
+            "total_available": len(scored_files),
+            "loaded_count": len(loaded_files)
+        }
+
+        # Include project memory context if memory manager is available
+        if self.memory_manager:
+            try:
+                memory_context = self.memory_manager.get_memory_context()
+                if memory_context:
+                    metadata["project_memory"] = memory_context
+                    logger.debug("Included project memory in context")
+            except Exception as e:
+                logger.warning(f"Failed to load project memory: {e}")
+
         return ContextWindow(
             mode=mode,
             user_request=user_request,
@@ -388,10 +407,7 @@ class ContextManager:
             total_tokens=total_tokens,
             max_tokens=self.config.max_tokens,
             truncated=truncated,
-            metadata={
-                "total_available": len(scored_files),
-                "loaded_count": len(loaded_files)
-            }
+            metadata=metadata
         )
 
     def update_config(self, config: ContextConfig) -> None:

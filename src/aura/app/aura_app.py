@@ -16,6 +16,7 @@ from src.aura.services.file_registry import FileRegistry
 from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
 from src.aura.services.terminal_session_manager import TerminalSessionManager
+from src.aura.services.memory_manager import MemoryManager
 from src.aura.models.events import Event
 from src.aura.models.event_types import TRIGGER_AUTO_INTEGRATE
 from src.aura.prompts.prompt_manager import PromptManager
@@ -163,6 +164,17 @@ class AuraApp:
             terminal_session_manager=self.terminal_session_manager,
         )
 
+        # Initialize Memory Manager for project memory persistence (before ContextManager)
+        self.memory_manager = None
+        try:
+            self.memory_manager = MemoryManager(
+                project_manager=self.project_manager,
+                event_bus=self.event_bus
+            )
+            logging.info("MemoryManager initialized successfully")
+        except Exception as e:
+            logging.warning(f"Failed to initialize MemoryManager: {e}. Continuing without memory management.")
+
         # Initialize Context Manager for intelligent context loading
         self.context_manager = None
         try:
@@ -174,7 +186,8 @@ class AuraApp:
             self.context_manager = ContextManager(
                 project_root=str(WORKSPACE_DIR),
                 config=context_config,
-                event_bus=self.event_bus
+                event_bus=self.event_bus,
+                memory_manager=self.memory_manager
             )
             logging.info("ContextManager initialized successfully")
         except Exception as e:
