@@ -18,7 +18,7 @@ import logging
 import ast
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any
+from typing import Dict, List, Optional, Set, Any, Tuple
 from enum import Enum
 from pydantic import BaseModel, Field
 
@@ -449,6 +449,169 @@ class FileRegistry:
         """Normalize file path to forward slashes"""
         return path.replace("\\", "/")
 
+    def _to_workspace_relative(self, path: str) -> str:
+        """
+        Convert a path to workspace-relative form.
+
+        Args:
+            path: Path to normalize
+
+        Returns:
+            Workspace-relative path using forward slashes
+        """
+        normalized = self._normalize_path(path)
+        root = self._normalize_path(str(self.workspace_root))
+
+        if normalized.startswith(root):
+            remainder = normalized[len(root):].lstrip("/")
+            return remainder
+
+        return normalized.lstrip("/")
+
+    def _construct_module_candidates(self, parts: List[str]) -> List[str]:
+        """
+        Build candidate module file paths for a module reference.
+
+        Args:
+            parts: Module path broken into parts (e.g., ["src", "auth", "user"])
+
+        Returns:
+            Candidate file paths that could satisfy the module
+        """
+        if not parts:
+            return []
+
+        base = "/".join(parts)
+        candidates = [f"{base}.py", f"{base}/__init__.py"]
+        return list(dict.fromkeys(candidates))
+
+    def _construct_package_candidates(self, parts: List[str]) -> List[str]:
+        """
+        Build candidate package __init__ files for a directory reference.
+
+        Args:
+            parts: Directory parts representing a package
+
+        Returns:
+            Candidate __init__.py locations
+        """
+        base = "/".join(parts)
+        if base:
+            return [f"{base}/__init__.py"]
+        return ["__init__.py"]
+
+    def _get_mapping_for_candidate(self, candidate: str) -> Optional[FileMapping]:
+        """
+        Look up a file mapping for a candidate path.
+
+        Args:
+            candidate: Candidate file path relative to the workspace
+
+        Returns:
+            FileMapping if the candidate exists and has an actual file registered
+        """
+        normalized_candidate = self._normalize_path(candidate)
+
+        mapping = self._get_mapping_by_actual_path(normalized_candidate)
+        if mapping and mapping.actual:
+            return mapping
+
+        candidate_path = Path(normalized_candidate)
+        if candidate_path.is_absolute():
+            return None
+
+        absolute_candidate = self._normalize_path(str(self.workspace_root.joinpath(*candidate_path.parts)))
+        mapping = self._get_mapping_by_actual_path(absolute_candidate)
+        if mapping and mapping.actual:
+            return mapping
+
+        return None
+
+    def _resolve_relative_import_context(
+        self,
+        imp: ImportInfo,
+        file_path: str
+    ) -> Optional[Tuple[List[str], List[str], List[FileMapping]]]:
+        """
+        Resolve the base directory and module information for a relative import.
+
+        Args:
+            imp: Import information
+            file_path: File containing the import
+
+        Returns:
+            Tuple of (base directory parts, module parts, candidate mappings) or None if invalid
+        """
+        relative_path = self._to_workspace_relative(file_path)
+        path_parts = [part for part in relative_path.split("/") if part]
+
+        if len(path_parts) < 2:
+            logger.debug("Relative import in %s cannot be resolved (no package context)", file_path)
+            return None
+
+        current_dir_parts = path_parts[:-1]
+
+        levels_up = max(0, imp.import_level - 1)
+        if levels_up > len(current_dir_parts):
+            logger.debug(
+                "Relative import in %s goes above workspace root: level=%s",
+                file_path,
+                imp.import_level
+            )
+            return None
+
+        slice_index = len(current_dir_parts) - levels_up
+        base_dir_parts = list(current_dir_parts[:slice_index]) if slice_index > 0 else []
+        module_parts = [part for part in imp.module.split(".") if part]
+        base_module_parts = base_dir_parts + module_parts
+
+        if module_parts:
+            base_candidates = self._construct_module_candidates(base_module_parts)
+        else:
+            base_candidates = self._construct_package_candidates(base_dir_parts)
+
+        base_mappings: List[FileMapping] = []
+        seen_paths: Set[str] = set()
+        for candidate in base_candidates:
+            mapping = self._get_mapping_for_candidate(candidate)
+            if mapping and mapping.actual:
+                actual_path = mapping.actual.actual_path
+                if actual_path not in seen_paths:
+                    base_mappings.append(mapping)
+                    seen_paths.add(actual_path)
+
+        return base_dir_parts, module_parts, base_mappings
+
+    def _relative_submodule_exists(
+        self,
+        base_dir_parts: List[str],
+        module_parts: List[str],
+        name: str
+    ) -> bool:
+        """
+        Check whether a submodule exists for a relative import name.
+
+        Args:
+            base_dir_parts: Base directory parts after resolving the relative prefix
+            module_parts: Module parts specified in the import (if any)
+            name: Imported name to validate
+
+        Returns:
+            True if a matching module file exists in the registry
+        """
+        if not name or name == "*":
+            return False
+
+        submodule_parts = base_dir_parts + module_parts + [name]
+        candidates = self._construct_module_candidates(submodule_parts)
+
+        for candidate in candidates:
+            mapping = self._get_mapping_for_candidate(candidate)
+            if mapping and mapping.actual:
+                return True
+
+        return False
+
     def _find_planned_mapping(self, identifier: str) -> Optional[FileMapping]:
         """Find planned mapping by identifier or path"""
         # Try exact match on planned path
@@ -602,7 +765,43 @@ class FileRegistry:
 
         # Relative imports within the project
         if imp.is_relative:
-            # TODO: More sophisticated relative import resolution
+            resolution = self._resolve_relative_import_context(imp, file_path)
+            if not resolution:
+                return False
+
+            base_dir_parts, module_parts, base_mappings = resolution
+
+            if module_parts and not base_mappings:
+                logger.debug(
+                    "Relative import in %s could not locate module '%s'",
+                    file_path,
+                    imp.module or "."
+                )
+                return False
+
+            if any(name == "*" for name in imp.names):
+                return bool(base_mappings)
+
+            for name in imp.names:
+                if any(
+                    export.name == name
+                    for mapping in base_mappings
+                    if mapping.actual
+                    for export in mapping.actual.exports
+                ):
+                    continue
+
+                if self._relative_submodule_exists(base_dir_parts, module_parts, name):
+                    continue
+
+                logger.debug(
+                    "Relative import in %s could not resolve name '%s' from module '%s'",
+                    file_path,
+                    name,
+                    imp.module or "."
+                )
+                return False
+
             return True
 
         return False
