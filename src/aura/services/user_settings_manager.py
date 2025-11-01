@@ -11,8 +11,8 @@ AURA_BRAIN_MODEL_CHOICES: List[Tuple[str, str]] = [
     ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
     ("claude-opus-4", "Claude Opus 4"),
     ("gpt-5", "GPT-5 (ChatGPT)"),
-    ("gemini-2.0", "Gemini 2.0"),
-    ("gemini-1.5-pro", "Gemini 1.5 Pro"),
+    ("gemini-2.5-pro", "Gemini 2.0"),
+    ("gemini-2.5-flash", "Gemini 1.5 Pro"),
     ("ollama-local", "Ollama (local model)"),
 ]
 
@@ -20,18 +20,11 @@ AURA_BRAIN_MODEL_CHOICES: List[Tuple[str, str]] = [
 TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
     "codex": {
         "label": "Codex (GPT-5)",
-        "command_template": (
-            "Write-Host 'Aura Agent Task {task_id}'; "
-            "Write-Host ''; "
-            "Get-Content '{spec_path}'; "
-            "Write-Host ''; "
-            "Write-Host 'Press any key to continue...'; "
-            "$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')"
-        ),
+        "command_template": "codex"  # Just this!
     },
     "claude_code": {
         "label": "Claude Code",
-        "command_template": "claude-code --prompt-file \"{spec_path}\"",
+        "command_template": "claude-code"  # Or just "claude"?
     },
 }
 
