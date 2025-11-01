@@ -12,6 +12,10 @@ from src.aura.models.project_context import ProjectContext
 from src.aura.models.result import Result
 from src.aura.models.events import Event
 from src.aura.prompts.prompt_manager import PromptManager
+from src.aura.prompts.prototype_keywords import (
+    PROTOTYPE_KEYWORDS,
+    matches_prototype_request,
+)
 from src.aura.services.ast_service import ASTService
 from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
@@ -85,6 +89,9 @@ class AuraExecutor:
         self.context = context
         self.workspace = workspace
         self.research_service = ResearchService()
+        self._system_prompt_cache: Optional[str] = None
+        self._prototype_prompt_cache: Optional[str] = None
+        self._prototype_mode_requested: bool = False
         self._current_generation_mode: str = "create"
         self._current_project_name: Optional[str] = None
         self._current_project_files: List[str] = []
@@ -114,6 +121,7 @@ class AuraExecutor:
 
         request_text = user_request.strip()
         logger.info("Executing blueprint workflow for routed code request.")
+        self._update_prototype_mode(request_text)
 
         action = Action(type=ActionType.DESIGN_BLUEPRINT, params={"request": request_text})
         blueprint = self.execute_design_blueprint(action, project_context)
@@ -364,6 +372,7 @@ class AuraExecutor:
 
     def execute_design_blueprint(self, action: Action, ctx: ProjectContext) -> Dict[str, Any]:
         user_text = action.get_param("request", "")
+        self._update_prototype_mode(user_text)
         generation_context = self._determine_generation_context(user_text, ctx)
         prompt = self.prompts.render(
             "architect.jinja2",
@@ -409,6 +418,7 @@ class AuraExecutor:
     def execute_refine_code(self, action: Action, ctx: ProjectContext) -> Result:
         file_path = action.get_param("file_path", "workspace/generated.py")
         request_text = action.get_param("request", "")
+        self._update_prototype_mode(request_text)
 
         # Read current source if available
         source_code = ""
@@ -451,6 +461,7 @@ class AuraExecutor:
     def execute_generate_code_for_spec(self, spec: Dict[str, Any], user_request: str) -> Dict[str, Any]:
         file_path = spec.get("file_path") or "workspace/generated.py"
         description = spec.get("description") or user_request or f"Implement the file {file_path}."
+        self._update_prototype_mode(user_request)
 
         try:
             self.event_bus.dispatch(Event(
@@ -907,9 +918,67 @@ class AuraExecutor:
         slug = "-".join(tokens)
         return slug or "project"
 
-    def _stream_and_finalize(self, prompt: str, agent_name: str, file_path: str, validate_with_spec: Optional[Dict[str, Any]]):
+    def _get_system_prompt(self) -> str:
+        if self._system_prompt_cache is None:
+            prompt = self.prompts.render("system_prompt.jinja2")
+            if not prompt:
+                raise RuntimeError("Failed to render system prompt template.")
+            self._system_prompt_cache = prompt
+        return self._system_prompt_cache
+
+    def _get_prototype_prompt(self) -> Optional[str]:
+        if self._prototype_prompt_cache is None:
+            prompt = self.prompts.render("prototype_mode.jinja2")
+            self._prototype_prompt_cache = prompt or ""
+        return self._prototype_prompt_cache or None
+
+    def _update_prototype_mode(self, user_text: str) -> None:
+        should_enable = matches_prototype_request(user_text or "")
+        if should_enable and not self._prototype_mode_requested:
+            logger.debug(
+                "Prototype mode activated for request '%s' using keywords: %s",
+                user_text,
+                PROTOTYPE_KEYWORDS,
+            )
+        elif not should_enable and self._prototype_mode_requested:
+            logger.debug("Prototype mode disabled for request '%s'.", user_text)
+        self._prototype_mode_requested = should_enable
+
+    def _build_generation_messages(
+        self,
+        prompt: str,
+        *,
+        prototype_override: Optional[bool] = None,
+    ) -> List[Dict[str, str]]:
+        system_prompt = self._get_system_prompt()
+        use_prototype = (
+            self._prototype_mode_requested if prototype_override is None else prototype_override
+        )
+        messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+
+        if use_prototype:
+            prototype_prompt = self._get_prototype_prompt()
+            if prototype_prompt:
+                messages.append({"role": "system", "content": prototype_prompt})
+
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    def _stream_and_finalize(
+        self,
+        prompt: str,
+        agent_name: str,
+        file_path: str,
+        validate_with_spec: Optional[Dict[str, Any]],
+        *,
+        prototype_override: Optional[bool] = None,
+    ):
         def run():
             try:
+                messages = self._build_generation_messages(
+                    prompt,
+                    prototype_override=prototype_override,
+                )
                 logger.info(f"Streaming generation for {file_path} via {agent_name}")
                 try:
                     self.event_bus.dispatch(Event(
@@ -919,7 +988,7 @@ class AuraExecutor:
                 except Exception:
                     logger.debug("Failed to dispatch generation start progress event.", exc_info=True)
 
-                stream = self.llm.stream_chat_for_agent(agent_name, prompt)
+                stream = self.llm.stream_structured_for_agent(agent_name, messages)
                 full_parts: List[str] = []
                 for chunk in stream:
                     if chunk:
