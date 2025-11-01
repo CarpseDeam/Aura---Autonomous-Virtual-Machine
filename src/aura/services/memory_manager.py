@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from .memory_blueprint_parser import BlueprintParser
+from .memory_markdown import MemoryMarkdownGenerator
 from .memory_models import (
     ArchitectureDecision,
     CodePattern,
@@ -18,7 +20,7 @@ from .memory_models import (
     ProjectMemory,
     TimelineEntry,
 )
-from .memory_markdown import MemoryMarkdownGenerator
+from .memory_updater import apply_blueprint_result, refresh_project_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,7 @@ class MemoryManager:
         self.project_manager = project_manager
         self.event_bus = event_bus
         self.markdown_generator = MemoryMarkdownGenerator()
+        self.blueprint_parser = BlueprintParser()
 
         # Register event handlers if event bus is available
         if self.event_bus:
@@ -269,6 +272,7 @@ class MemoryManager:
             return
 
         memory.current_state.update(state_updates)
+        refresh_project_metrics(self.project_manager, memory)
         self.save_memory(memory)
 
         logger.debug("Updated project state: %s", list(state_updates.keys()))
@@ -332,24 +336,27 @@ class MemoryManager:
             event: Event object with payload containing blueprint
         """
         try:
-            payload = event.payload
+            payload = event.payload or {}
             task_id = payload.get("task_id", "unknown")
 
             logger.debug("Processing BLUEPRINT_GENERATED event for task %s", task_id)
 
-            # Extract blueprint if available
-            blueprint_text = payload.get("blueprint", "")
-            if not blueprint_text:
-                logger.debug("No blueprint text in event payload")
+            memory = self.get_memory()
+            if not memory:
                 return
 
-            # Add timeline entry for blueprint generation
-            self.add_timeline_entry(
-                task_id=task_id,
-                description="Design blueprint generated",
-                outcome="success",
-                notes="Initial project architecture defined"
-            )
+            has_blueprint_content = any(
+                isinstance(payload.get(key), (str, dict, list))
+                for key in ("blueprint", "prompt")
+            ) or isinstance((payload.get("metadata") or {}).get("blueprint_markdown"), str)
+
+            if not has_blueprint_content:
+                logger.debug("BLUEPRINT_GENERATED payload contained no blueprint content")
+                return
+
+            apply_blueprint_result(memory, payload, task_id, self.blueprint_parser)
+            refresh_project_metrics(self.project_manager, memory)
+            self.save_memory(memory)
 
         except Exception as exc:
             logger.error("Error processing BLUEPRINT_GENERATED event: %s", exc)
@@ -364,29 +371,38 @@ class MemoryManager:
             event: Event object with payload containing session details
         """
         try:
-            payload = event.payload
+            payload = event.payload or {}
             task_id = payload.get("task_id", "unknown")
             completion_reason = payload.get("completion_reason", "completed")
             changes_made = payload.get("changes_made", 0)
 
             logger.debug("Processing TERMINAL_SESSION_COMPLETED for task %s", task_id)
 
-            # Add timeline entry
+            memory = self.get_memory()
+            if not memory:
+                return
+
             description = f"Terminal session completed: {completion_reason}"
             notes = f"{changes_made} file changes detected" if changes_made > 0 else None
 
-            self.add_timeline_entry(
-                task_id=task_id,
-                description=description,
-                outcome="success",
-                notes=notes
+            memory.timeline.append(
+                TimelineEntry(
+                    task_id=task_id,
+                    description=description,
+                    outcome="success",
+                    notes=notes,
+                )
             )
 
-            # Update project state
-            self.update_project_state({
+            memory.current_state.update({
                 "last_terminal_session": task_id,
                 "last_completion_time": datetime.now(timezone.utc).isoformat()
             })
+            if changes_made is not None:
+                memory.current_state["last_changes_detected"] = changes_made
+
+            refresh_project_metrics(self.project_manager, memory)
+            self.save_memory(memory)
 
         except Exception as exc:
             logger.error("Error processing TERMINAL_SESSION_COMPLETED event: %s", exc)
@@ -401,16 +417,21 @@ class MemoryManager:
             event: Event object with payload containing task_id
         """
         try:
-            payload = event.payload
+            payload = event.payload or {}
             task_id = payload.get("task_id", "unknown")
 
             logger.debug("Processing TRIGGER_AUTO_INTEGRATE for task %s", task_id)
 
-            # Update state to reflect integration phase
-            self.update_project_state({
+            memory = self.get_memory()
+            if not memory:
+                return
+
+            memory.current_state.update({
                 "last_integration": task_id,
                 "integration_time": datetime.now(timezone.utc).isoformat()
             })
+            refresh_project_metrics(self.project_manager, memory)
+            self.save_memory(memory)
 
         except Exception as exc:
             logger.error("Error processing TRIGGER_AUTO_INTEGRATE event: %s", exc)

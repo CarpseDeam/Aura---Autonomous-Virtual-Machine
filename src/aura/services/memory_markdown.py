@@ -162,7 +162,18 @@ class MemoryMarkdownGenerator:
         ]
 
         for key, value in current_state.items():
-            lines.append(f"- **{key}**: {value}")
+            if value is None:
+                continue
+            if isinstance(value, list):
+                lines.append(f"- **{key}**:")
+                for item in value:
+                    lines.append(f"  - {item}")
+            elif isinstance(value, dict):
+                lines.append(f"- **{key}**:")
+                for sub_key, sub_value in value.items():
+                    lines.append(f"  - {sub_key}: {sub_value}")
+            else:
+                lines.append(f"- **{key}**: {value}")
 
         lines.append("")
         return lines

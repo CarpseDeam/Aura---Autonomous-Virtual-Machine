@@ -365,9 +365,37 @@ class ContextManager:
         Returns:
             ContextWindow with loaded files
         """
-        loaded_files = []
+        loaded_files: List[FileRelevance] = []
         total_tokens = 0
         truncated = False
+        memory_context: Optional[str] = None
+        memory_tokens = 0
+
+        if self.memory_manager:
+            try:
+                memory_context = self.memory_manager.get_memory_context()
+            except Exception as e:
+                logger.warning(f"Failed to load project memory: {e}")
+                memory_context = None
+
+        metadata: Dict[str, Any] = {
+            "total_available": len(scored_files),
+            "loaded_count": 0,
+        }
+
+        if memory_context:
+            memory_tokens = self._estimate_text_tokens(memory_context)
+            memory_entry = FileRelevance(
+                file_path="PROJECT_MEMORY.md",
+                relevance_score=1.0,
+                relevance_reason="project memory",
+                file_size_bytes=len(memory_context.encode("utf-8")),
+                estimated_tokens=memory_tokens,
+            )
+            loaded_files.append(memory_entry)
+            total_tokens += memory_tokens
+            metadata["project_memory"] = memory_context
+            metadata["priority_files"] = ["PROJECT_MEMORY.md"]
 
         # Greedily add files until we hit token budget
         for file_rel in scored_files:
@@ -384,21 +412,9 @@ class ContextManager:
             loaded_files.append(file_rel)
             total_tokens += file_rel.estimated_tokens
 
-        # Build metadata with project memory if available
-        metadata = {
-            "total_available": len(scored_files),
-            "loaded_count": len(loaded_files)
-        }
-
-        # Include project memory context if memory manager is available
-        if self.memory_manager:
-            try:
-                memory_context = self.memory_manager.get_memory_context()
-                if memory_context:
-                    metadata["project_memory"] = memory_context
-                    logger.debug("Included project memory in context")
-            except Exception as e:
-                logger.warning(f"Failed to load project memory: {e}")
+        metadata["loaded_count"] = len(loaded_files)
+        if memory_context and total_tokens > self.config.max_tokens:
+            truncated = True
 
         return ContextWindow(
             mode=mode,
@@ -409,6 +425,16 @@ class ContextManager:
             truncated=truncated,
             metadata=metadata
         )
+
+    def _estimate_text_tokens(self, text: str) -> int:
+        """
+        Roughly estimate token usage for raw text blocks.
+
+        Uses a simple heuristic (4 characters ≈ 1 token) with a floor to ensure
+        the estimate reserves enough space in the context budget.
+        """
+        approx = max(50, len(text) // 4)
+        return min(self.config.max_tokens, approx)
 
     def update_config(self, config: ContextConfig) -> None:
         """
