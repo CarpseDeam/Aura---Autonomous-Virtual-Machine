@@ -245,7 +245,7 @@ class ImportValidator:
                     logger.error("Error validating %s: %s", file_path, e)
                     result.add_error(file_path, f"Validation error: {e}")
 
-    def _validate_file_syntax(self, file_path: str) -> Tuple[bool, Optional[str]]:
+    def _validate_file_syntax(self, file_path: str) -> Tuple[bool, str]:
         """
         Validate syntax of a single file.
 
@@ -263,7 +263,7 @@ class ImportValidator:
         try:
             code = full_path.read_text(encoding="utf-8")
             ast.parse(code)
-            return True, None
+            return True, ""
         except SyntaxError as e:
             return False, f"Syntax error at line {e.lineno}: {e.msg}"
         except Exception as e:

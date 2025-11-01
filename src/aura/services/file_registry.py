@@ -656,35 +656,45 @@ class FileRegistry:
         try:
             tree = ast.parse(code)
 
+            parent_map: Dict[ast.AST, ast.AST] = {}
+            for parent in ast.walk(tree):
+                for child in ast.iter_child_nodes(parent):
+                    parent_map[child] = parent
+
+            def is_top_level(node: ast.AST) -> bool:
+                """Return True if the node lives directly under the module."""
+                return parent_map.get(node) is tree
+
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef):
+                    if node.name.startswith("_"):
+                        continue
                     exports.append(ExportInfo(
                         name=node.name,
                         type="class",
                         line_number=node.lineno,
-                        is_public=not node.name.startswith("_")
+                        is_public=True
                     ))
                 elif isinstance(node, ast.FunctionDef):
-                    # Only top-level functions
-                    if any(isinstance(parent, ast.Module) for parent in ast.walk(tree)):
-                        exports.append(ExportInfo(
-                            name=node.name,
-                            type="function",
-                            line_number=node.lineno,
-                            is_public=not node.name.startswith("_")
-                        ))
-                elif isinstance(node, ast.Assign):
-                    # Top-level variables
+                    if not is_top_level(node) or node.name.startswith("_"):
+                        continue
+                    exports.append(ExportInfo(
+                        name=node.name,
+                        type="function",
+                        line_number=node.lineno,
+                        is_public=True
+                    ))
+                elif isinstance(node, ast.Assign) and is_top_level(node):
                     for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            # Check if it's a constant (all caps)
-                            is_constant = target.id.isupper()
-                            exports.append(ExportInfo(
-                                name=target.id,
-                                type="constant" if is_constant else "variable",
-                                line_number=node.lineno,
-                                is_public=not target.id.startswith("_")
-                            ))
+                        if not isinstance(target, ast.Name) or target.id.startswith("_"):
+                            continue
+                        is_constant = target.id.isupper()
+                        exports.append(ExportInfo(
+                            name=target.id,
+                            type="constant" if is_constant else "variable",
+                            line_number=node.lineno,
+                            is_public=True
+                        ))
 
         except SyntaxError as e:
             logger.error("Syntax error parsing %s: %s", file_path, e)
@@ -758,11 +768,6 @@ class FileRegistry:
         if imp.module.split(".")[0] in stdlib_modules:
             return True
 
-        # Check if any imported name exists in our export index
-        for name in imp.names:
-            if name in self._export_index:
-                return True
-
         # Relative imports within the project
         if imp.is_relative:
             resolution = self._resolve_relative_import_context(imp, file_path)
@@ -803,5 +808,10 @@ class FileRegistry:
                 return False
 
             return True
+
+        # Check if any imported name exists in our export index
+        for name in imp.names:
+            if name in self._export_index:
+                return True
 
         return False

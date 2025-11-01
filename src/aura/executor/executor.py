@@ -1,5 +1,3 @@
-"""Thin facade around specialized executor handlers."""
-
 from __future__ import annotations
 
 import logging
@@ -51,15 +49,11 @@ class AuraExecutor:
         self.file_registry = file_registry
         self.import_validator = import_validator
 
-        code_sanitizer = CodeSanitizer()
-        prompt_builder = PromptBuilder(prompts)
-        project_resolver = ProjectResolver(workspace)
-
+        self.code_sanitizer = CodeSanitizer()
+        self.prompt_builder = PromptBuilder(prompts)
+        self.project_resolver = ProjectResolver(workspace)
         self.file_operations = FileOperations(workspace, ast)
-        self.conversation_handler = ConversationHandler(llm, prompts, code_sanitizer)
-        self.project_resolver = project_resolver
-        self.prompt_builder = prompt_builder
-        self.code_sanitizer = code_sanitizer
+        self.conversation_handler = ConversationHandler(llm, prompts, self.code_sanitizer)
         self.code_generator = CodeGenerator(
             event_bus=event_bus,
             llm=llm,
@@ -67,17 +61,17 @@ class AuraExecutor:
             ast=ast,
             context=context,
             workspace=workspace,
-            prompt_builder=prompt_builder,
-            project_resolver=project_resolver,
-            code_sanitizer=code_sanitizer,
+            prompt_builder=self.prompt_builder,
+            project_resolver=self.project_resolver,
+            code_sanitizer=self.code_sanitizer,
         )
         self.blueprint_handler = BlueprintHandler(
             event_bus=event_bus,
             llm=llm,
             prompts=prompts,
-            project_resolver=project_resolver,
-            prompt_builder=prompt_builder,
-            code_sanitizer=code_sanitizer,
+            project_resolver=self.project_resolver,
+            prompt_builder=self.prompt_builder,
+            code_sanitizer=self.code_sanitizer,
             file_registry=file_registry,
         )
         self._tools: Dict[ActionType, Handler] = {
@@ -185,24 +179,19 @@ class AuraExecutor:
         *,
         prototype_override: Optional[bool] = None,
     ) -> List[Dict[str, str]]:
-        """Proxy for legacy tests that rely on the executor helper."""
         return self.prompt_builder.build_generation_messages(
             prompt,
             prototype_override=prototype_override,
         )
 
     def _strip_code_fences(self, text: str) -> str:
-        """Backwards compatible wrapper for code fence stripping."""
         return self.code_sanitizer.strip_code_fences(text)
 
     def _sanitize_code(self, code: str) -> str:
-        """Backwards compatible wrapper for code sanitization."""
         return self.code_sanitizer.sanitize_code(code)
 
     def _parse_json_safely(self, text: str) -> Dict[str, Any]:
-        """Backwards compatible wrapper for JSON parsing."""
         return self.code_sanitizer.parse_json_safely(text)
 
     def _files_from_blueprint(self, blueprint_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Backward compatibility wrapper for blueprint parsing."""
         return self.blueprint_handler.files_from_blueprint(blueprint_data)
