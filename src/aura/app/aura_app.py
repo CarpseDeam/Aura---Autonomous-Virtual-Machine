@@ -17,6 +17,10 @@ from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
 from src.aura.services.terminal_session_manager import TerminalSessionManager
 from src.aura.services.memory_manager import MemoryManager
+from src.aura.services.user_settings_manager import (
+    get_terminal_agent_command_template,
+    load_user_settings,
+)
 from src.aura.models.events import Event
 from src.aura.models.event_types import TRIGGER_AUTO_INTEGRATE
 from src.aura.prompts.prompt_manager import PromptManager
@@ -124,10 +128,8 @@ class AuraApp:
         self.file_registry = FileRegistry(WORKSPACE_DIR)
 
         # Load terminal agent configuration from user settings
-        from src.aura.services.user_settings_manager import load_user_settings
         user_settings = load_user_settings()
-        terminal_config = user_settings.get("terminal_agent", {})
-        agent_command_template = terminal_config.get("command_template")
+        agent_command_template = get_terminal_agent_command_template(user_settings)
 
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,

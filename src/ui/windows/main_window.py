@@ -5,8 +5,19 @@ from typing import Any, Dict, List, Optional, Union
 import markdown
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QLabel, QTextBrowser, QHBoxLayout,
-    QApplication, QPushButton, QFileDialog, QInputDialog, QSplitter
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QTextBrowser,
+    QHBoxLayout,
+    QApplication,
+    QPushButton,
+    QFileDialog,
+    QInputDialog,
+    QSplitter,
+    QDialog,
+    QListWidget,
 )
 from PySide6.QtGui import QFont, QTextCursor, QIcon, QTextOption, QDesktopServices
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QUrl, QUrlQuery
@@ -14,6 +25,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, QObject, QUrl, QUrlQuery
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.config import ASSETS_DIR
+from src.aura.project.project_manager import ProjectManager
 from src.aura.services.user_settings_manager import get_auto_accept_changes
 from src.aura.services.image_storage_service import ImageStorageService
 from src.ui.widgets.chat_input import ChatInputTextEdit
@@ -23,6 +35,123 @@ from src.ui.widgets.terminal_session_panel import TerminalSessionPanel
 
 
 logger = logging.getLogger(__name__)
+
+# Retro helper dialog -------------------------------------------------------
+
+
+class ProjectSwitchDialog(QDialog):
+    """
+    Minimal retro-styled dialog for selecting an Aura project to activate.
+    """
+
+    DIALOG_STYLESHEET = """
+        QDialog {
+            background-color: #000000;
+            color: #FFB74D;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 14px;
+        }
+        QLabel#dialog_title {
+            color: #FFB74D;
+            font-weight: bold;
+            font-size: 18px;
+            padding-bottom: 6px;
+        }
+        QListWidget {
+            background-color: #101010;
+            border: 1px solid #4a4a4a;
+            color: #FFB74D;
+            padding: 6px;
+        }
+        QListWidget::item:selected {
+            background-color: #FFB74D;
+            color: #000000;
+        }
+        QPushButton {
+            background-color: #101010;
+            border: 1px solid #FFB74D;
+            color: #FFB74D;
+            font-weight: bold;
+            padding: 6px 14px;
+            border-radius: 4px;
+            min-width: 96px;
+        }
+        QPushButton:hover {
+            background-color: #1a1a1a;
+        }
+        QPushButton#select_button {
+            background-color: #FFB74D;
+            color: #000000;
+        }
+        QPushButton#select_button:hover {
+            background-color: #FFA726;
+        }
+    """
+
+    def __init__(self, parent: QWidget, project_names: List[str]):
+        super().__init__(parent)
+        self.selected_project: Optional[str] = None
+
+        self.setWindowTitle("Select Project")
+        self.setModal(True)
+        self.setStyleSheet(self.DIALOG_STYLESHEET)
+        self.setFixedSize(420, 320)
+
+        ascii_font = QFont("JetBrains Mono", 11)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        top_border = QLabel("+--------------------------------------+")
+        top_border.setAlignment(Qt.AlignCenter)
+        top_border.setFont(ascii_font)
+        layout.addWidget(top_border)
+
+        title_label = QLabel("SELECT PROJECT")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setObjectName("dialog_title")
+        layout.addWidget(title_label)
+
+        self.project_list = QListWidget()
+        self.project_list.setSelectionMode(QListWidget.SingleSelection)
+        for name in project_names:
+            self.project_list.addItem(name)
+        if project_names:
+            self.project_list.setCurrentRow(0)
+        self.project_list.itemDoubleClicked.connect(lambda _: self.accept())
+        layout.addWidget(self.project_list)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+
+        select_button = QPushButton("Select")
+        select_button.setObjectName("select_button")
+        select_button.clicked.connect(self.accept)
+        button_row.addWidget(select_button)
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_row.addWidget(cancel_button)
+
+        layout.addLayout(button_row)
+
+        bottom_border = QLabel("+--------------------------------------+")
+        bottom_border.setAlignment(Qt.AlignCenter)
+        bottom_border.setFont(ascii_font)
+        layout.addWidget(bottom_border)
+
+    def accept(self) -> None:
+        current_item = self.project_list.currentItem()
+        if current_item is None:
+            return
+        self.selected_project = current_item.text().strip()
+        super().accept()
+
+    def reject(self) -> None:
+        self.selected_project = None
+        super().reject()
+
 
 # Retro CSS stylesheet for AURA's markdown-rendered responses
 AURA_RESPONSE_CSS = """
@@ -351,13 +480,17 @@ class MainWindow(QMainWindow):
         btn_new_project.setObjectName("top_bar_button")
         btn_new_project.clicked.connect(self._create_new_project)
 
+        btn_switch_project = QPushButton("Switch Project")
+        btn_switch_project.setObjectName("top_bar_button")
+        btn_switch_project.clicked.connect(self._open_project_switcher)
+
         btn_import_project = QPushButton("Import Project...")
         btn_import_project.setObjectName("top_bar_button")
         btn_import_project.clicked.connect(self._import_project)
 
-        btn_configure_agents = QPushButton("Configure Agents")
-        btn_configure_agents.setObjectName("top_bar_button")
-        btn_configure_agents.clicked.connect(self._open_settings_dialog)
+        btn_configure = QPushButton("Configure")
+        btn_configure.setObjectName("top_bar_button")
+        btn_configure.clicked.connect(self._open_settings_dialog)
 
         self.auto_accept_label = QLabel()
         self.auto_accept_label.setObjectName("auto_accept_label")
@@ -367,8 +500,9 @@ class MainWindow(QMainWindow):
         hl.addWidget(btn_new_session)
         hl.addStretch()
         hl.addWidget(btn_new_project)
+        hl.addWidget(btn_switch_project)
         hl.addWidget(btn_import_project)
-        hl.addWidget(btn_configure_agents)
+        hl.addWidget(btn_configure)
         hl.addWidget(self.auto_accept_label)
         return widget
 
@@ -508,6 +642,35 @@ class MainWindow(QMainWindow):
                 Event(
                     event_type="SEND_USER_MESSAGE",
                     payload={"text": f"/project create {project_name}"}
+                )
+            )
+
+    def _open_project_switcher(self):
+        """Display modal dialog listing known projects and trigger switch command."""
+        try:
+            manager = ProjectManager()
+            project_summaries = manager.list_projects()
+            project_names = [summary.name for summary in project_summaries]
+        except Exception as exc:
+            logger.error("Failed to load project list: %s", exc)
+            self._log_system_message("ERROR", "Unable to load project list.")
+            return
+
+        if not project_names:
+            self._log_system_message("SYSTEM", "No projects available to switch.")
+            return
+
+        dialog = ProjectSwitchDialog(self, project_names)
+        if dialog.exec() == QDialog.Accepted:
+            selected = (dialog.selected_project or "").strip()
+            if not selected:
+                return
+            logger.info("User requested switch to project: %s", selected)
+            self._display_system_message("WORKSPACE", f"Switching to project: {selected}")
+            self.event_bus.dispatch(
+                Event(
+                    event_type="SEND_USER_MESSAGE",
+                    payload={"text": f"/project switch {selected}"}
                 )
             )
 

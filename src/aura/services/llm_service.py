@@ -84,14 +84,23 @@ class LLMService:
 
         try:
             user_settings = load_user_settings()
-            user_agents = user_settings.get("agents", {})
-            for agent_name, user_agent_config in (user_agents or {}).items():
-                if not isinstance(user_agent_config, dict):
-                    logger.debug("Skipping non-dict agent config for '%s'.", agent_name)
-                    continue
-                base_config = config.setdefault(agent_name, {})
-                if user_agent_config.get("model"):
-                    base_config.update(user_agent_config)
+            # New simplified structure centers configuration around a single Aura brain model.
+            aura_brain_model = user_settings.get("aura_brain_model")
+            if isinstance(aura_brain_model, str) and aura_brain_model.strip():
+                for agent_name in config.keys():
+                    agent_config = config.setdefault(agent_name, {})
+                    agent_config["model"] = aura_brain_model.strip()
+
+            # Legacy compatibility: allow per-agent overrides if still present.
+            legacy_agents = user_settings.get("agents", {})
+            if isinstance(legacy_agents, dict):
+                for agent_name, user_agent_config in legacy_agents.items():
+                    if not isinstance(user_agent_config, dict):
+                        logger.debug("Skipping non-dict agent config for '%s'.", agent_name)
+                        continue
+                    base_config = config.setdefault(agent_name, {})
+                    if user_agent_config.get("model"):
+                        base_config.update(user_agent_config)
         except Exception as e:
             logger.error(f"Failed to load or merge user agent settings: {e}. Using defaults.")
 

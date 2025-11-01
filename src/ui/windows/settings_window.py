@@ -1,95 +1,92 @@
 import logging
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QFormLayout, QComboBox,
-                               QDoubleSpinBox, QPushButton, QGroupBox, QHBoxLayout,
-                               QScrollArea, QCheckBox)
-from PySide6.QtCore import Qt, Signal, QObject, Slot
+from typing import Dict
+
+from PySide6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QComboBox,
+    QLineEdit,
+    QPushButton,
+    QCheckBox,
+    QHBoxLayout,
+)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
+
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
-from src.aura.config import AGENT_CONFIG
 from src.aura.services.user_settings_manager import (
+    AURA_BRAIN_MODEL_CHOICES,
+    TERMINAL_AGENT_PRESETS,
     load_user_settings,
     save_user_settings,
 )
 
+
 logger = logging.getLogger(__name__)
-
-
-class SettingsSignaller(QObject):
-    """A signaller to safely update the UI from other threads."""
-    models_received = Signal(dict)
 
 
 class SettingsWindow(QWidget):
     """
-    The settings dialog for configuring AI agents and other application settings.
+    Simplified settings dialog that keeps Aura's retro styling while focusing on
+    the handful of controls users actually need.
     """
+
     SETTINGS_STYLESHEET = """
         QWidget {
-            background-color: #1e1e1e;
-            color: #dcdcdc;
+            background-color: #000000;
+            color: #00ff00;
             font-family: "JetBrains Mono", "Courier New", Courier, monospace;
-        }
-        QScrollArea {
-            border: none;
-        }
-        #scroll_widget {
-             background-color: #1e1e1e;
-        }
-        QGroupBox {
-            border: 1px solid #4a4a4a;
-            border-radius: 5px;
-            margin-top: 1ex;
             font-size: 14px;
-            font-weight: bold;
-            color: #FFB74D; /* Amber */
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            subcontrol-position: top center;
-            padding: 0 3px;
-        }
-        QLabel {
-            font-size: 14px;
-            border: none;
-            padding-top: 5px; /* Align with input fields */
         }
         QLabel#title {
             color: #FFB74D;
+            font-size: 20px;
             font-weight: bold;
-            font-size: 18px;
-            padding-bottom: 10px;
+            border: none;
+            padding: 4px 0 12px 0;
         }
-        QComboBox, QDoubleSpinBox {
-            background-color: #2c2c2c;
+        QLabel#ascii_border, QLabel#section_label {
+            color: #FFB74D;
+        }
+        QLabel#field_label {
+            color: #FFB74D;
+            min-width: 220px;
+        }
+        QLabel#hint_label {
+            color: #00ff00;
+            font-size: 12px;
+        }
+        QComboBox, QLineEdit {
+            background-color: #101010;
             border: 1px solid #4a4a4a;
-            color: #dcdcdc;
-            font-size: 14px;
+            color: #FFB74D;
             padding: 6px;
-            border-radius: 5px;
-        }
-        QComboBox:focus, QDoubleSpinBox:focus {
-            border: 1px solid #FFB74D; /* Amber */
+            border-radius: 4px;
         }
         QComboBox::drop-down {
             border: none;
         }
         QComboBox QAbstractItemView {
-            background-color: #2c2c2c;
+            background-color: #101010;
             selection-background-color: #FFB74D;
             selection-color: #000000;
         }
+        QLineEdit[echoMode="2"] {
+            letter-spacing: 2px;
+        }
         QPushButton {
-            background-color: #2c2c2c;
+            background-color: #101010;
             border: 1px solid #FFB74D;
             color: #FFB74D;
-            font-size: 14px;
             font-weight: bold;
-            padding: 8px 12px;
-            border-radius: 5px;
-            min-width: 100px;
+            padding: 8px 16px;
+            border-radius: 4px;
+            min-width: 140px;
         }
         QPushButton:hover {
-            background-color: #3a3a3a;
+            background-color: #1a1a1a;
         }
         QPushButton#save_button {
             background-color: #FFB74D;
@@ -101,199 +98,194 @@ class SettingsWindow(QWidget):
     """
 
     def __init__(self, event_bus: EventBus, parent=None):
-        """Initializes the SettingsWindow."""
         super().__init__(parent)
         self.event_bus = event_bus
-        self.signaller = SettingsSignaller()
-
-        self.setWindowTitle("Agent Configuration")
+        self.setWindowTitle("Aura Configuration")
         self.setWindowFlags(Qt.WindowType.Tool)
-        self.setGeometry(200, 200, 550, 600)
+        self.setGeometry(200, 200, 540, 520)
         self.setStyleSheet(self.SETTINGS_STYLESHEET)
         self.setWindowModality(Qt.ApplicationModal)
 
-        self.agent_widgets = {}
+        self.brain_combo: QComboBox
+        self.terminal_combo: QComboBox
+        self.custom_command_input: QLineEdit
+        self.api_key_inputs: Dict[str, QLineEdit] = {}
+        self.auto_accept_checkbox: QCheckBox
+
         self._init_ui()
-        self._register_event_handlers()
-        self.event_bus.dispatch(Event(event_type="REQUEST_AVAILABLE_MODELS"))
-
-    def _init_ui(self):
-        """Initializes the user interface of the settings window."""
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        main_layout.setSpacing(15)
-
-        title_label = QLabel("AGENT CONFIGURATION")
-        title_label.setObjectName("title")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(title_label)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_widget = QWidget()
-        scroll_widget.setObjectName("scroll_widget")
-        self.form_container_layout = QVBoxLayout(scroll_widget)
-        scroll_area.setWidget(scroll_widget)
-        main_layout.addWidget(scroll_area)
-
-        settings_snapshot = load_user_settings()
-        agent_defaults = settings_snapshot.get("agents", {}) or {}
-
-        preferences_group = QGroupBox("Preferences")
-        preferences_layout = QVBoxLayout()
-        preferences_layout.setContentsMargins(10, 15, 10, 10)
-        preferences_layout.setSpacing(8)
-
-        self.auto_accept_checkbox = QCheckBox("Automatically apply generated changes")
-        self.auto_accept_checkbox.setToolTip(
-            "When enabled, AURA writes generated code to disk immediately. "
-            "When disabled, changes are staged for manual review."
-        )
-        self.auto_accept_checkbox.setChecked(True)
-        preferences_layout.addWidget(self.auto_accept_checkbox)
-        preferences_layout.addStretch()
-        preferences_group.setLayout(preferences_layout)
-        self.form_container_layout.addWidget(preferences_group)
-
-        ordered_agent_names = []
-        for name in AGENT_CONFIG.keys():
-            if name not in ordered_agent_names:
-                ordered_agent_names.append(name)
-        for name in agent_defaults.keys():
-            if name not in ordered_agent_names:
-                ordered_agent_names.append(name)
-
-        for agent_name in ordered_agent_names:
-            base_config = agent_defaults.get(agent_name, AGENT_CONFIG.get(agent_name, {}))
-
-            group_box = QGroupBox(agent_name.replace("_", " ").title())
-            form_layout = QFormLayout()
-            form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-            form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-            form_layout.setContentsMargins(10, 15, 10, 10)
-            form_layout.setSpacing(10)
-
-            model_input = QComboBox()
-            temperature_input = QDoubleSpinBox()
-            temperature_input.setRange(0.0, 2.0)
-            temperature_input.setSingleStep(0.1)
-            temperature_input.setValue(base_config.get("temperature", 0.7))
-
-            top_p_input = QDoubleSpinBox()
-            top_p_input.setRange(0.0, 1.0)
-            top_p_input.setSingleStep(0.1)
-            top_p_input.setValue(base_config.get("top_p", 1.0))
-
-            form_layout.addRow(QLabel("Model:"), model_input)
-            form_layout.addRow(QLabel("Temperature:"), temperature_input)
-            form_layout.addRow(QLabel("Top P:"), top_p_input)
-
-            group_box.setLayout(form_layout)
-            self.form_container_layout.addWidget(group_box)
-
-            self.agent_widgets[agent_name] = {
-                "model": model_input,
-                "temperature": temperature_input,
-                "top_p": top_p_input
-            }
-
-        self.form_container_layout.addStretch()
-
-        button_layout = QHBoxLayout()
-        save_button = QPushButton("Save & Close")
-        save_button.setObjectName("save_button")
-        save_button.clicked.connect(self._save_settings)
-        close_button = QPushButton("Cancel")
-        close_button.clicked.connect(self.close)
-
-        button_layout.addStretch()
-        button_layout.addWidget(close_button)
-        button_layout.addWidget(save_button)
-        main_layout.addLayout(button_layout)
-
-    def _register_event_handlers(self):
-        """Connects UI signals and subscribes to events."""
-        self.signaller.models_received.connect(self._on_models_received)
-        self.event_bus.subscribe(
-            "AVAILABLE_MODELS_RECEIVED",
-            lambda event: self.signaller.models_received.emit(event.payload["models"])
-        )
-
-    @Slot(dict)
-    def _on_models_received(self, models: dict):
-        """Populates the model dropdowns when models are received."""
-        for agent_name, widgets in self.agent_widgets.items():
-            combo_box = widgets["model"]
-            combo_box.clear()
-            for provider, model_list in models.items():
-                combo_box.addItem(f"--- {provider} ---")
-                index = combo_box.count() - 1
-                item = combo_box.model().item(index)
-                if item:
-                    item.setFlags(Qt.ItemFlag.NoItemFlags)
-                for model_name in model_list:
-                    combo_box.addItem(model_name)
         self._load_settings()
 
-    def _load_settings(self):
-        """Loads settings from the JSON file or uses defaults."""
+    # ---- UI Construction -------------------------------------------------
+    def _init_ui(self) -> None:
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(18, 18, 18, 18)
+        main_layout.setSpacing(12)
+
+        title = QLabel("AURA CONFIGURATION")
+        title.setObjectName("title")
+        title.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(title)
+
+        ascii_font = QFont("JetBrains Mono", 11)
+
+        top_border = QLabel("+----------------------------------------------+")
+        top_border.setFont(ascii_font)
+        top_border.setAlignment(Qt.AlignCenter)
+        top_border.setObjectName("ascii_border")
+        main_layout.addWidget(top_border)
+
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(18, 12, 18, 12)
+        panel_layout.setSpacing(14)
+
+        # Aura Brain selector
+        panel_layout.addLayout(self._create_header_row("Aura Brain (Thinking):"))
+        self.brain_combo = QComboBox()
+        for value, display in AURA_BRAIN_MODEL_CHOICES:
+            self.brain_combo.addItem(display, userData=value)
+        panel_layout.addWidget(self.brain_combo)
+
+        # Terminal agent selector
+        panel_layout.addLayout(self._create_header_row("Terminal Agent (Building):"))
+        self.terminal_combo = QComboBox()
+        for key, preset in TERMINAL_AGENT_PRESETS.items():
+            self.terminal_combo.addItem(preset["label"], userData=key)
+        self.terminal_combo.addItem("Custom command...", userData="custom")
+        self.terminal_combo.currentIndexChanged.connect(self._on_terminal_changed)
+        panel_layout.addWidget(self.terminal_combo)
+
+        self.custom_command_input = QLineEdit()
+        self.custom_command_input.setPlaceholderText("Enter custom command template (use {spec_path})")
+        panel_layout.addWidget(self.custom_command_input)
+
+        panel_layout.addWidget(self._create_section_label("------ API Keys ------", ascii_font))
+        for provider_key, label in [
+            ("anthropic", "Anthropic"),
+            ("openai", "OpenAI"),
+            ("google", "Google"),
+        ]:
+            input_field = QLineEdit()
+            input_field.setObjectName(f"api_{provider_key}")
+            input_field.setEchoMode(QLineEdit.Password)
+            panel_layout.addLayout(self._create_field_row(f"{label}:", input_field))
+            self.api_key_inputs[provider_key] = input_field
+
+        panel_layout.addWidget(self._create_section_label("------ Preferences ------", ascii_font))
+        self.auto_accept_checkbox = QCheckBox("Auto-accept code changes")
+        panel_layout.addWidget(self.auto_accept_checkbox)
+
+        footer_layout = QHBoxLayout()
+        footer_layout.addStretch(1)
+        save_button = QPushButton("Save & Close")
+        save_button.setObjectName("save_button")
+        save_button.clicked.connect(self._handle_save)
+        footer_layout.addWidget(save_button)
+        panel_layout.addLayout(footer_layout)
+
+        bottom_border = QLabel("+----------------------------------------------+")
+        bottom_border.setFont(ascii_font)
+        bottom_border.setAlignment(Qt.AlignCenter)
+        bottom_border.setObjectName("ascii_border")
+
+        main_layout.addWidget(panel)
+        main_layout.addWidget(bottom_border)
+
+    def _create_header_row(self, text: str) -> QHBoxLayout:
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        label = QLabel(text)
+        label.setObjectName("field_label")
+        layout.addWidget(label)
+        layout.addStretch(1)
+        return layout
+
+    def _create_field_row(self, label_text: str, widget: QLineEdit) -> QHBoxLayout:
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        label = QLabel(label_text)
+        label.setObjectName("field_label")
+        layout.addWidget(label)
+        layout.addWidget(widget)
+        return layout
+
+    def _create_section_label(self, text: str, font: QFont) -> QLabel:
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignCenter)
+        label.setFont(font)
+        label.setObjectName("section_label")
+        return label
+
+    # ---- Data Binding ----------------------------------------------------
+    def _load_settings(self) -> None:
         try:
             settings = load_user_settings()
-            agent_configs = settings.get("agents", {}) or {}
-            preferences = settings.get("preferences", {}) or {}
+        except Exception as exc:
+            logger.error("Failed to load user settings: %s", exc)
+            settings = {}
 
-            self.auto_accept_checkbox.setChecked(bool(preferences.get("auto_accept_changes", True)))
+        brain_value = settings.get("aura_brain_model")
+        self._select_combo_value(self.brain_combo, brain_value)
 
-            for agent_name, widgets in self.agent_widgets.items():
-                config = agent_configs.get(agent_name, {})
-                if not isinstance(config, dict):
-                    logger.debug("Skipping non-dict config for agent '%s' during load.", agent_name)
-                    continue
+        terminal_value = settings.get("terminal_agent")
+        self._select_combo_value(self.terminal_combo, terminal_value)
+        custom_command = settings.get("terminal_agent_custom_command") or ""
+        self.custom_command_input.setText(custom_command)
+        self._on_terminal_changed()
 
-                model_name = config.get("model")
-                if model_name:
-                    index = widgets["model"].findText(model_name)
-                    if index != -1:
-                        widgets["model"].setCurrentIndex(index)
-                widgets["temperature"].setValue(config.get("temperature", 0.7))
-                widgets["top_p"].setValue(config.get("top_p", 1.0))
-        except Exception as e:
-            logger.error(f"Failed to load user settings: {e}")
+        api_keys = settings.get("api_keys") or {}
+        for provider, input_field in self.api_key_inputs.items():
+            input_field.setText(api_keys.get(provider, ""))
 
-    def _save_settings(self):
-        """Saves the current settings from the UI to a JSON file."""
-        new_config = {}
-        for agent_name, widgets in self.agent_widgets.items():
-            model_text = widgets["model"].currentText()
-            if "---" in model_text:
-                model_text = ""
+        self.auto_accept_checkbox.setChecked(bool(settings.get("auto_accept_changes", True)))
 
-            new_config[agent_name] = {
-                "model": model_text,
-                "temperature": widgets["temperature"].value(),
-                "top_p": widgets["top_p"].value()
-            }
+    def _select_combo_value(self, combo: QComboBox, value: str) -> None:
+        if not isinstance(value, str):
+            return
+        for index in range(combo.count()):
+            if combo.itemData(index) == value:
+                combo.setCurrentIndex(index)
+                return
+
+    def _collect_api_keys(self) -> Dict[str, str]:
+        return {provider: field.text().strip() for provider, field in self.api_key_inputs.items()}
+
+    # ---- Event Handlers --------------------------------------------------
+    def _on_terminal_changed(self) -> None:
+        is_custom = self.terminal_combo.currentData() == "custom"
+        self.custom_command_input.setVisible(is_custom)
+
+    def _handle_save(self) -> None:
+        settings_payload = {
+            "aura_brain_model": self.brain_combo.currentData() or "",
+            "terminal_agent": self.terminal_combo.currentData() or "codex",
+            "terminal_agent_custom_command": self.custom_command_input.text().strip(),
+            "api_keys": self._collect_api_keys(),
+            "auto_accept_changes": self.auto_accept_checkbox.isChecked(),
+        }
+
         try:
-            settings = load_user_settings()
-            settings["agents"] = new_config
-            preferences = settings.setdefault("preferences", {})
-            preferences["auto_accept_changes"] = self.auto_accept_checkbox.isChecked()
+            save_user_settings(settings_payload)
+            logger.info("User settings saved successfully.")
+        except Exception as exc:
+            logger.error("Failed to save user settings: %s", exc)
+            return
 
-            save_user_settings(settings)
-            logger.info("Successfully saved user settings.")
-
-            # Notify services to refresh configurations/preference state
-            self.event_bus.dispatch(Event(event_type="RELOAD_LLM_CONFIG"))
-            self.event_bus.dispatch(Event(
+        self.event_bus.dispatch(Event(event_type="RELOAD_LLM_CONFIG"))
+        self.event_bus.dispatch(
+            Event(
                 event_type="USER_PREFERENCES_UPDATED",
-                payload={"preferences": preferences}
-            ))
-        except Exception as e:
-            logger.error(f"Failed to save user settings: {e}")
+                payload={"preferences": {"auto_accept_changes": settings_payload["auto_accept_changes"]}},
+            )
+        )
+
         self.close()
 
     def showEvent(self, event):
-        """Overrides the show event to request models when the window is shown."""
         super().showEvent(event)
-        logger.info("Settings window opened, requesting available models...")
-        self.event_bus.dispatch(Event(event_type="REQUEST_AVAILABLE_MODELS"))
+        try:
+            self.event_bus.dispatch(Event(event_type="REQUEST_AVAILABLE_MODELS"))
+        except Exception as exc:
+            logger.debug("Unable to request available models: %s", exc)
