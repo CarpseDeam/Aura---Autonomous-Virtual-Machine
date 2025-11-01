@@ -9,69 +9,18 @@ This service maintains PROJECT_MEMORY.md files that capture:
 
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from .memory_models import (
+    ArchitectureDecision,
+    CodePattern,
+    KnownIssue,
+    ProjectMemory,
+    TimelineEntry,
+)
+from .memory_markdown import MemoryMarkdownGenerator
 
 logger = logging.getLogger(__name__)
-
-
-class ArchitectureDecision(BaseModel):
-    """Represents a significant architectural decision."""
-
-    category: str = Field(..., description="Category (framework, database, auth, etc.)")
-    decision: str = Field(..., description="What was chosen")
-    rationale: str = Field(..., description="Why it was chosen")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class CodePattern(BaseModel):
-    """Represents a code pattern or convention used in the project."""
-
-    category: str = Field(..., description="Category (validation, error handling, etc.)")
-    pattern: str = Field(..., description="The pattern or convention")
-    example: Optional[str] = Field(None, description="Optional code example")
-
-
-class TimelineEntry(BaseModel):
-    """Represents a project timeline event."""
-
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    task_id: str = Field(..., description="Associated task ID")
-    description: str = Field(..., description="What was accomplished")
-    files_modified: List[str] = Field(default_factory=list)
-    outcome: str = Field(..., description="Success, failure, partial, etc.")
-    notes: Optional[str] = Field(None, description="Additional context")
-
-
-class KnownIssue(BaseModel):
-    """Represents a known issue or technical debt item."""
-
-    description: str = Field(..., description="Issue description")
-    severity: str = Field("medium", description="low, medium, high, critical")
-    discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    resolved_at: Optional[datetime] = Field(None)
-
-
-class ProjectMemory(BaseModel):
-    """Complete project memory structure."""
-
-    project_name: str = Field(..., description="Name of the project")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    # Core memory sections
-    architecture_decisions: List[ArchitectureDecision] = Field(default_factory=list)
-    code_patterns: List[CodePattern] = Field(default_factory=list)
-    timeline: List[TimelineEntry] = Field(default_factory=list)
-    known_issues: List[KnownIssue] = Field(default_factory=list)
-
-    # Project state
-    current_state: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Current project state (file count, status, next steps)"
-    )
 
 
 class MemoryManager:
@@ -100,6 +49,7 @@ class MemoryManager:
         """
         self.project_manager = project_manager
         self.event_bus = event_bus
+        self.markdown_generator = MemoryMarkdownGenerator()
 
         # Register event handlers if event bus is available
         if self.event_bus:
@@ -335,7 +285,7 @@ class MemoryManager:
             return ""
 
         # Return the markdown representation
-        return self._generate_markdown_content(memory)
+        return self.markdown_generator.generate_content(memory)
 
     def _initialize_memory(self, project_name: str) -> ProjectMemory:
         """
@@ -351,138 +301,6 @@ class MemoryManager:
         logger.info("Initialized new project memory for '%s'", project_name)
         return memory
 
-    def _generate_markdown_content(self, memory: ProjectMemory) -> str:
-        """
-        Generate markdown content from memory structure.
-
-        Args:
-            memory: ProjectMemory instance
-
-        Returns:
-            Formatted markdown string
-        """
-        lines = [
-            f"# Project Memory: {memory.project_name}",
-            "",
-            f"*Last updated: {memory.last_updated.strftime('%Y-%m-%d %H:%M UTC')}*",
-            "",
-        ]
-
-        # Architecture Decisions
-        if memory.architecture_decisions:
-            lines.extend([
-                "## Architecture Decisions",
-                "",
-            ])
-
-            decisions_by_category: Dict[str, List[ArchitectureDecision]] = {}
-            for decision in memory.architecture_decisions:
-                if decision.category not in decisions_by_category:
-                    decisions_by_category[decision.category] = []
-                decisions_by_category[decision.category].append(decision)
-
-            for category in sorted(decisions_by_category.keys()):
-                lines.append(f"### {category}")
-                for decision in decisions_by_category[category]:
-                    lines.append(f"- **{decision.decision}**: {decision.rationale}")
-                lines.append("")
-
-        # Code Patterns
-        if memory.code_patterns:
-            lines.extend([
-                "## Code Patterns We Follow",
-                "",
-            ])
-
-            patterns_by_category: Dict[str, List[CodePattern]] = {}
-            for pattern in memory.code_patterns:
-                if pattern.category not in patterns_by_category:
-                    patterns_by_category[pattern.category] = []
-                patterns_by_category[pattern.category].append(pattern)
-
-            for category in sorted(patterns_by_category.keys()):
-                lines.append(f"### {category}")
-                for pattern in patterns_by_category[category]:
-                    lines.append(f"- {pattern.pattern}")
-                    if pattern.example:
-                        lines.extend([
-                            "  ```",
-                            f"  {pattern.example}",
-                            "  ```",
-                        ])
-                lines.append("")
-
-        # Project Timeline (most recent 20 entries)
-        if memory.timeline:
-            lines.extend([
-                "## Project Timeline",
-                "",
-            ])
-
-            # Sort by timestamp descending, take most recent 20
-            sorted_timeline = sorted(memory.timeline, key=lambda e: e.timestamp, reverse=True)[:20]
-
-            for entry in sorted_timeline:
-                date_str = entry.timestamp.strftime('%Y-%m-%d')
-                outcome_emoji = "✅" if entry.outcome == "success" else "⚠️" if entry.outcome == "partial" else "❌"
-                lines.append(f"- **{date_str}** {outcome_emoji}: {entry.description}")
-                if entry.notes:
-                    lines.append(f"  - *{entry.notes}*")
-
-            lines.append("")
-
-        # Current State
-        if memory.current_state:
-            lines.extend([
-                "## Current State",
-                "",
-            ])
-
-            for key, value in memory.current_state.items():
-                lines.append(f"- **{key}**: {value}")
-
-            lines.append("")
-
-        # Known Issues
-        if memory.known_issues:
-            lines.extend([
-                "## Known Issues",
-                "",
-            ])
-
-            # Group by severity
-            unresolved = [issue for issue in memory.known_issues if not issue.resolved_at]
-
-            if unresolved:
-                by_severity = {"critical": [], "high": [], "medium": [], "low": []}
-                for issue in unresolved:
-                    severity = issue.severity.lower()
-                    if severity in by_severity:
-                        by_severity[severity].append(issue)
-
-                for severity in ["critical", "high", "medium", "low"]:
-                    if by_severity[severity]:
-                        severity_emoji = {
-                            "critical": "🔥",
-                            "high": "🔴",
-                            "medium": "🟡",
-                            "low": "🟢"
-                        }[severity]
-
-                        lines.append(f"### {severity_emoji} {severity.title()}")
-                        for issue in by_severity[severity]:
-                            lines.append(f"- {issue.description}")
-                        lines.append("")
-
-        lines.extend([
-            "---",
-            "",
-            "*This file is auto-generated by Aura's Project Memory System.*",
-            "*Last sync: " + datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC') + "*",
-        ])
-
-        return "\n".join(lines)
-
     def _generate_markdown_file(self, memory: ProjectMemory) -> None:
         """
         Generate PROJECT_MEMORY.md file on disk.
@@ -496,16 +314,11 @@ class MemoryManager:
         project_path = self.project_manager.get_project_path(
             self.project_manager.current_project.name
         )
-        memory_file = project_path / "PROJECT_MEMORY.md"
-
-        content = self._generate_markdown_content(memory)
 
         try:
-            memory_file.write_text(content, encoding="utf-8")
-            logger.info("Generated PROJECT_MEMORY.md at %s", memory_file)
+            self.markdown_generator.generate_file(memory, project_path)
         except OSError as exc:
-            logger.error("Failed to write PROJECT_MEMORY.md: %s", exc)
-            raise
+            logger.error("Failed to generate PROJECT_MEMORY.md: %s", exc)
 
     # Event Handlers
 
@@ -537,9 +350,6 @@ class MemoryManager:
                 outcome="success",
                 notes="Initial project architecture defined"
             )
-
-            # TODO: In future, parse blueprint to extract architecture decisions
-            # For now, just log that a blueprint was created
 
         except Exception as exc:
             logger.error("Error processing BLUEPRINT_GENERATED event: %s", exc)
