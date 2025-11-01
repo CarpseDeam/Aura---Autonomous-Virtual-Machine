@@ -5,8 +5,6 @@ ollama
 jinja2
 pydantic
 requests
-sentence-transformers
-faiss-cpu
 PyYAML
 pytest
 markdown

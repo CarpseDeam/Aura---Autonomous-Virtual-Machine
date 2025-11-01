@@ -13,7 +13,6 @@ from src.aura.models.project import Project, ProjectSummary
 from src.aura.agent import AuraAgent
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
-from src.aura.services.ast_service import ASTService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.project.project_manager import ProjectManager
@@ -62,7 +61,6 @@ class AuraInterface:
         event_bus: EventBus,
         brain: AuraBrain,
         executor: AuraExecutor,
-        ast: ASTService,
         conversations: ConversationManagementService,
         workspace: WorkspaceService,
         thread_pool: QThreadPool,
@@ -73,7 +71,6 @@ class AuraInterface:
         self.event_bus = event_bus
         self.brain = brain
         self.executor = executor
-        self.ast = ast
         self.conversations = conversations
         self.workspace = workspace
         self.thread_pool = thread_pool
@@ -181,11 +178,12 @@ class AuraInterface:
             logger.debug(f"Failed to process ITERATION_STOPPED event: {e}")
 
     def _collect_active_files(self) -> List[str]:
-        """Collect currently indexed project files from AST service."""
-        project_index = getattr(self.ast, "project_index", None)
-        if isinstance(project_index, dict):
-            return list(project_index.keys())
-        return []
+        """Collect currently indexed project files from the workspace service."""
+        try:
+            return self.workspace.get_project_files()
+        except Exception as exc:
+            logger.debug("Failed to collect active files from workspace: %s", exc)
+            return []
 
     def _build_context(self) -> ProjectContext:
         if self.project_manager and self.project_manager.current_project:

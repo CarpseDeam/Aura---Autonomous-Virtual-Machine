@@ -6,12 +6,14 @@ from pydantic import BaseModel
 class ActionType(str, Enum):
     DESIGN_BLUEPRINT = "design_blueprint"
     REFINE_CODE = "refine_code"
+    SPAWN_AGENT = "spawn_agent"
+    MONITOR_WORKSPACE = "monitor_workspace"
+    INTEGRATE_RESULTS = "integrate_results"
     SIMPLE_REPLY = "simple_reply"
     RESEARCH = "research"
     DISCUSS = "discuss"
     LIST_FILES = "list_files"
     READ_FILE = "read_file"
-    WRITE_FILE = "write_file"
 
 
 class Action(BaseModel):

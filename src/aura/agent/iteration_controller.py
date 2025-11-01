@@ -39,8 +39,7 @@ class IterationController:
     FINAL_ACTIONS = {
         ActionType.SIMPLE_REPLY,
         ActionType.RESEARCH,
-        ActionType.DESIGN_BLUEPRINT,
-        ActionType.DISCUSS
+        ActionType.DISCUSS,
     }
 
     def __init__(
@@ -279,7 +278,15 @@ class IterationController:
         goal_distance = 0.5
 
         # Heuristic: tool actions that succeed indicate progress
-        if action.type in [ActionType.WRITE_FILE, ActionType.READ_FILE, ActionType.LIST_FILES]:
+        tool_actions = {
+            ActionType.READ_FILE,
+            ActionType.LIST_FILES,
+            ActionType.SPAWN_AGENT,
+            ActionType.MONITOR_WORKSPACE,
+            ActionType.INTEGRATE_RESULTS,
+        }
+
+        if action.type in tool_actions:
             if tool_output and "error" not in tool_output.lower():
                 result = ReflectionResult.PROGRESS_MADE
                 reasoning = "Tool action executed successfully"

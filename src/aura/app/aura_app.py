@@ -10,13 +10,11 @@ from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.conversation_persistence_service import ConversationPersistenceService
-from src.aura.services.ast_service import ASTService
-from src.aura.services.context_retrieval_service import ContextRetrievalService
 from src.aura.services.workspace_service import WorkspaceService
-from src.aura.services.blueprint_validator import BlueprintValidator
 from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.services.file_registry import FileRegistry
-from src.aura.services.import_validator import ImportValidator
+from src.aura.services.terminal_agent_service import TerminalAgentService
+from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
 from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.brain import AuraBrain
 from src.aura.executor import AuraExecutor
@@ -112,29 +110,26 @@ class AuraApp:
         self.event_bus = EventBus()
         self.prompt_manager = PromptManager()
         self.image_storage_service = ImageStorageService()
-        # CRITICAL: Instantiation order matters for dependencies
-        # EventBus -> ASTService -> WorkspaceService -> Other services
+        # Instantiate core services
         self.conversation_persistence_service = ConversationPersistenceService()
         self.conversation_management_service = ConversationManagementService(
             self.event_bus,
             self.conversation_persistence_service,
         )
-        self.ast_service = ASTService(self.event_bus)
-        self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR, self.ast_service)
-        self.context_retrieval_service = ContextRetrievalService(self.ast_service)
-
-        # File Registry and Import Validator: Production-ready code generation
-        self.file_registry = FileRegistry(self.event_bus, WORKSPACE_DIR)
-        self.import_validator = ImportValidator(
-            registry=self.file_registry,
+        self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR)
+        self.file_registry = FileRegistry(WORKSPACE_DIR)
+        self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
-            event_bus=self.event_bus,
-            auto_fix=True
+            default_command=self._determine_default_agent_command(),
         )
-        logging.info("FileRegistry and ImportValidator initialized for production-quality validation")
+        self.workspace_monitor = WorkspaceChangeMonitor(WORKSPACE_DIR)
 
-        # Phoenix Initiative: Initialize BlueprintValidator for Quality Gate
-        self.validation_service = BlueprintValidator(self.event_bus, self.file_registry)
+        # Ensure the requested project is active
+        try:
+            self.workspace_service.set_active_project(project_name)
+        except Exception as exc:
+            logging.warning("Failed to activate workspace project '%s': %s", project_name, exc)
+
         # Low-level LLM dispatcher
         self.llm_service = LLMService(self.event_bus, self.image_storage_service)
         # New 3-layer architecture
@@ -143,11 +138,10 @@ class AuraApp:
             event_bus=self.event_bus,
             llm=self.llm_service,
             prompts=self.prompt_manager,
-            ast=self.ast_service,
-            context=self.context_retrieval_service,
             workspace=self.workspace_service,
             file_registry=self.file_registry,
-            import_validator=self.import_validator,
+            terminal_service=self.terminal_agent_service,
+            workspace_monitor=self.workspace_monitor,
         )
 
         # Initialize Context Manager for intelligent context loading
@@ -192,7 +186,6 @@ class AuraApp:
             event_bus=self.event_bus,
             brain=self.brain,
             executor=self.executor,
-            ast=self.ast_service,
             conversations=self.conversation_management_service,
             workspace=self.workspace_service,
             thread_pool=thread_pool,
@@ -205,6 +198,11 @@ class AuraApp:
         self._register_event_handlers()
         self._initialize_workspace()
         logging.info("AuraApp initialized successfully.")
+
+    def _determine_default_agent_command(self) -> List[str]:
+        if sys.platform.startswith("win"):
+            return ["pwsh.exe", "-NoExit"]
+        return ["bash", "-i"]
 
     def _load_fonts(self):
         """Loads custom fonts from the assets directory."""
@@ -224,20 +222,13 @@ class AuraApp:
         project_name = getattr(self, "_active_project_name", "default_project")
         try:
             logging.info(f"Initializing workspace with project '{project_name}'...")
-            # PRIME DIRECTIVE: Set active project triggers automatic AST indexing
-            self.workspace_service.set_active_project(project_name)
-            logging.info(f"Workspace initialization complete: {project_name} activated and indexed")
-
-            try:
-                if hasattr(self, "project_manager") and self.project_manager.current_project:
-                    current = self.project_manager.current_project
-                    current.root_path = getattr(self, "_active_project_root", current.root_path)
-                    project_index = getattr(self.ast_service, "project_index", {}) or {}
-                    if isinstance(project_index, dict):
-                        current.active_files = list(project_index.keys())
-                    self.project_manager.save_project(current)
-            except Exception as exc:
-                logging.warning(f"Failed to persist project state after workspace setup: {exc}")
+            self.file_registry.refresh()
+            logging.info("Workspace file index refreshed.")
+            if hasattr(self.project_manager, "current_project") and self.project_manager.current_project:
+                current = self.project_manager.current_project
+                current.root_path = getattr(self, "_active_project_root", current.root_path)
+                current.active_files = self.file_registry.list_files()
+                self.project_manager.save_project(current)
         except Exception as e:
             logging.error(f"Failed to initialize workspace: {e}")
 

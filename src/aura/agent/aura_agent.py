@@ -10,6 +10,7 @@ from src.aura.executor import AuraExecutor
 from src.aura.models.action import Action, ActionType
 from src.aura.models.events import Event
 from src.aura.models.project_context import ProjectContext
+from src.aura.models.agent_task import AgentSpecification
 from src.aura.context import ContextManager
 from src.aura.agent import IterationController
 from src.aura.models.context_models import ContextConfig, ContextMode
@@ -31,7 +32,7 @@ class AgentState(TypedDict, total=False):
     context: ProjectContext  # Project context for execution
     current_action: Action  # The action being executed in current iteration
     iteration_count: int  # Number of plan-execute cycles (safeguard against infinite loops)
-    blueprint: Dict[str, Any]  # Special state for blueprint generation
+    latest_specification: AgentSpecification  # Most recent agent specification generated
     iteration_state: IterationState  # Smart iteration control state
     tool_output: Optional[str]  # Last tool output for reflection
 
@@ -327,7 +328,6 @@ class AuraAgent:
         FINAL_ACTIONS = {
             ActionType.SIMPLE_REPLY,
             ActionType.RESEARCH,
-            ActionType.DESIGN_BLUEPRINT,
             ActionType.DISCUSS,
         }
 
@@ -335,7 +335,7 @@ class AuraAgent:
             logger.info(f"[Router] Final action {action.type} completed, ending cycle.")
             return "end"
 
-        # For tool actions (LIST_FILES, READ_FILE, WRITE_FILE, etc.), continue the loop
+        # For tool actions (LIST_FILES, READ_FILE, SPAWN_AGENT, etc.), continue the loop
         logger.info(f"[Router] Tool action {action.type} completed, continuing to next iteration.")
         return "continue"
 
@@ -374,29 +374,32 @@ class AuraAgent:
                 logger.debug("Failed to dispatch conversation events for discuss reply.", exc_info=True)
             return
 
-        if action.type == ActionType.DESIGN_BLUEPRINT:
-            blueprint = result if isinstance(result, dict) else {}
-            if not blueprint:
-                raise RuntimeError("Design blueprint tool returned no data")
-            state["blueprint"] = blueprint
+        if action.type in {ActionType.DESIGN_BLUEPRINT, ActionType.REFINE_CODE}:
+            if not isinstance(result, AgentSpecification):
+                raise RuntimeError(f"{action.type.value} tool must return an AgentSpecification")
+            state["latest_specification"] = result
+            context = state.get("context")
+            if context:
+                context.extras["latest_specification"] = result.model_dump()
+            spec_message = {
+                "role": "tool",
+                "action_type": action.type.value,
+                "content": result.prompt,
+                "specification": result.model_dump(),
+            }
+            state.setdefault("messages", []).append(spec_message)
+            payload = result.model_dump()
             try:
-                self.executor.event_bus.dispatch(Event(event_type="BLUEPRINT_GENERATED", payload=blueprint))
+                self.executor.event_bus.dispatch(Event(
+                    event_type="AGENT_SPEC_READY",
+                    payload=payload,
+                ))
+                self.executor.event_bus.dispatch(Event(
+                    event_type="BLUEPRINT_GENERATED",
+                    payload=payload,
+                ))
             except Exception:
-                logger.debug("Failed to dispatch BLUEPRINT_GENERATED event.", exc_info=True)
-
-            files = self.executor._files_from_blueprint(blueprint)
-            user_request = action.get_param("request", "")
-            for spec in files:
-                try:
-                    file_result = self.executor.execute_generate_code_for_spec(spec, user_request)
-                    if file_result:
-                        state.setdefault("results", []).append(file_result)
-                except Exception as exc:
-                    logger.error("Failed to generate code for spec %s: %s", spec.get("file_path"), exc, exc_info=True)
-            try:
-                self.executor.event_bus.dispatch(Event(event_type="BUILD_COMPLETED", payload={}))
-            except Exception:
-                logger.debug("Failed to dispatch BUILD_COMPLETED event.", exc_info=True)
+                logger.debug("Failed to dispatch AGENT_SPEC_READY/BLUEPRINT_GENERATED events.", exc_info=True)
             return
 
         if action.type == ActionType.RESEARCH:
@@ -417,7 +420,7 @@ class AuraAgent:
                 logger.debug("Failed to dispatch conversation events for research result.", exc_info=True)
             return
 
-        # Default case: Tool actions (LIST_FILES, READ_FILE, WRITE_FILE, REFINE_CODE)
+        # Default case: Tool actions (LIST_FILES, READ_FILE, SPAWN_AGENT, REFINE_CODE)
         # Add the tool result as an observation in the message history
         # This allows the agent to see what the tool returned in the next planning cycle
         observation = {
