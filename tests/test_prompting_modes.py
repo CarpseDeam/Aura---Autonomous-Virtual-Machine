@@ -129,7 +129,7 @@ def test_execute_generate_code_for_spec_respects_prototype(monkeypatch: pytest.M
     monkeypatch.setattr(executor.code_generator, "_stream_and_finalize", capture_stream)
 
     spec: Dict[str, Any] = {"file_path": "workspace/api_client.py", "description": "Implements API client"}
-    executor.execute_generate_code_for_spec(spec, "quick prototype of an async API fetch helper")
+    executor.code_generator.execute_generate_code_for_spec(spec, "quick prototype of an async API fetch helper")
 
     messages = captured["messages"]
     assert len(messages) == 3
@@ -172,7 +172,7 @@ def test_integration_generation_includes_error_handling_when_enabled(monkeypatch
     monkeypatch.setattr(executor.code_generator, "_stream_and_finalize", sync_stream)
 
     spec = {"file_path": "workspace/api_client.py", "description": "HTTP client wrapper"}
-    executor.execute_generate_code_for_spec(spec, "Build a function to fetch data from an API")
+    executor.code_generator.execute_generate_code_for_spec(spec, "Build a function to fetch data from an API")
 
     generated_code = captured.get("code", "")
     assert generated_code, "Integration LLM did not return code."

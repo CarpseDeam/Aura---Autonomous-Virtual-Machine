@@ -256,6 +256,6 @@ def test_execute_discuss_uses_fallback_on_llm_failure() -> None:
         summarize_original_action({"type": "WRITE_FILE", "params": {"request": "Create API docs"}}),
     )
 
-    result = executor.execute_discuss(action, context)
+    result = executor.conversation_handler.execute_discuss(action, context)
 
     assert result == expected
