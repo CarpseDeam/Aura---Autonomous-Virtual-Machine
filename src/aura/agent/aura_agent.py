@@ -51,17 +51,6 @@ class AuraAgent:
         self.context_manager = context_manager
         self.iteration_controller = iteration_controller
 
-        self._tool_name_by_action = {
-            ActionType.SIMPLE_REPLY: "execute_simple_reply",
-            ActionType.DESIGN_BLUEPRINT: "execute_design_blueprint",
-            ActionType.REFINE_CODE: "execute_refine_code",
-            ActionType.DISCUSS: "execute_discuss",
-            ActionType.LIST_FILES: "execute_list_files",
-            ActionType.READ_FILE: "execute_read_file",
-            ActionType.WRITE_FILE: "execute_write_file",
-            ActionType.RESEARCH: "execute_research",
-        }
-
         # Build a cyclical think-act-observe graph
         graph = StateGraph(AgentState)
         graph.add_node("plan", self.plan)
@@ -212,7 +201,7 @@ class AuraAgent:
         logger.info(f"[Execute] Running action: {action.type}")
 
         try:
-            result = self._invoke_executor_tool(action, context)
+            result = self.executor.execute(action, context)
             # Capture tool output for iteration controller reflection
             state["tool_output"] = str(result)[:500] if result else None
         except Exception as exc:
@@ -349,17 +338,6 @@ class AuraAgent:
         # For tool actions (LIST_FILES, READ_FILE, WRITE_FILE, etc.), continue the loop
         logger.info(f"[Router] Tool action {action.type} completed, continuing to next iteration.")
         return "continue"
-
-    def _invoke_executor_tool(self, action: Action, context: ProjectContext) -> Any:
-        tool_name = self._tool_name_by_action.get(action.type)
-        if not tool_name:
-            raise ValueError(f"No executor tool configured for action type {action.type}")
-
-        tool = getattr(self.executor, tool_name, None)
-        if not callable(tool):
-            raise AttributeError(f"Executor tool '{tool_name}' is not callable")
-
-        return tool(action, context)
 
     def _handle_tool_result(self, action: Action, result: Any, state: AgentState) -> None:
         if action.type == ActionType.SIMPLE_REPLY:
