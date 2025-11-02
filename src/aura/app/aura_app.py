@@ -17,6 +17,7 @@ from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
 from src.aura.services.terminal_session_manager import TerminalSessionManager
 from src.aura.services.memory_manager import MemoryManager
+from src.aura.services.token_tracker import TokenTracker
 from src.aura.services.user_settings_manager import (
     get_terminal_agent_command_template,
     load_user_settings,
@@ -116,6 +117,7 @@ class AuraApp:
         self._load_fonts()
 
         self.event_bus = EventBus()
+        self.token_tracker = TokenTracker(self.event_bus, token_limit=200_000)
         self.prompt_manager = PromptManager()
         self.image_storage_service = ImageStorageService()
         # Instantiate core services

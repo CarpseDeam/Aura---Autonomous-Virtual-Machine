@@ -342,6 +342,11 @@ class MainWindow(QMainWindow):
             font-weight: bold;
             padding-left: 12px;
         }
+        QLabel#token_usage_label {
+            color: #66BB6A;
+            font-weight: bold;
+            padding-left: 12px;
+        }
         QTextBrowser#chat_display, QTextEdit#chat_display {
             background-color: #000000;
             border-top: 1px solid #4a4a4a;
@@ -388,6 +393,8 @@ class MainWindow(QMainWindow):
         self.settings_window = None
         self.auto_accept_enabled = get_auto_accept_changes()
         self.pending_change_states: Dict[str, str] = {}
+        self.token_usage_limit: int = 200_000
+        self.current_token_usage: int = 0
         self.setWindowTitle("Aura - Command Deck")
 
         # Set sensible default window size and minimum constraints
@@ -492,6 +499,11 @@ class MainWindow(QMainWindow):
         btn_configure.setObjectName("top_bar_button")
         btn_configure.clicked.connect(self._open_settings_dialog)
 
+        self.token_usage_label = QLabel()
+        self.token_usage_label.setObjectName("token_usage_label")
+        self.token_usage_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._update_token_usage_display(0, self.token_usage_limit, 0.0)
+
         self.auto_accept_label = QLabel()
         self.auto_accept_label.setObjectName("auto_accept_label")
         self.auto_accept_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -503,6 +515,7 @@ class MainWindow(QMainWindow):
         hl.addWidget(btn_switch_project)
         hl.addWidget(btn_import_project)
         hl.addWidget(btn_configure)
+        hl.addWidget(self.token_usage_label)
         hl.addWidget(self.auto_accept_label)
         return widget
 
@@ -513,6 +526,75 @@ class MainWindow(QMainWindow):
             self.auto_accept_label.setText(
                 f"<span style='color: {color}; font-weight:bold;'>Auto-Accept: {state_text}</span>"
             )
+
+    def _handle_token_usage_updated(self, event: Event) -> None:
+        """Refresh the token usage indicator when usage changes."""
+        payload = event.payload or {}
+        limit = int(payload.get("token_limit") or self.token_usage_limit or 1)
+        current = int(payload.get("current_tokens") or 0)
+        percent = payload.get("percent_used")
+        if percent is None:
+            percent = current / limit if limit else 0.0
+        try:
+            percent_value = float(percent)
+        except (TypeError, ValueError):
+            percent_value = current / limit if limit else 0.0
+
+        self.token_usage_limit = max(limit, 1)
+        self.current_token_usage = max(current, 0)
+        self._update_token_usage_display(self.current_token_usage, self.token_usage_limit, percent_value)
+
+    def _handle_token_threshold_crossed(self, event: Event) -> None:
+        """Display a warning message when token usage crosses a threshold."""
+        payload = event.payload or {}
+        threshold = float(payload.get("threshold", 0.0))
+        limit = int(payload.get("token_limit") or self.token_usage_limit or 1)
+        current = int(payload.get("current_tokens") or 0)
+        percent = float(payload.get("percent_used", current / limit if limit else 0.0))
+        message = (
+            f"Token usage at {percent * 100:.0f}% "
+            f"({self._format_token_count(current)} / {self._format_token_count(limit)}). "
+            "Consider starting a new session before we exceed the context window."
+        )
+        logger.warning(
+            "Token usage threshold %.0f%% crossed (tokens=%d, limit=%d)",
+            threshold * 100,
+            current,
+            limit,
+        )
+        self._log_system_message("WARNING", message)
+
+    def _update_token_usage_display(self, current: int, limit: int, percent: float) -> None:
+        """Render the token usage indicator with appropriate color coding."""
+        if not hasattr(self, "token_usage_label") or self.token_usage_label is None:
+            return
+
+        limit = max(limit, 1)
+        safe_percent = max(percent, 0.0)
+        if safe_percent < 0.70:
+            color = "#66BB6A"
+        elif safe_percent < 0.85:
+            color = "#FFEE58"
+        else:
+            color = "#EF5350"
+
+        text = (
+            f"{self._format_token_count(current)} / {self._format_token_count(limit)} "
+            f"tokens ({safe_percent * 100:.0f}%)"
+        )
+        self.token_usage_label.setText(f"<span style='color: {color}; font-weight:bold;'>{text}</span>")
+
+    @staticmethod
+    def _format_token_count(tokens: int) -> str:
+        """Format token counts into compact human-readable units."""
+        absolute = abs(tokens)
+        if absolute >= 1_000_000:
+            value = tokens / 1_000_000
+            return f"{value:.1f}m" if not value.is_integer() else f"{int(value)}m"
+        if absolute >= 1_000:
+            value = tokens / 1_000
+            return f"{value:.1f}k" if not value.is_integer() else f"{int(value)}k"
+        return str(tokens)
 
     def _create_input_area(self):
         container = QWidget()
@@ -558,6 +640,8 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe("BLUEPRINT_GENERATED", self._handle_blueprint_generated)
         # Build lifecycle completion signal
         self.event_bus.subscribe("BUILD_COMPLETED", self._handle_build_completed)
+        self.event_bus.subscribe("TOKEN_USAGE_UPDATED", self._handle_token_usage_updated)
+        self.event_bus.subscribe("TOKEN_THRESHOLD_CROSSED", self._handle_token_threshold_crossed)
 
 
     # Boot
@@ -580,6 +664,7 @@ class MainWindow(QMainWindow):
             "SYSTEM": "#66BB6A",
             "NEURAL": "#FFB74D",
             "SUCCESS": "#39FF14",
+            "WARNING": "#FFEE58",
             "ERROR": "#FF4444",
             "WORKSPACE": "#64B5F6",
             "USER": "#64B5F6",

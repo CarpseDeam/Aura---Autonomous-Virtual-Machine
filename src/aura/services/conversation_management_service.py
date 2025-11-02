@@ -3,9 +3,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
-from src.aura.models.session import Session
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+from src.aura.models.event_types import (
+    CONVERSATION_MESSAGE_ADDED,
+    CONVERSATION_SESSION_STARTED,
+)
+from src.aura.models.session import Session
 from src.aura.services.conversation_persistence_service import ConversationPersistenceService
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,8 @@ class ConversationManagementService:
             self.sessions[session.id] = session
             self.active_session_id = session.id
 
+        self._emit_session_started(session)
+
     def get_active_session(self) -> Optional[Session]:
         """
         Retrieves the currently active session object.
@@ -104,6 +110,7 @@ class ConversationManagementService:
         with self._lock:
             self.sessions[session.id] = session
             self.active_session_id = session.id
+        self._emit_session_started(session)
         return session
 
     def _ensure_active_session(self) -> Session:
@@ -113,6 +120,61 @@ class ConversationManagementService:
         project_name = self.active_project or "default_project"
         logger.debug("No active session found; creating one for project '%s'", project_name)
         return self._load_or_create_session_for_project(project_name)
+
+    def _emit_session_started(self, session: Session) -> None:
+        """Notify listeners that a conversation session is now active."""
+        if not self.event_bus or not isinstance(session, Session):
+            return
+        try:
+            payload = {
+                "session_id": session.id,
+                "project_name": session.project_name,
+                "started_at": session.created_at,
+            }
+            self.event_bus.dispatch(
+                Event(
+                    event_type=CONVERSATION_SESSION_STARTED,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.debug("Failed to dispatch CONVERSATION_SESSION_STARTED event", exc_info=True)
+
+    def _dispatch_message_event(
+        self,
+        *,
+        session_id: str,
+        project_name: str,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        """Dispatch an event when a message is added to the active session."""
+        if not self.event_bus:
+            return
+
+        token_usage = None
+        if isinstance(metadata, dict):
+            token_usage = metadata.get("token_usage")
+
+        payload: Dict[str, Any] = {
+            "session_id": session_id,
+            "project_name": project_name,
+            "role": role,
+            "content": content,
+        }
+        if token_usage is not None:
+            payload["token_usage"] = token_usage
+
+        try:
+            self.event_bus.dispatch(
+                Event(
+                    event_type=CONVERSATION_MESSAGE_ADDED,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.debug("Failed to dispatch CONVERSATION_MESSAGE_ADDED event", exc_info=True)
 
     # ------------------------------------------------------------------ #
     # Message management
@@ -174,6 +236,14 @@ class ConversationManagementService:
             role,
             content or "",
             merged_metadata,
+        )
+
+        self._dispatch_message_event(
+            session_id=session.id,
+            project_name=session.project_name,
+            role=role,
+            content=content or "",
+            metadata=merged_metadata,
         )
 
     def add_messages(self, messages: List[Dict[str, Any]]) -> None:

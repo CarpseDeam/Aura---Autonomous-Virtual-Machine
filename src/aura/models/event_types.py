@@ -12,6 +12,53 @@ USER_MESSAGE_SENT = "USER_MESSAGE_SENT"
 MODEL_CHUNK_RECEIVED = "MODEL_CHUNK_RECEIVED"
 MODEL_STREAM_ENDED = "MODEL_STREAM_ENDED"
 
+# Conversation lifecycle events
+CONVERSATION_SESSION_STARTED = "CONVERSATION_SESSION_STARTED"
+"""
+Dispatched when a conversation session becomes active.
+
+Payload:
+    session_id (str): Identifier for the active session
+    project_name (str): Name of the project in context
+    started_at (str, optional): Timestamp when the session began
+"""
+
+CONVERSATION_MESSAGE_ADDED = "CONVERSATION_MESSAGE_ADDED"
+"""
+Dispatched whenever a message is appended to the active conversation history.
+
+Payload:
+    session_id (str): Identifier for the conversation session
+    project_name (str): Project associated with the session
+    role (str): Message author role ('user', 'assistant', etc.)
+    content (str): Message content (may be empty)
+    token_usage (dict|int, optional): Provider-reported token usage metadata
+"""
+
+# Token usage events
+TOKEN_USAGE_UPDATED = "TOKEN_USAGE_UPDATED"
+"""
+Dispatched whenever the running token counter is updated.
+
+Payload:
+    session_id (str): Active conversation session identifier
+    current_tokens (int): Tokens consumed in the active session
+    token_limit (int): Maximum token allowance for the session
+    percent_used (float): Fraction of the limit consumed (0-1 range)
+"""
+
+TOKEN_THRESHOLD_CROSSED = "TOKEN_THRESHOLD_CROSSED"
+"""
+Dispatched when token usage crosses a configured threshold.
+
+Payload:
+    session_id (str): Active conversation session identifier
+    threshold (float): Threshold ratio that was crossed (e.g., 0.7)
+    current_tokens (int): Tokens consumed in the active session
+    token_limit (int): Maximum token allowance for the session
+    percent_used (float): Fraction of the limit consumed (0-1 range)
+"""
+
 # Blueprint and specification events
 BLUEPRINT_GENERATED = "BLUEPRINT_GENERATED"
 AGENT_SPEC_READY = "AGENT_SPEC_READY"
