@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -53,22 +54,34 @@ class TerminalAgentService:
         agent_command = self.agent_command_template.format(
             spec_path=str(spec_path),
             task_id=spec_path.stem,
-        )
+        ).strip()
 
         if sys.platform.startswith("win"):
+            spec_path_literal = str(spec_path).replace("'", "''")
+            reader_command = f"Get-Content -Raw -Encoding UTF8 '{spec_path_literal}'"
+            pipeline_command = (
+                f"{reader_command} | {agent_command}" if agent_command else reader_command
+            )
+
             # Windows: Use PowerShell with -NoExit to keep window open
             return [
                 "pwsh.exe",
                 "-NoExit",
                 "-Command",
-                agent_command,
+                pipeline_command,
             ]
         else:
+            spec_path_quoted = shlex.quote(str(spec_path))
+            reader_command = f"cat {spec_path_quoted}"
+            pipeline_command = (
+                f"{reader_command} | {agent_command}" if agent_command else reader_command
+            )
+
             # Unix: Try to find an available terminal emulator
             terminal_emulators = [
-                ("gnome-terminal", ["--", "bash", "-c", f"{agent_command}; exec bash"]),
-                ("konsole", ["-e", "bash", "-c", f"{agent_command}; exec bash"]),
-                ("xterm", ["-hold", "-e", "bash", "-c", agent_command]),
+                ("gnome-terminal", ["--", "bash", "-c", f"{pipeline_command}; exec bash"]),
+                ("konsole", ["-e", "bash", "-c", f"{pipeline_command}; exec bash"]),
+                ("xterm", ["-hold", "-e", "bash", "-c", pipeline_command]),
             ]
 
             # Try each terminal emulator until we find one that exists
@@ -80,7 +93,7 @@ class TerminalAgentService:
 
             # Fallback: just run bash directly (won't be visible on Unix without terminal)
             logger.warning("No terminal emulator found, falling back to direct bash execution")
-            return ["bash", "-c", agent_command]
+            return ["bash", "-c", pipeline_command]
 
     def spawn_agent(
         self,
