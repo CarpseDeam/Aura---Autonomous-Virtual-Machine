@@ -60,6 +60,9 @@ class TerminalAgentService:
             task_id=spec_path.stem,
         ).strip()
 
+        if agent_command.strip() == "codex":
+            agent_command = "codex -"
+
         if sys.platform.startswith("win"):
             # Windows: Pipe AGENTS.md with 2-second delay
             agents_md_literal = str(agents_md_path).replace("'", "''")
