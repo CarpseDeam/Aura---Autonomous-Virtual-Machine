@@ -57,7 +57,10 @@ class ChatInputWidget(QWidget):
             "}"
         )
 
-        layout.addWidget(self._text_edit, 5)
+        # Reduced stretch factor to leave room for future buttons (Attach File, etc.)
+        layout.addWidget(self._text_edit, 2)
+        # Spacer for future buttons can be inserted here
+        layout.addStretch(1)
         layout.addWidget(self._send_button)
 
     def take_message(self) -> Optional[Tuple[str, NormalizedAttachment]]:
