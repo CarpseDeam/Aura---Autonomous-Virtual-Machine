@@ -26,6 +26,12 @@ class ConversationPersistenceService:
         self._fallback_conversations: Dict[str, Dict[str, Any]] = {}
         self._fallback_messages: Dict[str, List[Dict[str, Any]]] = {}
 
+        # In-memory LRU cache for fast thread switching
+        # Maps conversation_id -> full chronological message list
+        self._message_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self._message_cache_order: List[str] = []
+        self._message_cache_capacity: int = 8
+
         self._initialize_database()
 
     # --------------------------------------------------------------------- #
@@ -88,6 +94,16 @@ class ConversationPersistenceService:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp ON messages(conversation_id, created_at);"
             )
+            # Per-thread UI/state table
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS thread_state (
+                    conversation_id TEXT PRIMARY KEY,
+                    active_files TEXT,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                """
+            )
 
     def close(self) -> None:
         """Close the SQLite connection if it is open."""
@@ -138,6 +154,38 @@ class ConversationPersistenceService:
         except Exception as exc:
             logger.error("Unexpected error while loading conversation: %s", exc, exc_info=True)
             return None
+
+    def get_all_conversations(self) -> List[Dict[str, Any]]:
+        """Return lightweight metadata for all conversations ordered by recency.
+
+        This method intentionally avoids loading message bodies to keep UI
+        sidebar refreshes fast.
+        """
+        if self._fallback_mode:
+            conversations = list(self._fallback_conversations.values())
+            conversations.sort(key=lambda c: c.get("updated_at", ""), reverse=True)
+            return conversations
+
+        try:
+            with self._lock:
+                if not self._connection:
+                    raise RuntimeError("Conversation database connection is not available.")
+                cursor = self._connection.execute(
+                    """
+                    SELECT id, project_name, title, created_at, updated_at, is_active
+                    FROM conversations
+                    ORDER BY datetime(updated_at) DESC;
+                    """
+                )
+                rows = cursor.fetchall()
+                return [self._row_to_conversation(r) for r in rows]
+        except sqlite3.DatabaseError as exc:
+            logger.error("Database error while listing conversations: %s", exc, exc_info=True)
+            self._activate_fallback_mode()
+            return list(self._fallback_conversations.values())
+        except Exception:
+            logger.debug("Unexpected error while listing conversations", exc_info=True)
+            return []
 
     def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         if self._fallback_mode:
@@ -239,6 +287,140 @@ class ConversationPersistenceService:
             self._activate_fallback_mode()
             self.mark_conversation_active(conversation_id)
 
+    def mark_conversation_inactive(self, conversation_id: str) -> None:
+        """Mark a single conversation row as inactive without affecting others."""
+        if self._fallback_mode:
+            convo = self._fallback_conversations.get(conversation_id)
+            if convo:
+                convo["is_active"] = 0
+            return
+        try:
+            with self._lock:
+                if not self._connection:
+                    raise RuntimeError("Conversation database connection is not available.")
+                self._connection.execute(
+                    "UPDATE conversations SET is_active = 0 WHERE id = ?;",
+                    (conversation_id,),
+                )
+                self._connection.commit()
+        except sqlite3.DatabaseError as exc:
+            logger.error("Failed to mark conversation %s inactive: %s", conversation_id, exc, exc_info=True)
+            self._activate_fallback_mode()
+            self.mark_conversation_inactive(conversation_id)
+
+    def delete_conversation(self, conversation_id: str) -> None:
+        """Delete a conversation and its messages."""
+        if self._fallback_mode:
+            self._fallback_conversations.pop(conversation_id, None)
+            self._fallback_messages.pop(conversation_id, None)
+            return
+        try:
+            with self._lock:
+                if not self._connection:
+                    raise RuntimeError("Conversation database connection is not available.")
+                self._connection.execute(
+                    "DELETE FROM conversations WHERE id = ?;",
+                    (conversation_id,),
+                )
+                self._connection.commit()
+        except sqlite3.DatabaseError as exc:
+            logger.error("Failed to delete conversation %s: %s", conversation_id, exc, exc_info=True)
+            self._activate_fallback_mode()
+            self.delete_conversation(conversation_id)
+
+    # --------------------------------------------------------------------- #
+    # Thread state helpers (per-thread active files)
+    # --------------------------------------------------------------------- #
+    def set_thread_active_files(self, conversation_id: str, files: List[str]) -> None:
+        payload = json.dumps(files or [])
+        if self._fallback_mode:
+            # Store on conversation metadata when in fallback
+            convo = self._fallback_conversations.get(conversation_id)
+            if convo is not None:
+                meta = convo.setdefault("_thread_state", {})
+                meta["active_files"] = list(files)
+            return
+        try:
+            with self._lock:
+                if not self._connection:
+                    raise RuntimeError("Conversation database connection is not available.")
+                self._connection.execute(
+                    "INSERT INTO thread_state(conversation_id, active_files) VALUES(?, ?) ON CONFLICT(conversation_id) DO UPDATE SET active_files=excluded.active_files;",
+                    (conversation_id, payload),
+                )
+                self._connection.commit()
+        except sqlite3.DatabaseError as exc:
+            logger.error("Failed to set thread active files: %s", exc, exc_info=True)
+            self._activate_fallback_mode()
+            self.set_thread_active_files(conversation_id, files)
+
+    def get_thread_active_files(self, conversation_id: str) -> List[str]:
+        if self._fallback_mode:
+            convo = self._fallback_conversations.get(conversation_id) or {}
+            meta = convo.get("_thread_state") or {}
+            files = meta.get("active_files") or []
+            return [str(f) for f in files]
+        try:
+            with self._lock:
+                if not self._connection:
+                    raise RuntimeError("Conversation database connection is not available.")
+                cursor = self._connection.execute(
+                    "SELECT active_files FROM thread_state WHERE conversation_id = ?;",
+                    (conversation_id,),
+                )
+                row = cursor.fetchone()
+                if not row or not row[0]:
+                    return []
+                try:
+                    data = json.loads(row[0])
+                    if isinstance(data, list):
+                        return [str(x) for x in data]
+                except Exception:
+                    return []
+                return []
+        except sqlite3.DatabaseError as exc:
+            logger.error("Failed to get thread active files: %s", exc, exc_info=True)
+            self._activate_fallback_mode()
+            return self.get_thread_active_files(conversation_id)
+
+    def reassign_conversation_project(self, conversation_id: str, new_project_name: str, *, make_active: bool = True) -> None:
+        """Move a conversation to a different project scope.
+
+        Optionally marks it as the active conversation for the new project.
+        """
+        if not new_project_name:
+            raise ValueError("new_project_name must be provided")
+
+        if self._fallback_mode:
+            convo = self._fallback_conversations.get(conversation_id)
+            if convo:
+                convo["project_name"] = new_project_name
+                convo["updated_at"] = self._now()
+                if make_active:
+                    for c in self._fallback_conversations.values():
+                        if c["project_name"] == new_project_name:
+                            c["is_active"] = 1 if c["id"] == conversation_id else 0
+            return
+
+        try:
+            with self._lock:
+                if not self._connection:
+                    raise RuntimeError("Conversation database connection is not available.")
+                if make_active:
+                    self._connection.execute(
+                        "UPDATE conversations SET is_active = 0 WHERE project_name = ?;",
+                        (new_project_name,),
+                    )
+                self._connection.execute(
+                    "UPDATE conversations SET project_name = ?, is_active = CASE WHEN ? THEN 1 ELSE is_active END, updated_at = ? WHERE id = ?;",
+                    (new_project_name, 1 if make_active else 0, self._now(), conversation_id),
+                )
+                self._connection.commit()
+        except sqlite3.DatabaseError as exc:
+            logger.error("Failed to reassign conversation %s: %s", conversation_id, exc, exc_info=True)
+            self._activate_fallback_mode()
+            self.reassign_conversation_project(conversation_id, new_project_name, make_active=make_active)
+
     def update_conversation_title(self, conversation_id: str, title: str) -> None:
         if not title:
             return
@@ -328,8 +510,31 @@ class ConversationPersistenceService:
             self._store_message_fallback(conversation_id, role, content, metadata, timestamp)
         except Exception:
             logger.debug("Unexpected error while saving message", exc_info=True)
+        finally:
+            # Update message cache
+            try:
+                if conversation_id in self._message_cache:
+                    msg = {
+                        "role": role,
+                        "content": content,
+                        "created_at": timestamp,
+                    }
+                    if metadata:
+                        if "images" in metadata:
+                            msg["images"] = metadata["images"]
+                        msg["metadata"] = metadata
+                    self._message_cache[conversation_id].append(msg)
+            except Exception:
+                logger.debug("Failed to update message cache for %s", conversation_id, exc_info=True)
 
     def load_messages(self, conversation_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        # Serve from cache when available and satisfies the limit
+        if not limit and conversation_id in self._message_cache:
+            try:
+                return [dict(m) for m in self._message_cache[conversation_id]]
+            except Exception:
+                pass
+
         if self._fallback_mode:
             messages = list(self._fallback_messages.get(conversation_id, []))
             if limit:
@@ -354,11 +559,21 @@ class ConversationPersistenceService:
                 else:
                     cursor = self._connection.execute(query + ";", (conversation_id,))
                 rows = cursor.fetchall()
-                messages = [
-                    self._row_to_message(row)
-                    for row in rows
-                ]
+                messages = [self._row_to_message(row) for row in rows]
                 messages.reverse()  # Ensure chronological order
+                # Populate cache for fast subsequent switches
+                try:
+                    if not limit:
+                        self._message_cache[conversation_id] = [dict(m) for m in messages]
+                        if conversation_id in self._message_cache_order:
+                            self._message_cache_order.remove(conversation_id)
+                        self._message_cache_order.insert(0, conversation_id)
+                        # Enforce capacity
+                        while len(self._message_cache_order) > self._message_cache_capacity:
+                            evict_id = self._message_cache_order.pop()
+                            self._message_cache.pop(evict_id, None)
+                except Exception:
+                    logger.debug("Failed to cache messages for %s", conversation_id, exc_info=True)
                 return messages
         except sqlite3.DatabaseError as exc:
             logger.error("Database error while loading messages: %s", exc, exc_info=True)
@@ -526,4 +741,3 @@ class ConversationPersistenceService:
         if end < len(content):
             snippet += "..."
         return snippet.strip()
-

@@ -26,9 +26,9 @@ class MCPHandler:
         self.client = client
 
     # ---- Action adapters -----------------------------------------------
-    def start_server(self, *, template: str, root: Optional[str] = None, overrides: Optional[dict] = None) -> Dict[str, Any]:
+    def start_server(self, *, template: str, root: Optional[str] = None, overrides: Optional[dict] = None, project_name: Optional[str] = None) -> Dict[str, Any]:
         config: MCPServerConfig = build_config(template, root=root, overrides=overrides)
-        server_id = self.client.start_server(config)
+        server_id = self.client.start_server(config, project_name=project_name)
         info = self.client.get_info(server_id)
         return {"server_id": server_id, "info": info}
 
@@ -50,4 +50,3 @@ class MCPHandler:
         # Summarize all known servers
         infos = self.client.registry.list_all()
         return {"servers": [i.model_dump(by_alias=True) for i in infos]}
-

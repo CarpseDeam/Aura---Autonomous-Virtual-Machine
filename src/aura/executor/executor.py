@@ -112,7 +112,7 @@ class AuraExecutor:
         root = action.get_param("root")
         overrides = action.get_param("overrides")
         logger.info("Starting MCP server from template %s", template)
-        return self.mcp_handler.start_server(template=template, root=root, overrides=overrides)
+        return self.mcp_handler.start_server(template=template, root=root, overrides=overrides, project_name=context.active_project)
 
     def _handle_mcp_stop_server(self, action: Action, context: ProjectContext) -> dict:
         server_id = action.get_param("server_id")

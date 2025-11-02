@@ -66,7 +66,7 @@ class MCPClientService:
         self._lock = threading.RLock()
 
     # ---- Public API -----------------------------------------------------
-    def start_server(self, config: MCPServerConfig) -> str:
+    def start_server(self, config: MCPServerConfig, *, project_name: Optional[str] = None) -> str:
         """Start an MCP server and perform initialization + tool discovery.
 
         Returns:
@@ -77,7 +77,7 @@ class MCPClientService:
             TimeoutError: if initialization or discovery times out
         """
         server_id = self.registry.create_server_id()
-        self.registry.register(server_id=server_id, name=config.name)
+        self.registry.register(server_id=server_id, name=config.name, project_name=project_name)
 
         env = {**config.resolved_env()} if config.env else None
         cwd: Optional[str] = str(config.cwd) if isinstance(config.cwd, Path) else (config.cwd or None)
@@ -318,4 +318,3 @@ class MCPClientService:
         if not ctx:
             raise KeyError(f"Unknown MCP server: {server_id}")
         return ctx
-

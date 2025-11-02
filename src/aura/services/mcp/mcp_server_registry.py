@@ -43,6 +43,7 @@ class MCPServerInfo(BaseModel):
 
     server_id: str
     name: str
+    project_name: Optional[str] = None
     status: MCPServerStatus
     pid: Optional[int] = None
     started_at: float = Field(default_factory=lambda: time.time())
@@ -61,10 +62,10 @@ class MCPServerRegistry:
         """Generate a unique server identifier."""
         return str(uuid.uuid4())
 
-    def register(self, *, server_id: str, name: str) -> MCPServerInfo:
+    def register(self, *, server_id: str, name: str, project_name: Optional[str] = None) -> MCPServerInfo:
         """Register a new server with initial STARTING status."""
         with self._lock:
-            info = MCPServerInfo(server_id=server_id, name=name, status=MCPServerStatus.STARTING)
+            info = MCPServerInfo(server_id=server_id, name=name, project_name=project_name, status=MCPServerStatus.STARTING)
             self._servers[server_id] = info
             logger.info("MCP server registered: %s (status=%s)", server_id, info.status)
             return info
@@ -103,6 +104,10 @@ class MCPServerRegistry:
         with self._lock:
             return list(self._servers.values())
 
+    def list_by_project(self, project_name: str) -> List[MCPServerInfo]:
+        with self._lock:
+            return [s for s in self._servers.values() if s.project_name == project_name]
+
     def get_tools(self, server_id: str) -> List[MCPTool]:
         with self._lock:
             info = self._require(server_id)
@@ -119,4 +124,3 @@ class MCPServerRegistry:
         if not info:
             raise KeyError(f"Unknown MCP server: {server_id}")
         return info
-

@@ -17,7 +17,11 @@ from src.aura.services.conversation_management_service import ConversationManage
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.project.project_manager import ProjectManager
 from src.aura.worker import BrainExecutorWorker
-from src.aura.models.event_types import TERMINAL_SESSION_COMPLETED
+from src.aura.models.event_types import (
+    CONVERSATION_MESSAGE_ADDED,
+    CONVERSATION_SESSION_STARTED,
+    TERMINAL_SESSION_COMPLETED,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -105,6 +109,10 @@ class AuraInterface:
         # Subscribe to automation triggers
         self.event_bus.subscribe("TRIGGER_AUTO_INTEGRATE", self._handle_auto_integrate_trigger)
 
+        # Subscribe to Conversation Management events
+        self.event_bus.subscribe(CONVERSATION_SESSION_STARTED, self._handle_conversation_session_started)
+        self.event_bus.subscribe(CONVERSATION_MESSAGE_ADDED, self._handle_conversation_message_added)
+
         # Subscribe to Context Manager events
         if self.context_manager:
             self.event_bus.subscribe("CONTEXT_LOADING_STARTED", self._handle_context_loading_started)
@@ -118,6 +126,34 @@ class AuraInterface:
 
         # Present terminal completion results nicely in the chat stream
         self.event_bus.subscribe(TERMINAL_SESSION_COMPLETED, self._handle_terminal_completed)
+
+    def _handle_conversation_session_started(self, event: Event) -> None:
+        """Handle conversation session started event.
+
+        Called when a new conversation session is created or loaded.
+        This is a good place to sync project metadata or trigger UI updates.
+        """
+        try:
+            payload = event.payload or {}
+            session_id = payload.get("session_id", "?")
+            project_name = payload.get("project_name", "unknown")
+            logger.info(f"Conversation session started: {session_id[:8]} for project '{project_name}'")
+        except Exception as exc:
+            logger.debug(f"Failed to process CONVERSATION_SESSION_STARTED event: {exc}")
+
+    def _handle_conversation_message_added(self, event: Event) -> None:
+        """Handle conversation message added event.
+
+        Called whenever a message is added to the conversation history.
+        This is dispatched by ConversationManagementService automatically.
+        """
+        try:
+            payload = event.payload or {}
+            role = payload.get("role", "?")
+            content_preview = (payload.get("content", "") or "")[:50]
+            logger.debug(f"Conversation message added: {role} - {content_preview}...")
+        except Exception as exc:
+            logger.debug(f"Failed to process CONVERSATION_MESSAGE_ADDED event: {exc}")
 
     def _handle_terminal_completed(self, event: Event) -> None:
         """Render a concise completion summary for terminal agent sessions.
@@ -286,7 +322,15 @@ class AuraInterface:
             logger.debug(f"Failed to process ITERATION_STOPPED event: {e}")
 
     def _collect_active_files(self) -> List[str]:
-        """Collect currently indexed project files from the workspace service."""
+        """Collect active files, preferring per-thread tracked state if available."""
+        # Prefer thread-scoped active files for fast context switching
+        try:
+            files = self.conversations.get_active_files()
+            if files:
+                return files
+        except Exception as exc:
+            logger.debug("Failed to read thread active files: %s", exc)
+        # Fall back to workspace enumeration lazily
         try:
             return self.workspace.get_project_files()
         except Exception as exc:
@@ -294,23 +338,45 @@ class AuraInterface:
             return []
 
     def _build_context(self) -> ProjectContext:
+        """Build a ProjectContext snapshot for the current state.
+
+        Always pulls conversation history from ConversationManagementService,
+        while keeping ProjectManager for workspace file registry only.
+        """
+        # Always get conversation history from the active session
+        try:
+            conversation_history = self.conversations.get_history()
+        except Exception as exc:
+            logger.warning("Failed to load conversation history from active session: %s", exc)
+            conversation_history = []
+
+        # Collect active files from workspace
+        active_files = self._collect_active_files()
+
+        # Build extras with current language
+        extras: Dict[str, Any] = {"current_language": self.current_language}
+
+        # If ProjectManager is available, pull project-specific metadata
         if self.project_manager and self.project_manager.current_project:
             project = self.project_manager.current_project
-            extras: Dict[str, Any] = dict(project.metadata or {})
             extras["workspace_root"] = project.root_path
-            extras["current_language"] = self.current_language
+            # Merge any additional project metadata
+            if project.metadata:
+                for key, value in project.metadata.items():
+                    if key not in extras:
+                        extras[key] = value
+
             return ProjectContext(
                 active_project=project.name,
-                active_files=list(project.active_files) if project.active_files else self._collect_active_files(),
-                conversation_history=list(project.conversation_history),
+                active_files=active_files,
+                conversation_history=conversation_history,
                 extras=extras,
             )
 
-        conversation_history = self.conversations.get_history()
-        extras = {"current_language": self.current_language}
+        # Fallback when no ProjectManager is configured
         return ProjectContext(
             active_project=self.workspace.active_project,
-            active_files=self._collect_active_files(),
+            active_files=active_files,
             conversation_history=conversation_history,
             extras=extras,
         )
@@ -334,22 +400,23 @@ class AuraInterface:
         if user_text.startswith("/project"):
             logger.info("Processing project command: %s", user_text)
             response_text = self._handle_project_command(user_text)
+
+            # Record messages in conversation service
             try:
                 self.conversations.add_message("user", user_text)
-            except Exception:
-                logger.debug("Failed to record project command user message.", exc_info=True)
-            try:
                 self.conversations.add_message(
                     "assistant",
                     response_text,
                     metadata={"action_type": "project_management"}
                 )
-            except Exception:
-                logger.debug("Failed to record project command response.", exc_info=True)
-            self._persist_project_conversation_turn(
-                user_text,
-                [{"role": "assistant", "content": response_text, "metadata": {"action_type": "project_management"}}],
+            except Exception as exc:
+                logger.warning("Failed to record project command messages: %s", exc, exc_info=True)
+
+            # Update project metadata only (not conversation history)
+            self._persist_project_metadata(
+                agent_messages=[{"role": "assistant", "content": response_text, "metadata": {"action_type": "project_management"}}]
             )
+
             self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": response_text}))
             self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
             return
@@ -358,22 +425,23 @@ class AuraInterface:
         natural_project_response = self._handle_natural_project_command(user_text)
         if natural_project_response:
             logger.info("Processing natural language project command: %s", user_text)
+
+            # Record messages in conversation service
             try:
                 self.conversations.add_message("user", user_text)
-            except Exception:
-                logger.debug("Failed to record natural project command user message.", exc_info=True)
-            try:
                 self.conversations.add_message(
                     "assistant",
                     natural_project_response,
                     metadata={"action_type": "project_management"}
                 )
-            except Exception:
-                logger.debug("Failed to record natural project command response.", exc_info=True)
-            self._persist_project_conversation_turn(
-                user_text,
-                [{"role": "assistant", "content": natural_project_response, "metadata": {"action_type": "project_management"}}],
+            except Exception as exc:
+                logger.warning("Failed to record natural project command messages: %s", exc, exc_info=True)
+
+            # Update project metadata only (not conversation history)
+            self._persist_project_metadata(
+                agent_messages=[{"role": "assistant", "content": natural_project_response, "metadata": {"action_type": "project_management"}}]
             )
+
             self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": natural_project_response}))
             self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
             return
@@ -456,22 +524,24 @@ class AuraInterface:
             ))
             return
 
-        assistant_message = {
-            "role": "assistant",
-            "content": reply_text,
-            "metadata": {"action_type": ActionType.SIMPLE_REPLY.value},
-        }
-
+        # Record assistant's advice reply
         try:
             self.conversations.add_message(
                 "assistant",
                 reply_text,
                 metadata={"action_type": ActionType.SIMPLE_REPLY.value},
             )
-        except Exception:
-            logger.debug("Failed to record advice companion reply.", exc_info=True)
+        except Exception as exc:
+            logger.warning("Failed to record advice companion reply: %s", exc, exc_info=True)
 
-        self._persist_project_conversation_turn(user_text, [assistant_message])
+        # Update project metadata only (not conversation history)
+        self._persist_project_metadata(
+            agent_messages=[{
+                "role": "assistant",
+                "content": reply_text,
+                "metadata": {"action_type": ActionType.SIMPLE_REPLY.value},
+            }]
+        )
 
         try:
             self.event_bus.dispatch(Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": reply_text}))
@@ -677,38 +747,34 @@ class AuraInterface:
 
         return "\n".join(lines)
 
-    def _persist_project_conversation_turn(
+    def _persist_project_metadata(
         self,
-        user_message: str,
         agent_messages: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """Update persistent project state after a conversation turn."""
+        """Update persistent project metadata (active files, language, topics).
+
+        Note: Conversation history is managed by ConversationManagementService.
+        This method only updates project-level metadata like active files and topics.
+        """
         if not self.project_manager or not self.project_manager.current_project:
             return
 
         project = self.project_manager.current_project
         try:
-            new_entries: List[Dict[str, Any]] = []
-            timestamp = datetime.now(timezone.utc).isoformat()
-            new_entries.append({"role": "user", "content": user_message, "timestamp": timestamp})
+            # Update active files registry
+            project.active_files = self._collect_active_files()
+            project.last_active = datetime.now(timezone.utc)
 
+            # Extract topics from agent messages
             collected_topics: List[str] = []
             for message in agent_messages or []:
-                prepared = self._prepare_project_message(message)
-                new_entries.append(prepared)
                 metadata = message.get("metadata")
                 if isinstance(metadata, dict):
                     topics = metadata.get("topics") or metadata.get("recent_topics")
                     if isinstance(topics, list):
                         collected_topics.extend(str(topic) for topic in topics if topic)
 
-            project.conversation_history.extend(new_entries)
-            max_history = 500
-            if len(project.conversation_history) > max_history:
-                project.conversation_history = project.conversation_history[-max_history:]
-            project.active_files = self._collect_active_files()
-            project.last_active = datetime.now(timezone.utc)
-
+            # Update project metadata (NOT conversation history)
             metadata = dict(project.metadata or {})
             metadata["current_language"] = self.current_language
             existing_topics = metadata.get("recent_topics")
@@ -720,29 +786,7 @@ class AuraInterface:
                 metadata["recent_topics"] = topic_list[:10]
             project.metadata = metadata
 
+            # Save project metadata (without conversation history)
             self.project_manager.save_project(project)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to persist project conversation turn: %s", exc, exc_info=True)
-
-    def _prepare_project_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize agent message payloads for project storage."""
-        entry: Dict[str, Any] = {
-            "role": message.get("role", "assistant"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        content = message.get("content")
-        if isinstance(content, (str, list, dict)) or content is None:
-            entry["content"] = content
-        else:
-            entry["content"] = str(content)
-
-        metadata = message.get("metadata")
-        if isinstance(metadata, dict):
-            entry["metadata"] = metadata
-
-        for key in ("action_type", "tool", "images"):
-            value = message.get(key)
-            if value is not None:
-                entry[key] = value
-
-        return entry
+            logger.warning("Failed to persist project metadata: %s", exc, exc_info=True)

@@ -46,6 +46,10 @@ class MainWindowEventController:
         self._is_streaming_response = False
         self._response_buffer = ""
 
+        # Cache per-thread UI state (scroll positions)
+        self._thread_scroll_positions: Dict[str, int] = {}
+        self._active_session_id: Optional[str] = None
+
         self._signaller = MainWindowSignaller()
         self._signaller.chunk_received.connect(self._handle_model_chunk)
         self._signaller.stream_ended.connect(self._handle_stream_end)
@@ -77,6 +81,8 @@ class MainWindowEventController:
         self.event_bus.subscribe("BUILD_COMPLETED", self._handle_build_completed)
         self.event_bus.subscribe("TOKEN_USAGE_UPDATED", self._handle_token_usage_updated)
         self.event_bus.subscribe("TOKEN_THRESHOLD_CROSSED", self._handle_token_threshold_crossed)
+        # Track conversation switches for scroll preservation
+        self.event_bus.subscribe("CONVERSATION_SESSION_STARTED", self._handle_session_switched)
 
         # Optional lifecycle signals
         self.event_bus.subscribe("AGENT_STARTED", self._handle_agent_started)
@@ -356,3 +362,30 @@ class MainWindowEventController:
         if not change_id:
             return "N/A"
         return change_id[:8].upper()
+
+    def _handle_session_switched(self, event: Event) -> None:
+        """Preserve scroll for previous thread and restore for new one."""
+        try:
+            # Save previous thread scroll position
+            if self._active_session_id:
+                try:
+                    bar = self.chat_display.verticalScrollBar()
+                    self._thread_scroll_positions[self._active_session_id] = int(bar.value())
+                except Exception:
+                    logger.debug("Failed saving scroll position", exc_info=True)
+
+            payload = event.payload or {}
+            new_session_id = payload.get("session_id")
+            self._active_session_id = new_session_id
+            if not new_session_id:
+                return
+
+            # Restore scroll if we have a stored position
+            try:
+                value = self._thread_scroll_positions.get(new_session_id)
+                if value is not None:
+                    self.chat_display.verticalScrollBar().setValue(int(value))
+            except Exception:
+                logger.debug("Failed restoring scroll position", exc_info=True)
+        except Exception as exc:
+            logger.debug(f"Failed handling session switch: {exc}")

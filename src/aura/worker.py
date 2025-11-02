@@ -85,13 +85,15 @@ class BrainExecutorWorker(QRunnable):
                     if new_messages and isinstance(new_messages[0], dict) and new_messages[0].get("role") == "user":
                         new_messages = new_messages[1:]
                     if new_messages:
+                        # Add messages to conversation service
                         self.interface.conversations.add_messages(new_messages)
-                    try:
-                        self.interface._persist_project_conversation_turn(self.user_text, new_messages)
-                    except Exception:
-                        logger.debug("Failed to persist project conversation turn.", exc_info=True)
-                except Exception:
-                    logger.debug("Failed to append agent messages to persistent history.", exc_info=True)
+                        # Update project metadata only (not conversation history)
+                        try:
+                            self.interface._persist_project_metadata(agent_messages=new_messages)
+                        except Exception as exc:
+                            logger.warning("Failed to persist project metadata: %s", exc, exc_info=True)
+                except Exception as exc:
+                    logger.warning("Failed to append agent messages to persistent history: %s", exc, exc_info=True)
             except Exception as e:
                 logger.error(f"Failed to process user message: {e}", exc_info=True)
                 self.interface.event_bus.dispatch(

@@ -15,6 +15,7 @@ from src.aura.services.conversation_persistence_service import ConversationPersi
 logger = logging.getLogger(__name__)
 
 MAX_CONTEXT_MESSAGES = 30
+STANDALONE_PROJECT_NAME = "__standalone__"
 
 
 class ConversationManagementService:
@@ -117,7 +118,7 @@ class ConversationManagementService:
         session = self.get_active_session()
         if session:
             return session
-        project_name = self.active_project or "default_project"
+        project_name = self.active_project or STANDALONE_PROJECT_NAME
         logger.debug("No active session found; creating one for project '%s'", project_name)
         return self._load_or_create_session_for_project(project_name)
 
@@ -281,6 +282,27 @@ class ConversationManagementService:
             return []
         return [dict(message) for message in session.history]
 
+    def get_active_files(self) -> List[str]:
+        """Return active files tracked for the active thread (if any)."""
+        session = self.get_active_session()
+        if not session:
+            return []
+        try:
+            return self.persistence.get_thread_active_files(session.id)
+        except Exception:
+            logger.debug("Failed to get thread active files", exc_info=True)
+            return []
+
+    def set_active_files(self, files: List[str]) -> None:
+        """Persist active files for the active thread."""
+        session = self.get_active_session()
+        if not session:
+            return
+        try:
+            self.persistence.set_thread_active_files(session.id, files)
+        except Exception:
+            logger.debug("Failed to set thread active files", exc_info=True)
+
     def search_messages(self, term: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Proxy search requests to the persistence layer."""
         return self.persistence.search_messages(term, limit=limit)
@@ -386,4 +408,4 @@ class ConversationManagementService:
                 return candidate.strip()
         if self.active_project:
             return self.active_project
-        return "default_project"
+        return STANDALONE_PROJECT_NAME
