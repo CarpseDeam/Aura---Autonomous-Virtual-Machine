@@ -8,6 +8,7 @@ from PySide6.QtGui import QDesktopServices
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
+from src.aura.services.conversation_management_service import ConversationManagementService
 from src.ui.widgets.chat_display_widget import ChatDisplayWidget
 from src.ui.widgets.chat_input_widget import ChatInputWidget
 from src.ui.widgets.thinking_indicator_widget import ThinkingIndicatorWidget
@@ -31,12 +32,14 @@ class MainWindowEventController:
         chat_input: ChatInputWidget,
         *,
         auto_accept_enabled: bool,
+        conversations: ConversationManagementService,
     ) -> None:
         self.event_bus = event_bus
         self.chat_display = chat_display
         self.toolbar = toolbar
         self.thinking_indicator = thinking_indicator
         self.chat_input = chat_input
+        self.conversations = conversations
 
         self.pending_change_states: Dict[str, str] = {}
         self.token_usage_limit: int = 200_000
@@ -81,7 +84,7 @@ class MainWindowEventController:
         self.event_bus.subscribe("BUILD_COMPLETED", self._handle_build_completed)
         self.event_bus.subscribe("TOKEN_USAGE_UPDATED", self._handle_token_usage_updated)
         self.event_bus.subscribe("TOKEN_THRESHOLD_CROSSED", self._handle_token_threshold_crossed)
-        # Track conversation switches for scroll preservation
+        # Track conversation switches for scroll preservation and history loading
         self.event_bus.subscribe("CONVERSATION_SESSION_STARTED", self._handle_session_switched)
         self.event_bus.subscribe("CONVERSATION_THREAD_SWITCHED", self._handle_thread_switched)
 
@@ -365,7 +368,7 @@ class MainWindowEventController:
         return change_id[:8].upper()
 
     def _handle_session_switched(self, event: Event) -> None:
-        """Preserve scroll for previous thread and restore for new one."""
+        """On session activation, load history, reset input, and manage scroll state."""
         try:
             # Save previous thread scroll position
             if self._active_session_id:
@@ -381,6 +384,49 @@ class MainWindowEventController:
             if not new_session_id:
                 return
 
+            # Show subtle loading while we fetch from persistence
+            try:
+                self.thinking_indicator.start_thinking("Loading conversation...")
+            except Exception:
+                logger.debug("Thinking indicator start failed", exc_info=True)
+
+            # Fetch active session and its history from the service
+            messages: list = []
+            try:
+                session = self.conversations.get_active_session()
+                if session and session.id == new_session_id:
+                    messages = list(session.history or [])
+                # If history not present, attempt direct load from persistence
+                if not messages and session:
+                    try:
+                        messages = self.conversations.persistence.load_messages(session.id)
+                    except Exception:
+                        logger.debug("Direct load of messages failed", exc_info=True)
+            except Exception as exc:
+                logger.error("Failed to get active session: %s", exc, exc_info=True)
+                messages = []
+
+            try:
+                if messages:
+                    self.chat_display.load_conversation_history(messages)
+                else:
+                    self.chat_display.clear_chat()
+            finally:
+                # Always stop loading indicator
+                try:
+                    self.thinking_indicator.stop_thinking()
+                except Exception:
+                    logger.debug("Thinking indicator stop failed", exc_info=True)
+
+            # Ensure chat input is ready
+            try:
+                self.chat_input.setEnabled(True)
+                if hasattr(self.chat_input, "clear_input"):
+                    self.chat_input.clear_input()
+                self.chat_input.focus_input()
+            except Exception:
+                logger.debug("Failed to reset chat input", exc_info=True)
+
             # Restore scroll if we have a stored position
             try:
                 value = self._thread_scroll_positions.get(new_session_id)
@@ -389,13 +435,23 @@ class MainWindowEventController:
             except Exception:
                 logger.debug("Failed restoring scroll position", exc_info=True)
         except Exception as exc:
-            logger.debug(f"Failed handling session switch: {exc}")
+            logger.error("Failed handling session switch: %s", exc, exc_info=True)
+            try:
+                self.chat_display.display_error(f"Failed to load conversation: {exc}")
+            except Exception:
+                logger.debug("Failed to display session switch error", exc_info=True)
+            # Attempt recovery by starting a new session so UI isn't stuck
+            try:
+                self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
+            except Exception:
+                logger.debug("Failed to dispatch NEW_SESSION_REQUESTED for recovery", exc_info=True)
 
     def _handle_thread_switched(self, event: Event) -> None:
-        """Load conversation history when user switches to a different thread."""
+        """Load conversation history and manage UI when user switches threads."""
         try:
             payload = event.payload or {}
             session_id = payload.get("session_id")
+            previous_session_id = payload.get("previous_session_id")
             message_count = payload.get("message_count", 0)
             messages = payload.get("messages", [])
 
@@ -403,14 +459,44 @@ class MainWindowEventController:
                 logger.warning("Thread switched event missing session_id")
                 return
 
-            logger.info(f"Loading conversation history for thread {session_id} ({message_count} messages)")
+            # Persist scroll for previous thread if provided
+            try:
+                if previous_session_id:
+                    bar = self.chat_display.verticalScrollBar()
+                    self._thread_scroll_positions[previous_session_id] = int(bar.value())
+            except Exception:
+                logger.debug("Failed to store previous scroll position", exc_info=True)
+
+            # Set current active id
+            self._active_session_id = session_id
+
+            # Show loading indicator while rendering
+            try:
+                self.thinking_indicator.start_thinking("Loading conversation...")
+            except Exception:
+                logger.debug("Thinking indicator start failed", exc_info=True)
+
+            logger.info(
+                "Loading conversation history for thread %s (%d messages)",
+                session_id,
+                message_count,
+            )
+
+            # Display messages, fallback to service if payload missing
+            if not messages:
+                try:
+                    session = self.conversations.get_active_session()
+                    if session and session.id == session_id:
+                        messages = list(session.history or [])
+                    if not messages:
+                        messages = self.conversations.persistence.load_messages(session_id)
+                except Exception:
+                    logger.debug("Failed to fetch messages from service", exc_info=True)
 
             if messages:
-                # Display the conversation history
                 self.chat_display.load_conversation_history(messages)
-                logger.info(f"Loaded {len(messages)} messages into chat display")
+                logger.info("Loaded %d messages into chat display", len(messages))
             else:
-                # Clear chat and show appropriate message
                 self.chat_display.clear_chat()
                 if message_count > 0:
                     self.chat_display.display_system_message(
@@ -423,5 +509,36 @@ class MainWindowEventController:
                         "New conversation - start chatting!"
                     )
 
+            # Reset chat input state
+            try:
+                self.chat_input.setEnabled(True)
+                if hasattr(self.chat_input, "clear_input"):
+                    self.chat_input.clear_input()
+                self.chat_input.focus_input()
+            except Exception:
+                logger.debug("Failed to reset chat input after thread switch", exc_info=True)
+
+            # Restore scroll if we have a stored position for this thread
+            try:
+                value = self._thread_scroll_positions.get(session_id)
+                if value is not None:
+                    self.chat_display.verticalScrollBar().setValue(int(value))
+            except Exception:
+                logger.debug("Failed restoring scroll position after thread switch", exc_info=True)
+
         except Exception as exc:
-            logger.error(f"Failed handling thread switch: {exc}", exc_info=True)
+            logger.error("Failed handling thread switch: %s", exc, exc_info=True)
+            try:
+                self.chat_display.display_error(f"Failed to load conversation: {exc}")
+            except Exception:
+                logger.debug("Failed to display thread switch error", exc_info=True)
+            try:
+                self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
+            except Exception:
+                logger.debug("Failed to dispatch NEW_SESSION_REQUESTED after thread error", exc_info=True)
+        finally:
+            # Always hide indicator
+            try:
+                self.thinking_indicator.stop_thinking()
+            except Exception:
+                logger.debug("Thinking indicator stop failed", exc_info=True)

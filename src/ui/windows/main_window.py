@@ -11,6 +11,7 @@ from src.aura.app.event_bus import EventBus
 from src.aura.config import ASSETS_DIR
 from src.aura.models.events import Event
 from src.aura.services.image_storage_service import ImageStorageService
+from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.user_settings_manager import get_auto_accept_changes
 from src.ui.windows.main_window_constants import (
     AURA_ASCII_BANNER,
@@ -41,6 +42,7 @@ class MainWindow(QMainWindow):
         event_bus: EventBus,
         image_storage: ImageStorageService,
         terminal_session_manager=None,
+        conversations: ConversationManagementService,
     ) -> None:
         super().__init__()
         self.event_bus = event_bus
@@ -76,6 +78,7 @@ class MainWindow(QMainWindow):
             thinking_indicator=self.thinking_indicator,
             chat_input=self.chat_input,
             auto_accept_enabled=self._auto_accept_enabled,
+            conversations=conversations,
         )
 
         self._build_layout()

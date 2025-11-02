@@ -80,6 +80,18 @@ class ChatInputWidget(QWidget):
         """
         self._text_edit.setFocus()
 
+    def clear_input(self) -> None:
+        """
+        Clear the current input text and any pending attachment without emitting.
+        """
+        try:
+            # Clear text and drop any staged image attachment
+            self._text_edit.clear()
+            _ = self._text_edit.take_attached_image()
+        except Exception:
+            # Non-fatal; leave input as-is
+            pass
+
     def _handle_send(self) -> None:
         """Emit the message request when the send button is pressed."""
         self.message_requested.emit()

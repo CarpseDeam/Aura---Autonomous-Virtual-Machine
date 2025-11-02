@@ -110,13 +110,16 @@ class ConversationSidebarController:
             project_name = conversation.get("project_name")
             updated_str = conversation.get("updated_at")
 
-            # Parse timestamp
+            # Parse timestamp with ISO 'Z' handling
             last_updated = None
             if updated_str:
                 try:
-                    last_updated = datetime.fromisoformat(updated_str)
-                except ValueError:
-                    pass
+                    ts = str(updated_str)
+                    if ts.endswith("Z"):
+                        ts = ts[:-1] + "+00:00"
+                    last_updated = datetime.fromisoformat(ts)
+                except Exception:
+                    last_updated = None
 
             # Determine if this is a project thread or standalone chat
             if project_name and project_name != STANDALONE_PROJECT_NAME:

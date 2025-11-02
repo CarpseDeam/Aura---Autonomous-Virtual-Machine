@@ -234,6 +234,7 @@ class AuraApp:
             self.event_bus,
             self.image_storage_service,
             self.terminal_session_manager,
+            conversations=self.conversation_management_service,
         )
 
         # Initialize conversation sidebar controller to manage thread navigation

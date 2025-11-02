@@ -54,8 +54,11 @@ class ConversationSidebarWidget(QWidget):
         self._is_collapsed = False
         self._current_thread_id: Optional[str] = None
         self._project_active = False
+        self._empty_chats_item: Optional[QTreeWidgetItem] = None
+        self._empty_projects_item: Optional[QTreeWidgetItem] = None
         self._setup_ui()
         self._apply_retro_style()
+        self._update_empty_states()
 
     def _setup_ui(self) -> None:
         """Initialize the sidebar UI components."""
@@ -123,6 +126,48 @@ class ConversationSidebarWidget(QWidget):
         # Set fixed width for sidebar
         self.setFixedWidth(250)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+    def _ensure_placeholder(self, section: QTreeWidgetItem, text: str):
+        """Ensure a dim, non-selectable placeholder exists under the given section."""
+        from PySide6.QtGui import QBrush, QColor
+        if section.childCount() > 0:
+            return None
+        item = QTreeWidgetItem(section, [text])
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        item.setForeground(0, QBrush(QColor("#777777")))
+        font = QFont("JetBrains Mono", 9)
+        item.setFont(0, font)
+        return item
+
+    def _remove_placeholder_if_present(self, placeholder: Optional[QTreeWidgetItem]) -> None:
+        if placeholder and placeholder.parent():
+            try:
+                placeholder.parent().removeChild(placeholder)
+            except Exception:
+                pass
+
+    def _update_empty_states(self) -> None:
+        """Update empty-state placeholder items for CHATS and PROJECTS."""
+        if hasattr(self, "_chats_section") and hasattr(self, "_projects_section"):
+            # Clear placeholders if real children exist
+            if self._chats_section.childCount() > 0 and self._empty_chats_item:
+                self._remove_placeholder_if_present(self._empty_chats_item)
+                self._empty_chats_item = None
+            if self._projects_section.childCount() > 0 and self._empty_projects_item:
+                self._remove_placeholder_if_present(self._empty_projects_item)
+                self._empty_projects_item = None
+
+            # Create placeholders if sections are empty
+            if self._chats_section.childCount() == 0:
+                self._empty_chats_item = self._ensure_placeholder(
+                    self._chats_section,
+                    "No conversations yet - click New Chat to start",
+                )
+            if self._projects_section.childCount() == 0:
+                self._empty_projects_item = self._ensure_placeholder(
+                    self._projects_section,
+                    "No project threads - activate a project to begin",
+                )
 
     def _create_action_button(self, text: str) -> QPushButton:
         """Create a styled action button matching Aura theme."""
@@ -372,6 +417,10 @@ class ConversationSidebarWidget(QWidget):
         last_updated: Optional[datetime] = None,
     ) -> None:
         """Add a standalone chat thread to the CHATS section."""
+        # Remove placeholder if present
+        self._remove_placeholder_if_present(self._empty_chats_item)
+        self._empty_chats_item = None
+
         item = QTreeWidgetItem(self._chats_section)
         item.setData(0, Qt.ItemDataRole.UserRole, thread_id)
 
@@ -381,6 +430,7 @@ class ConversationSidebarWidget(QWidget):
 
         font = QFont("JetBrains Mono", 10)
         item.setFont(0, font)
+        self._update_empty_states()
 
     def add_project_thread(
         self,
@@ -390,6 +440,10 @@ class ConversationSidebarWidget(QWidget):
         last_updated: Optional[datetime] = None,
     ) -> None:
         """Add a thread under a project in the PROJECTS section."""
+        # Remove placeholder if present
+        self._remove_placeholder_if_present(self._empty_projects_item)
+        self._empty_projects_item = None
+
         # Find or create project item
         project_item = self._find_or_create_project(project_name)
 
@@ -402,6 +456,7 @@ class ConversationSidebarWidget(QWidget):
 
         font = QFont("JetBrains Mono", 10)
         item.setFont(0, font)
+        self._update_empty_states()
 
     def _find_or_create_project(self, project_name: str) -> QTreeWidgetItem:
         """Find existing project item or create a new one."""
@@ -437,31 +492,38 @@ class ConversationSidebarWidget(QWidget):
         return title
 
     def _format_relative_time(self, dt: datetime) -> str:
-        """Format datetime as relative time (e.g., '2h ago')."""
-        now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+        """Format datetime into human-friendly relative time.
+
+        Examples: '2 hours ago', 'Yesterday', '3 days ago', 'Oct 15', 'Oct 15, 2024'
+        """
+        from datetime import datetime as _dt
+        now = _dt.now(dt.tzinfo) if dt.tzinfo else _dt.now()
         diff = now - dt
 
-        if diff.days > 365:
-            years = diff.days // 365
-            return f"{years}y ago"
-        elif diff.days > 30:
-            months = diff.days // 30
-            return f"{months}mo ago"
-        elif diff.days > 0:
-            return f"{diff.days}d ago"
-        elif diff.seconds > 3600:
-            hours = diff.seconds // 3600
-            return f"{hours}h ago"
-        elif diff.seconds > 60:
-            minutes = diff.seconds // 60
-            return f"{minutes}m ago"
-        else:
+        seconds = int(diff.total_seconds())
+        if seconds < 60:
             return "just now"
+        minutes = seconds // 60
+        if minutes < 60:
+            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        days = diff.days
+        if days == 1:
+            return "Yesterday"
+        if days < 7:
+            return f"{days} days ago"
+        if now.year == dt.year:
+            # Use day without leading zero in a cross-platform way
+            return dt.strftime("%b %d").replace(" 0", " ")
+        return dt.strftime("%b %d, %Y").replace(" 0", " ")
 
     def clear_threads(self) -> None:
         """Clear all threads from the sidebar."""
         self._chats_section.takeChildren()
         self._projects_section.takeChildren()
+        self._update_empty_states()
 
     def set_project_active(self, active: bool) -> None:
         """Show/hide New Thread button based on project state."""
@@ -477,4 +539,6 @@ class ConversationSidebarWidget(QWidget):
         """Remove a thread from the sidebar."""
         item = self._find_thread_item(thread_id)
         if item and item.parent():
-            item.parent().removeChild(item)
+            parent = item.parent()
+            parent.removeChild(item)
+        self._update_empty_states()
