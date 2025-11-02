@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.action import Action, ActionType
@@ -87,36 +87,26 @@ class AuraExecutor:
             raise RuntimeError(f"Unsupported action type: {action.type}")
         return tool(action, project_context)
 
-    def execute_blueprint(self, user_request: str, context: ProjectContext) -> Dict[str, Any]:
-        """
-        Public wrapper that coordinates blueprint generation for external callers.
-        """
-        logger.info("Starting blueprint workflow for request: %s", user_request)
-        action = Action(
-            type=ActionType.DESIGN_BLUEPRINT,
-            params={
-                "request": user_request,
-                "auto_spawn": False,
-            },
-        )
+    # -- Design & specification generation -------------------------------------------------
 
-        try:
-            result = self.execute(action, context)
-        except Exception as exc:
-            logger.exception("Blueprint workflow failed for request '%s'", user_request)
-            raise RuntimeError(f"Failed to execute blueprint for request: {user_request}") from exc
+    def _handle_design_blueprint(self, action: Action, context: ProjectContext) -> AgentSpecification:
+        request_summary = action.get_param("request", "")
+        logger.info("Starting blueprint workflow for request: %s", request_summary or "<no request provided>")
 
-        if not isinstance(result, AgentSpecification):
+        spec = self.blueprint_handler.execute_design_blueprint(action, context)
+        if not isinstance(spec, AgentSpecification):
             logger.error(
-                "Blueprint workflow returned unexpected result type: %s",
-                type(result).__name__,
+                "DESIGN_BLUEPRINT handler returned unexpected result type: %s",
+                type(spec).__name__,
             )
-            raise TypeError("Blueprint execution did not produce an AgentSpecification")
+            raise TypeError("DESIGN_BLUEPRINT handler must return an AgentSpecification")
 
-        specification = result
-        planned_files: List[str] = []
-        blueprint_payload = specification.blueprint if isinstance(specification.blueprint, dict) else {}
-        files_payload = blueprint_payload.get("files")
+        self.file_registry.refresh()
+        context.active_files = self.file_registry.list_files()
+
+        blueprint = spec.blueprint if isinstance(spec.blueprint, dict) else {}
+        files_payload = blueprint.get("files")
+        planned_files: list[str] = []
         if isinstance(files_payload, list):
             for file_item in files_payload:
                 if isinstance(file_item, dict):
@@ -124,29 +114,16 @@ class AuraExecutor:
                     if isinstance(file_path, str):
                         planned_files.append(file_path)
 
-        context.extras["latest_specification"] = specification.model_dump()
-
+        context.extras["latest_specification"] = spec.model_dump()
         logger.info(
-            "Completed blueprint workflow for request '%s' with %d planned file(s)",
-            user_request,
+            "Blueprint ready for request '%s': %d planned file(s)",
+            request_summary or spec.request,
             len(planned_files),
         )
 
-        return {
-            "specification": specification,
-            "planned_files": planned_files,
-        }
-
-    # -- Design & specification generation -------------------------------------------------
-
-    def _handle_design_blueprint(self, action: Action, context: ProjectContext) -> AgentSpecification:
-        spec = self.blueprint_handler.execute_design_blueprint(action, context)
-        self.file_registry.refresh()
-        context.active_files = self.file_registry.list_files()
-
         # Auto-spawn terminal agent if enabled
         auto_spawn = action.get_param("auto_spawn", True)  # Default to True
-        if auto_spawn and spec:
+        if auto_spawn:
             logger.info("Auto-spawning terminal agent for task %s", spec.task_id)
             try:
                 session = self.terminal_service.spawn_agent(spec)

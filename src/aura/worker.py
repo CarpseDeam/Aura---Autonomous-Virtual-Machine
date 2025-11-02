@@ -1,9 +1,11 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal, QRunnable
 
+from src.aura.models.action import Action, ActionType
+from src.aura.models.agent_task import AgentSpecification
 from src.aura.models.events import Event
 
 
@@ -51,16 +53,29 @@ class BrainExecutorWorker(QRunnable):
                     ctx.extras = ctx_extras
 
                 if self.interface.brain.is_code_request(self.user_text):
-                    logger.info("Routing request to executor blueprint workflow instead of agent loop.")
+                    logger.info("Routing request to executor DESIGN_BLUEPRINT action.")
+                    action = Action(
+                        type=ActionType.DESIGN_BLUEPRINT,
+                        params={"request": self.user_text},
+                    )
                     try:
-                        outcome = self.interface.executor.execute_blueprint(self.user_text, ctx)
+                        result = self.interface.executor.execute(action, ctx)
                     except Exception as exc:
                         logger.error("Blueprint workflow execution failed: %s", exc, exc_info=True)
                         self.interface.event_bus.dispatch(
                             Event(event_type="MODEL_ERROR", payload={"message": "Unable to generate code for your request."})
                         )
                         return
-                    self._record_blueprint_summary(outcome)
+                    if not isinstance(result, AgentSpecification):
+                        logger.error(
+                            "Design blueprint handler returned unexpected result type: %s",
+                            type(result).__name__,
+                        )
+                        self.interface.event_bus.dispatch(
+                            Event(event_type="MODEL_ERROR", payload={"message": "Unable to generate code for your request."})
+                        )
+                        return
+                    self._record_blueprint_summary(result)
                     return
 
                 final_state = self.interface.agent.invoke(self.user_text, ctx)
@@ -108,18 +123,19 @@ class BrainExecutorWorker(QRunnable):
                 return image
         return image
 
-    def _record_blueprint_summary(self, outcome: Optional[Dict[str, Any]]) -> None:
-        if not isinstance(outcome, dict):
+    def _record_blueprint_summary(self, specification: Optional[AgentSpecification]) -> None:
+        if not isinstance(specification, AgentSpecification):
             return
 
-        planned_files = []
-        raw_files = outcome.get("planned_files")
-        if isinstance(raw_files, list):
-            planned_files = [
-                str(path)
-                for path in raw_files
-                if isinstance(path, (str, Path))
-            ]
+        blueprint = specification.blueprint if isinstance(specification.blueprint, dict) else {}
+        files_payload = blueprint.get("files")
+        planned_files: List[str] = []
+        if isinstance(files_payload, list):
+            for file_item in files_payload:
+                if isinstance(file_item, dict):
+                    file_path = file_item.get("file_path")
+                    if isinstance(file_path, str):
+                        planned_files.append(file_path)
         summary: str
         if planned_files:
             preview = ", ".join(planned_files[:3])
