@@ -40,6 +40,7 @@ class IterationController:
         ActionType.SIMPLE_REPLY,
         ActionType.RESEARCH,
         ActionType.DISCUSS,
+        ActionType.MCP_START_SERVER,
     }
 
     def __init__(
@@ -576,19 +577,6 @@ Assess the action's effectiveness. Respond in JSON:
             ))
         except Exception as e:
             logger.debug(f"Error dispatching event {event_type}: {e}")
-# ---- MCP server finalization safety -------------------------------------------------------
-# Ensure that successfully starting an MCP server is treated as a terminal step
-# so the iteration loop does not proceed to spawn duplicates. This complements
-# prompt guidance and provides deterministic loop control at the controller layer.
-try:
-    # If FINAL_ACTIONS exists, extend it to include MCP_START_SERVER.
-    # If it does not exist yet, create a minimal set to be merged later.
-    _has_final_actions = 'FINAL_ACTIONS' in globals()
-    if not _has_final_actions:
-        FINAL_ACTIONS = set()  # type: ignore[var-annotated]
-    if 'MCP_START_SERVER' not in FINAL_ACTIONS:  # type: ignore[name-defined]
-        FINAL_ACTIONS.add('MCP_START_SERVER')  # type: ignore[name-defined]
-except Exception:
-    # Be conservative: never break import-time because of patch safety code.
-    # If anything goes wrong here, the existing controller behavior remains.
-    pass
+# NOTE: FINAL_ACTIONS explicitly includes ActionType.MCP_START_SERVER to
+# ensure starting an MCP server is treated as a terminal step. This prevents
+# the iteration loop from spawning duplicate servers.

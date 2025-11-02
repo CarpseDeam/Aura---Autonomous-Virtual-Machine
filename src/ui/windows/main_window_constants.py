@@ -81,3 +81,9 @@ BOOT_SEQUENCE: Sequence[Dict[str, Any]] = (
     {"text": "Mode: Interactive"},
     {"text": "Enter your commands..."},
 )
+
+# Compact banner variant to reduce vertical space while keeping the retro feel
+AURA_ASCII_BANNER_COMPACT = """
+==  A U R A  ==
+Autonomous Virtual Machine
+"""

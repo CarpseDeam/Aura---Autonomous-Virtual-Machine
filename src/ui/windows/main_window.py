@@ -102,22 +102,37 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-        banner_label = QLabel(AURA_ASCII_BANNER)
+        # Compact banner to preserve vertical space
+        try:
+            from src.ui.windows.main_window_constants import AURA_ASCII_BANNER_COMPACT  # type: ignore
+            banner_text = AURA_ASCII_BANNER_COMPACT
+        except Exception:
+            banner_text = AURA_ASCII_BANNER
+
+        banner_label = QLabel(banner_text)
         banner_label.setObjectName("aura_banner")
-        banner_label.setFont(QFont("JetBrains Mono", 10))
+        banner_label.setFont(QFont("JetBrains Mono", 9))
         banner_label.setAlignment(Qt.AlignCenter)
+        banner_label.setContentsMargins(0, 0, 0, 0)
+        banner_label.setMaximumHeight(36)
+        # Local style accent to ensure compact red divider regardless of global stylesheet
+        banner_label.setStyleSheet(
+            "QLabel#aura_banner { border-top: 1px solid #C62828; border-bottom: 1px solid #C62828; padding: 2px 0 6px 0; }"
+        )
 
         layout.addWidget(self.toolbar)
         layout.addWidget(banner_label)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.conversation_sidebar)
-        splitter.addWidget(self.chat_display)
-        splitter.addWidget(self.agent_console)
-        splitter.setStretchFactor(0, 0)  # Sidebar has fixed width
-        splitter.setStretchFactor(1, 3)  # Chat display gets most space
-        splitter.setStretchFactor(2, 2)  # Agent console gets less space
-        layout.addWidget(splitter, 1)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.conversation_sidebar)
+        self.splitter.addWidget(self.chat_display)
+        self.splitter.addWidget(self.agent_console)
+        self.splitter.setChildrenCollapsible(True)
+        self.splitter.setCollapsible(0, True)
+        self.splitter.setStretchFactor(0, 0)  # Sidebar has fixed width
+        self.splitter.setStretchFactor(1, 3)  # Chat display gets most space
+        self.splitter.setStretchFactor(2, 2)  # Agent console gets less space
+        layout.addWidget(self.splitter, 1)
 
         layout.addWidget(self.thinking_indicator)
         layout.addWidget(self.chat_input)
@@ -132,6 +147,11 @@ class MainWindow(QMainWindow):
 
         self.chat_input.message_requested.connect(self._handle_message_requested)
         self.chat_display.anchor_requested.connect(self._event_controller.handle_anchor_clicked)
+        # Resize splitter when sidebar collapses/expands
+        try:
+            self.conversation_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
+        except Exception:
+            pass
 
     def _start_new_session(self) -> None:
         self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
@@ -165,3 +185,27 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: D401 - QWidget signature
         QApplication.quit()
         super().closeEvent(event)
+
+    def _on_sidebar_collapsed_changed(self, collapsed: bool) -> None:
+        """Adjust splitter sizes when the conversation sidebar is toggled."""
+        if not hasattr(self, "splitter"):
+            return
+        try:
+            total = max(self.width() - 20, 400)
+            if collapsed:
+                # Allocate almost all space to chat + console when collapsed
+                sidebar = 40
+                rest = max(total - sidebar, 400)
+                chat = int(rest * 0.6)
+                console = max(200, rest - chat)
+                self.splitter.setSizes([sidebar, chat, console])
+            else:
+                # Restore reasonable widths with visible sidebar
+                sidebar = 250
+                rest = max(total - sidebar, 400)
+                chat = int(rest * 0.6)
+                console = max(200, rest - chat)
+                self.splitter.setSizes([sidebar, chat, console])
+        except Exception:
+            # Non-fatal UI concerns should never break the app
+            pass

@@ -48,6 +48,7 @@ class ConversationSidebarWidget(QWidget):
     thread_renamed = Signal(str, str)  # conversation_id, new_title
     thread_archived = Signal(str)  # conversation_id
     thread_deleted = Signal(str)  # conversation_id
+    collapsed_changed = Signal(bool)  # True when collapsed
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -291,6 +292,10 @@ class ConversationSidebarWidget(QWidget):
             self._new_thread_btn.setVisible(False)
 
         self._is_collapsed = not self._is_collapsed
+        try:
+            self.collapsed_changed.emit(self._is_collapsed)
+        except Exception:
+            pass
 
     def _show_context_menu(self, position) -> None:
         """Show context menu for thread management."""
