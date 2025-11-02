@@ -71,7 +71,7 @@ class TerminalSessionManager:
         workspace_root: Path,
         workspace_monitor: WorkspaceChangeMonitor,
         event_bus=None,
-        stabilization_seconds: int = 10,
+        stabilization_seconds: int = 90,
         timeout_seconds: int = 600,
     ) -> None:
         """

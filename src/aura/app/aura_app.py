@@ -141,7 +141,7 @@ class AuraApp:
             workspace_root=WORKSPACE_DIR,
             workspace_monitor=self.workspace_monitor,
             event_bus=self.event_bus,
-            stabilization_seconds=10,
+            stabilization_seconds=90,
             timeout_seconds=600,
         )
 

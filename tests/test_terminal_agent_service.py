@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Dict, List
 from unittest.mock import MagicMock
@@ -153,3 +154,43 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
     assert isinstance(command, list)
     assert any("--dangerously-skip-permissions" in part for part in command), "Claude command should skip approvals"
     assert any("claude-code --dangerously-skip-permissions -".strip() in part for part in command), "Claude command should read from stdin via '-'"
+
+
+def test_spawn_agent_creates_codex_config_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        agent_command_template="codex",
+    )
+    spec = _sample_specification()
+
+    popen_calls: Dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 4321
+
+    def fake_popen(command: List[str], **kwargs: object) -> FakeProcess:
+        popen_calls["command"] = command
+        popen_calls["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    service.spawn_agent(spec)
+
+    config_path = home_dir / ".codex" / "config.toml"
+    assert config_path.exists(), "Codex config should be created when missing on Windows"
+    config_contents = config_path.read_text(encoding="utf-8")
+    assert 'approval_policy = "never"' in config_contents
+    assert 'sandbox_mode = "workspace-write"' in config_contents
+
+    command_list = popen_calls["command"]
+    assert any("--full-auto" in part for part in command_list), "Windows spawn command should include --full-auto flag"
