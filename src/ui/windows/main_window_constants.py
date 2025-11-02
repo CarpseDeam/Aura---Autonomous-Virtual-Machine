@@ -84,6 +84,7 @@ BOOT_SEQUENCE: Sequence[Dict[str, Any]] = (
 
 # Compact banner variant to reduce vertical space while keeping the retro feel
 AURA_ASCII_BANNER_COMPACT = """
-==  A U R A  ==
-Autonomous Virtual Machine
+   ▄▀█ █ █ █▀█ ▄▀█
+   █▀█ ▀▄▀ █▀▄ █▀█
+  AUTONOMOUS VIRTUAL MACHINE
 """

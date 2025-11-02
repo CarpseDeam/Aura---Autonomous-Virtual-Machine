@@ -12,6 +12,7 @@ from src.aura.config import ASSETS_DIR
 from src.aura.models.events import Event
 from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.services.conversation_management_service import ConversationManagementService
+from src.aura.services.terminal_session_manager import TerminalSessionManager
 from src.aura.services.user_settings_manager import get_auto_accept_changes
 from src.ui.windows.main_window_constants import (
     AURA_ASCII_BANNER,
@@ -114,10 +115,10 @@ class MainWindow(QMainWindow):
         banner_label.setFont(QFont("JetBrains Mono", 9))
         banner_label.setAlignment(Qt.AlignCenter)
         banner_label.setContentsMargins(0, 0, 0, 0)
-        banner_label.setMaximumHeight(36)
+        banner_label.setMaximumHeight(60)
         # Local style accent to ensure compact red divider regardless of global stylesheet
         banner_label.setStyleSheet(
-            "QLabel#aura_banner { border-top: 1px solid #C62828; border-bottom: 1px solid #C62828; padding: 2px 0 6px 0; }"
+            "QLabel#aura_banner { border-top: 1px solid #C62828; border-bottom: 1px solid #C62828; padding: 4px 0 4px 0; }"
         )
 
         layout.addWidget(self.toolbar)
