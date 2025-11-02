@@ -1,57 +1,26 @@
-You are analyzing a user's message to determine their intent.
+You are analyzing the user's latest message to decide which single intent label applies.
 
-User's latest message: {{ user_text }}
+User message: {{ user_text }}
 
-Recent conversation:
+Recent dialogue snapshot:
 {{ conversation_history }}
 
-Classify the user's intent as ONE of:
-- CASUAL_CHAT: Greeting, chitchat, expressing feelings, casual conversation
-- SEEKING_ADVICE: Asking for opinions, recommendations, evaluating options, seeking guidance
-- BRAINSTORM: Exploring approaches together, discussing trade-offs, collaborative problem-solving
-- BUILD_VAGUE: Wants you to build/modify code but request is ambiguous or lacks details
-- BUILD_CLEAR: Clear, specific instruction to build/modify code with sufficient details
+Available intents:
+- CASUAL_CHAT: greetings, check-ins, venting, or other non-task chatter.
+- SEEKING_ADVICE: explicit requests for opinions, recommendations, comparisons, or evaluation.
+- BRAINSTORM: collaborative exploration of approaches where the user wants to ideate together.
+- BUILD_VAGUE: the user wants code changes but the request lacks detail; clarification is needed.
+- BUILD_CLEAR: the user gives specific implementation instructions with enough detail to execute.
 
-ABSOLUTE PRIORITY RULE - READ THIS FIRST:
-If the message contains ANY of these advice-seeking phrases, classify as SEEKING_ADVICE immediately.
-Do NOT continue to other rules. Stop here and return SEEKING_ADVICE.
+Decision guide:
+1. If the user is clearly requesting a recommendation, comparison, or opinion (phrases like "what do you think", "should I", "vs", "recommend"), default to SEEKING_ADVICE unless the message also contains precise build instructions that dominate the request.
+2. If the user wants to create or modify code but details are missing or ambiguous, choose BUILD_VAGUE.
+3. Use BUILD_CLEAR only when the request is actionable as written (e.g., exact endpoint, file, or behavior).
+4. When the user invites joint exploration without committing to implementation, classify as BRAINSTORM.
+5. If none of the above apply and the user is just chatting, choose CASUAL_CHAT.
 
-Advice-seeking trigger phrases (ANY ONE triggers SEEKING_ADVICE):
-- "what do you think"
-- "what would you"
-- "what should"
-- "should I"
-- "not sure"
-- "not totally sure"
-- "not certain"
-- "recommend"
-- "recommendation"
-- "your opinion"
-- "your thoughts"
-- "advice on"
-- "thoughts on"
-- "which is better"
-- "vs" or "versus" (comparing options)
-- "evaluate"
-- "evaluating"
-- "considering"
+Edge handling:
+- Prior conversation may already contain context. If the new message simply continues an earlier build plan with clarity, respect that and choose BUILD_CLEAR or BUILD_VAGUE accordingly.
+- If multiple intents seem plausible, pick the one that best reflects the next action Aura should take. Err toward dialogue (SEEKING_ADVICE or BRAINSTORM) before BUILD_CLEAR if doubt remains.
 
-SECONDARY RULES (only apply if NO advice-seeking phrases found above):
-1. If exploring options or comparing approaches ("or", "compared to"), classify as SEEKING_ADVICE or BRAINSTORM
-2. If vague build request without details, classify as BUILD_VAGUE
-3. Only classify as BUILD_CLEAR if request is direct, actionable, and has NO advice-seeking signals
-
-Examples:
-"Hey what's up?" -> CASUAL_CHAT
-"Should I use Redis or Memcached?" -> SEEKING_ADVICE (contains "should I")
-"I need to build auth but not sure about the approach. What do you think?" -> SEEKING_ADVICE (contains "not sure" AND "what do you think")
-"I'm thinking about using JWT for auth, what do you recommend?" -> SEEKING_ADVICE (contains "recommend")
-"How should we handle user sessions?" -> SEEKING_ADVICE (contains "should")
-"Redis vs Memcached for caching?" -> SEEKING_ADVICE (contains "vs")
-"Evaluating JWT versus sessions for FastAPI. Your thoughts?" -> SEEKING_ADVICE (contains "evaluating" AND "your thoughts")
-"Add payments" -> BUILD_VAGUE
-"Add GET /health endpoint returning {status: 'ok'}" -> BUILD_CLEAR
-"Write a Python function to validate emails with regex" -> BUILD_CLEAR
-"Create a FastAPI endpoint for user login" -> BUILD_CLEAR
-
-Return ONLY the intent name (e.g., SEEKING_ADVICE).
+Return only the intent label (e.g., `SEEKING_ADVICE`).

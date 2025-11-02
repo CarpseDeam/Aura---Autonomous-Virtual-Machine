@@ -3,17 +3,17 @@ Project: {{ project_name or "Unknown" }}
 Task ID: {{ task_id }}
 Generated: {{ generated_at }}
 
-## Core Mission
+## Mission Brief
 {{ mission_summary }}
 
-## Reality-First Code Generation Protocol (MANDATORY)
-1. Discovery -> run LIST_FILES to inspect directories you'll touch.
-2. Deep Inspection -> READ_FILE every module you plan to import or edit.
-3. Contract Verification -> READ_FILE DTOs/schemas to mirror names, optionality, and types.
-4. Dependency Mapping -> READ_FILE constructors/methods to confirm signatures before wiring calls.
-5. Code Generation -> only after finishing steps 1-4 may you write code. Iterate: inspect -> draft one change -> verify -> continue.
-
-Failing to complete these steps before writing code is a protocol violation.
+## Before You Touch Code
+1. Open the freshly written `AGENTS.md`; it is the authoritative specification for this task.
+2. Follow the Reality-First Code Generation Protocol:
+   - `LIST_FILES` for every directory you expect to read or modify.
+   - `READ_FILE` each module you plan to import or edit.
+   - `READ_FILE` data contracts (DTOs, schemas, Pydantic models) to mirror names, optionality, and types.
+   - `READ_FILE` constructors and call sites to confirm parameter ordering and dependencies.
+3. Only begin editing after all four phases are complete and noted in your working log. Skipping a phase is a protocol violation.
 
 ## Workspace Snapshot
 {% if project_files %}
@@ -22,50 +22,52 @@ Failing to complete these steps before writing code is a protocol violation.
   - {{ file_path }}
 {% endfor %}
 {% else %}
-- No existing files detected in the project directory.
+- No existing files detected in the project directory. Confirm the expected structure with Aura before creating new ones.
 {% endif %}
 
 ## Planned Deliverables
 {% for file in planned_files %}
 ### {{ file.file_path }}
 - Purpose: {{ file.description or "No description provided." }}
-- Notes:
 {% if file.methods %}
-  - Methods to implement:
-  {% for method in file.methods %}
-    - {{ method }}
-  {% endfor %}
+- Methods to provide:
+{% for method in file.methods %}
+  - {{ method }}
+{% endfor %}
 {% endif %}
 {% if file.classes %}
-  - Classes to provide:
-  {% for cls in file.classes %}
-    - {{ cls }}
-  {% endfor %}
+- Classes to provide:
+{% for cls in file.classes %}
+  - {{ cls }}
+{% endfor %}
 {% endif %}
 {% if file.extra %}
-  - Additional guidance:
-  {% for note in file.extra %}
-    - {{ note }}
-  {% endfor %}
+- Additional notes:
+{% for note in file.extra %}
+  - {{ note }}
+{% endfor %}
 {% endif %}
 {% if not file.methods and not file.classes and not file.extra %}
-  - No further detail available.
+- No further detail available—confirm specifics with Aura before implementing.
 {% endif %}
 {% endfor %}
 {% if not planned_files %}
-- No specific files were outlined; confirm scope with Aura before proceeding.
+- No explicit files were outlined. Pause and sync with Aura to co-define the deliverable before writing code.
 {% endif %}
 
+## Collaboration Norms
+- Keep scope proportional to the request. Reuse existing patterns; introduce new abstractions only when the blueprint demands them.
+- Narrate major checkpoints in the terminal so Aura can monitor and persist project memory.
+- Stage work iteratively: implement a focused change set, self-review, then announce completion.
+
 ## Quality Expectations
-- Production-ready, type-hinted Python.
-- Follow project conventions and Single Responsibility Principle.
-- Use Pydantic models for data contracts when applicable.
-- Add tests for new services or behaviours you introduce.
+- Ship production-ready results that match project conventions and type-hinting norms.
+- Add or update tests only when the blueprint or change warrants them; prioritize pragmatic coverage over boilerplate.
+- Leave files cleaner than you found them—follow linting/formatting conventions already present in the repo.
 
-## Handoff Instructions
-1. Read this specification fully.
-2. Complete the Reality-First protocol before generating code.
-3. Commit results by writing files directly into the workspace.
-4. Notify completion via terminal output so Aura can monitor changes.
+## Handoff Completion
+1. Confirm all Reality-First steps were executed.
+2. Apply the changes directly to the workspace.
+3. Report status and next steps via terminal output so Aura can integrate the results.
 
-Aura will monitor the workspace for new or modified files and integrate them into the project memory.
+Aura is monitoring for filesystem changes and will capture the outcome in project memory.
