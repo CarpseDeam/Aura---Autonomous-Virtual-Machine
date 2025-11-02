@@ -148,43 +148,62 @@ class TerminalAgentService:
         project_root: Path,
     ) -> List[str]:
         """
-        Build command using Windows Terminal (wt.exe) for interactive TUI apps like Claude Code.
+        Build command using Windows Terminal for interactive TUI apps.
 
-        Windows Terminal provides proper stdin/stdout for apps that use raw mode for
-        interactive interfaces (e.g., Claude Code with Ink/React).
+        For Claude Code, DO NOT pipe AGENTS.md into stdin because piping breaks
+        raw mode and causes "Raw mode not supported". Instead, launch the agent
+        directly in the project root and let it read AGENTS.md itself.
 
         Args:
-            agent_command: The command to execute (e.g., "claude-code -")
-            agents_md_path: Path to AGENTS.md file to pipe to the agent
-            project_root: Project root directory
+            agent_command: The full command to execute (e.g., "claude")
+            agents_md_path: Path to AGENTS.md (used only for non-TUI agents)
+            project_root: Project root directory (working directory for the session)
 
         Returns:
             Command list for Windows Terminal execution
         """
         if not self._has_windows_terminal():
             logger.warning(
-                "Windows Terminal (wt.exe) not found. Claude Code requires Windows Terminal "
-                "for interactive mode. Install from: https://aka.ms/terminal"
+                "Windows Terminal (wt.exe) not found. Install from: https://aka.ms/terminal"
             )
             logger.info(
-                "Alternative: Run Aura inside WSL2 for native terminal support. "
-                "See: https://learn.microsoft.com/en-us/windows/wsl/install"
+                "Falling back to PowerShell passthrough; interactive TUIs may fail. "
+                "Consider running in WSL2 for better terminal support."
             )
-            # Fallback to PowerShell (will likely fail for Claude Code)
             return self._build_windows_passthrough_command(agent_command, agents_md_path)
 
-        # Escape double quotes in path for cmd.exe
+        # Detect Claude Code to preserve stdin for raw mode TUI
+        agent_tokens = agent_command.split()
+        first_token = agent_tokens[0].lower() if agent_tokens else ""
+        is_claude_code = first_token in {"claude", "claude-code", "claude.exe"}
+
+        if is_claude_code:
+            # Launch Claude Code WITHOUT piping so it can use raw mode on real stdin
+            logger.debug(
+                "Launching Claude Code without piping AGENTS.md (cwd=%s)", project_root
+            )
+            return [
+                "wt.exe",
+                "-d",
+                str(project_root),
+                "cmd",
+                "/c",
+                agent_command,
+            ]
+
+        # For other agents that don't require raw mode, keep the pipe behavior
         agents_md_literal = str(agents_md_path).replace('"', '""')
-
-        # Build command with delay, then pipe AGENTS.md to agent
-        # Using cmd.exe because it's more reliable for piping with Windows Terminal
-        delayed_command = f'timeout /t 2 /nobreak > nul && type "{agents_md_literal}" | {agent_command}'
-
-        # Windows Terminal command: wt.exe -d <working-dir> cmd /c "<command>"
+        delayed_command = (
+            f'timeout /t 2 /nobreak > nul && type "{agents_md_literal}" | {agent_command}'
+        )
+        logger.debug("Launching non-TUI agent with piped AGENTS.md via Windows Terminal")
         return [
             "wt.exe",
-            "-d", str(project_root),  # Set working directory
-            "cmd", "/c", delayed_command
+            "-d",
+            str(project_root),
+            "cmd",
+            "/c",
+            delayed_command,
         ]
 
     def _build_windows_codex_command(
