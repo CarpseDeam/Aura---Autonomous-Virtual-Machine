@@ -87,6 +87,22 @@ class AuraExecutor:
             raise RuntimeError(f"Unsupported action type: {action.type}")
         return tool(action, project_context)
 
+    def execute_blueprint(self, user_request: str, project_context: ProjectContext) -> AgentSpecification:
+        """
+        Convenience helper for triggering the DESIGN_BLUEPRINT workflow with auto-spawn enabled.
+        """
+        action = Action(
+            type=ActionType.DESIGN_BLUEPRINT,
+            params={
+                "request": user_request,
+                "auto_spawn": True,
+            },
+        )
+        result = self.execute(action, project_context)
+        if not isinstance(result, AgentSpecification):
+            raise TypeError("DESIGN_BLUEPRINT execution must return an AgentSpecification")
+        return result
+
     # -- Design & specification generation -------------------------------------------------
 
     def _handle_design_blueprint(self, action: Action, context: ProjectContext) -> AgentSpecification:
