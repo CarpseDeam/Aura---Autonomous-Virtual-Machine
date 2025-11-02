@@ -41,14 +41,17 @@ class MainWindow(QMainWindow):
         self,
         event_bus: EventBus,
         image_storage: ImageStorageService,
-        terminal_session_manager=None,
-        conversations: ConversationManagementService,
+        terminal_session_manager: Optional[TerminalSessionManager] = None,
+        conversations: Optional[ConversationManagementService] = None,
     ) -> None:
         super().__init__()
         self.event_bus = event_bus
         self.settings_window: Optional[SettingsWindow] = None
 
         self._auto_accept_enabled = get_auto_accept_changes()
+
+        if conversations is None:
+            raise ValueError("conversations dependency is required for MainWindow")
 
         self.setWindowTitle("Aura - Command Deck")
         self.setGeometry(100, 100, 1100, 750)
