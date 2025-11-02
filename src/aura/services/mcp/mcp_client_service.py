@@ -20,6 +20,8 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+import shutil
+import platform
 from pathlib import Path
 from queue import Queue
 from subprocess import PIPE, Popen
@@ -83,9 +85,16 @@ class MCPClientService:
         cwd: Optional[str] = str(config.cwd) if isinstance(config.cwd, Path) else (config.cwd or None)
 
         try:
+            # Resolve executable path on Windows (e.g., npx -> npx.cmd)
+            spawn_cmd = list(config.command)
+            if platform.system().lower().startswith("win") and spawn_cmd:
+                resolved = shutil.which(spawn_cmd[0])
+                if resolved:
+                    spawn_cmd[0] = resolved
+
             # Text mode for line-by-line JSON messages
             proc = Popen(
-                config.command,
+                spawn_cmd,
                 stdin=PIPE,
                 stdout=PIPE,
                 stderr=PIPE,
