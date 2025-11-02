@@ -205,31 +205,30 @@ class TerminalAgentService:
 
     def _build_windows_claude_headless_command(self, agents_md_path: Path, project_root: Path) -> List[str]:
         """
-        Build a Windows Terminal command that invokes Claude Code headlessly:
-        - Reads AGENTS.md content in PowerShell with proper encoding
-        - Passes content via the -p argument (headless mode)
-        - Skips permission prompts via --dangerously-skip-permissions
+        Build a Windows Terminal command that invokes Claude Code with task from AGENTS.md.
 
-        Quote handling:
-        We avoid fragile cmd.exe quoting by invoking PowerShell directly and
-        using Get-Content -Raw to construct the prompt string, then passing it
-        as a single argument to the Claude CLI.
+        Uses simple cmd.exe to avoid PowerShell PATH issues.
+        Reads AGENTS.md and passes content via -p flag for headless execution.
         """
-        agents_md_literal = str(agents_md_path).replace("'", "''")
-        ps_command = (
-            f"$p = Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'; "
-            "claude -p $p --dangerously-skip-permissions"
+        # Escape path for cmd.exe (use double quotes, escape internal quotes)
+        agents_md_str = str(agents_md_path).replace('"', '""')
+
+        # Simple approach: Let claude read AGENTS.md itself, just tell it to in the -p prompt
+        cmd_command = (
+            f'claude -p "Read and execute all tasks in the AGENTS.md file in the current directory. '
+            f'Work autonomously without asking for confirmation. When complete, write .aura/{{task_id}}.summary.json '
+            f'and .aura/{{task_id}}.done files as specified in the completion protocol." '
+            f'--dangerously-skip-permissions'
         )
-        logger.debug("Preparing Windows headless PowerShell command for Claude Code")
+
+        logger.debug("Launching Claude Code with simple cmd.exe command")
         return [
             "wt.exe",
             "-d",
             str(project_root),
-            "pwsh",
-            "-NoLogo",
-            "-NoProfile",
-            "-Command",
-            ps_command,
+            "cmd",
+            "/c",
+            cmd_command,
         ]
 
     def _build_windows_codex_command(
