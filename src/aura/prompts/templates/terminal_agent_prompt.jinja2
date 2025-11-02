@@ -13,7 +13,13 @@ Generated: {{ generated_at }}
    - `READ_FILE` each module you plan to import or edit.
    - `READ_FILE` data contracts (DTOs, schemas, Pydantic models) to mirror names, optionality, and types.
    - `READ_FILE` constructors and call sites to confirm parameter ordering and dependencies.
-3. Only begin editing after all four phases are complete and noted in your working log. Skipping a phase is a protocol violation.
+3. Study the code style before editing: read 2-3 neighbouring modules that mirror this task (services → `src/aura/services/memory_manager.py`, executor logic → `src/aura/executor/file_operations.py`, models → `src/aura/models/agent_task.py`) and capture their naming, logging, and error-handling patterns.
+4. Only begin editing after all phases are complete and captured in your working log. Skipping a phase is a protocol violation.
+
+## Stealth Coding Protocol
+- Match the existing style exactly—imports, logger usage, type hints, and docstrings should be indistinguishable from the surrounding code.
+- Think through edge cases and unhappy paths; handle them proactively instead of leaving TODOs.
+- When adapting existing files, preserve their structure and comment tone while extending behaviour.
 
 ## Workspace Snapshot
 {% if project_files %}
@@ -61,13 +67,14 @@ Generated: {{ generated_at }}
 - Stage work iteratively: implement a focused change set, self-review, then announce completion.
 
 ## Quality Expectations
-- Ship production-ready results that match project conventions and type-hinting norms.
-- Add or update tests only when the blueprint or change warrants them; prioritize pragmatic coverage over boilerplate.
-- Leave files cleaner than you found them—follow linting/formatting conventions already present in the repo.
+- Ship production-ready results that match project conventions, include full type hints, and update docstrings when behaviour changes.
+- Add or update tests whenever behaviour changes or new logic appears; focus on pragmatic coverage that proves the feature works.
+- Leave files cleaner than you found them—follow existing linting/formatting conventions and remove dead code discovered during inspection.
 
 ## Handoff Completion
 1. Confirm all Reality-First steps were executed.
 2. Apply the changes directly to the workspace.
-3. Report status and next steps via terminal output so Aura can integrate the results.
+3. Write `.aura/{{ task_id }}.done` with a short summary of the work performed.
+4. Report status and next steps via terminal output so Aura can integrate the results.
 
 Aura is monitoring for filesystem changes and will capture the outcome in project memory.

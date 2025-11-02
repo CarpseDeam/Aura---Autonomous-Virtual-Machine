@@ -60,8 +60,7 @@ class TerminalAgentService:
             task_id=spec_path.stem,
         ).strip()
 
-        if agent_command.strip() == "codex":
-            agent_command = "codex -"
+        agent_command = self._apply_autonomy_flags(agent_command)
 
         if sys.platform.startswith("win"):
             # Windows: Pipe AGENTS.md with 2-second delay
@@ -98,6 +97,42 @@ class TerminalAgentService:
             # Fallback: just run bash directly (won't be visible on Unix without terminal)
             logger.warning("No terminal emulator found, falling back to direct bash execution")
             return ["bash", "-c", delayed_command]
+
+    def _apply_autonomy_flags(self, agent_command: str) -> str:
+        """
+        Ensure Codex and Claude Code run in autonomous mode and read specs from stdin.
+        """
+        normalized = agent_command.strip()
+        if not normalized:
+            return agent_command
+
+        try:
+            tokens = shlex.split(normalized, posix=not sys.platform.startswith("win"))
+        except ValueError:
+            # Fallback: naive split when quoting is invalid
+            tokens = normalized.split()
+
+        if not tokens:
+            return agent_command
+
+        executable = tokens[0].lower()
+
+        def _ensure_flag(flag: str) -> None:
+            if flag not in tokens:
+                tokens.insert(1, flag)
+
+        def _ensure_stdin_marker() -> None:
+            if "-" not in tokens:
+                tokens.append("-")
+
+        if executable in {"codex", "codex.exe"}:
+            _ensure_flag("--full-auto")
+            _ensure_stdin_marker()
+        elif executable in {"claude-code", "claude", "claude.exe"}:
+            _ensure_flag("--dangerously-skip-permissions")
+            _ensure_stdin_marker()
+
+        return " ".join(tokens)
 
     def spawn_agent(
         self,
