@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -308,7 +309,7 @@ class TerminalAgentService:
             # Build command using template and spec path
             command = self._build_terminal_command(spec_path, project_root)
 
-        self._ensure_codex_config_for_command(command)
+        self._ensure_agent_config(project_root)
 
         session_env = os.environ.copy()
         session_env.update(env or {})
@@ -347,6 +348,89 @@ class TerminalAgentService:
             spec_path=str(spec_path),
             process_id=process.pid if process else None,
         )
+
+    def _detect_agent_type(self) -> str:
+        """
+        Detect which terminal agent is being used based on command template.
+
+        Returns:
+            "codex", "claude_code", or "unknown"
+        """
+        template = (self.agent_command_template or "").lower()
+
+        if "codex" in template:
+            return "codex"
+        elif "claude" in template or "claude-code" in template:
+            return "claude_code"
+        else:
+            return "unknown"
+
+    def _create_codex_config(self) -> None:
+        """
+        Create ~/.codex/config.toml with auto-approve settings.
+        Delegates to existing _ensure_codex_autonomy_config method.
+        """
+        self._ensure_codex_autonomy_config()
+
+    def _create_claude_code_config(self, project_root: Path) -> None:
+        """
+        Create .claude/config.json with permission allowlist.
+
+        Args:
+            project_root: Project root directory
+        """
+        claude_dir = project_root / ".claude"
+        config_file = claude_dir / "config.json"
+
+        config_data = {
+            "permissions": {
+                "allowedTools": [
+                    "Read",
+                    "Write(src/**)",
+                    "Write(tests/**)",
+                    "Write(workspace/**)",
+                    "Bash(git *)",
+                    "Bash(npm *)",
+                    "Bash(python *)",
+                    "Bash(pip *)",
+                    "Bash(pytest *)"
+                ],
+                "deny": [
+                    "Bash(rm -rf *)",
+                    "Bash(sudo *)",
+                    "Write(.env*)",
+                    "Write(**/secrets/**)"
+                ]
+            }
+        }
+
+        try:
+            claude_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=2)
+
+            logger.info("Created Claude Code permissions config at %s", config_file)
+        except Exception as exc:
+            logger.warning("Failed to create Claude Code config: %s", exc)
+
+    def _ensure_agent_config(self, project_root: Path) -> None:
+        """
+        Create appropriate config file based on which agent is being used.
+
+        Args:
+            project_root: Project root directory for config file placement
+        """
+        agent_type = self._detect_agent_type()
+
+        if agent_type == "codex":
+            self._create_codex_config()
+            logger.debug("Ensured Codex config for auto-approval")
+        elif agent_type == "claude_code":
+            self._create_claude_code_config(project_root)
+            logger.debug("Ensured Claude Code config for auto-approval")
+        else:
+            logger.warning("Unknown agent type '%s', skipping auto-config creation", agent_type)
 
     def _codex_config_candidates(self) -> List[Path]:
         home = Path.home()

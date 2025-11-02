@@ -118,6 +118,8 @@ logs/
 /workspace/
 /CLAUDE.md
 /.claude/
+# Claude Code auto-generated permissions config (agent-specific)
+.claude/config.json
 /AGENTS.md
 !/AGENTS.md
 /tmp_llm_service.txt
