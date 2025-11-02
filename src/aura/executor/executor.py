@@ -87,6 +87,56 @@ class AuraExecutor:
             raise RuntimeError(f"Unsupported action type: {action.type}")
         return tool(action, project_context)
 
+    def execute_blueprint(self, user_request: str, context: ProjectContext) -> Dict[str, Any]:
+        """
+        Public wrapper that coordinates blueprint generation for external callers.
+        """
+        logger.info("Starting blueprint workflow for request: %s", user_request)
+        action = Action(
+            type=ActionType.DESIGN_BLUEPRINT,
+            params={
+                "request": user_request,
+                "auto_spawn": False,
+            },
+        )
+
+        try:
+            result = self.execute(action, context)
+        except Exception as exc:
+            logger.exception("Blueprint workflow failed for request '%s'", user_request)
+            raise RuntimeError(f"Failed to execute blueprint for request: {user_request}") from exc
+
+        if not isinstance(result, AgentSpecification):
+            logger.error(
+                "Blueprint workflow returned unexpected result type: %s",
+                type(result).__name__,
+            )
+            raise TypeError("Blueprint execution did not produce an AgentSpecification")
+
+        specification = result
+        planned_files: List[str] = []
+        blueprint_payload = specification.blueprint if isinstance(specification.blueprint, dict) else {}
+        files_payload = blueprint_payload.get("files")
+        if isinstance(files_payload, list):
+            for file_item in files_payload:
+                if isinstance(file_item, dict):
+                    file_path = file_item.get("file_path")
+                    if isinstance(file_path, str):
+                        planned_files.append(file_path)
+
+        context.extras["latest_specification"] = specification.model_dump()
+
+        logger.info(
+            "Completed blueprint workflow for request '%s' with %d planned file(s)",
+            user_request,
+            len(planned_files),
+        )
+
+        return {
+            "specification": specification,
+            "planned_files": planned_files,
+        }
+
     # -- Design & specification generation -------------------------------------------------
 
     def _handle_design_blueprint(self, action: Action, context: ProjectContext) -> AgentSpecification:
