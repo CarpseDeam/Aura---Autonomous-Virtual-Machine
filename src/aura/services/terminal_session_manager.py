@@ -38,6 +38,7 @@ from src.aura.models.event_types import (
     TERMINAL_SESSION_FAILED,
     TERMINAL_SESSION_TIMEOUT,
     TERMINAL_SESSION_ABORTED,
+    TERMINAL_OUTPUT_RECEIVED,
 )
 from src.aura.models.events import Event
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
@@ -273,9 +274,8 @@ class TerminalSessionManager:
                         text = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
                     except Exception:
                         text = str(line)
-                    with io_state.lock:
-                        # Strip trailing newlines to keep buffer consistent
-                        target.append(text.rstrip("\n"))
+                    # Strip trailing newline and buffer + notify
+                    self._buffer_and_dispatch(task_id, io_state, target, text.rstrip("\n"), channel)
             except Exception as exc:
                 logger.debug("I/O reader for task %s (%s) stopped: %s", task_id, channel, exc)
 
@@ -344,6 +344,39 @@ class TerminalSessionManager:
         except Exception as exc:
             logger.error("Failed to write to stdin for task %s: %s", task_id, exc, exc_info=True)
             raise RuntimeError(f"Failed to send input to task {task_id}") from exc
+
+    def _buffer_and_dispatch(
+        self,
+        task_id: str,
+        io_state: "TerminalSessionManager._ProcessIO",
+        target: Deque[str],
+        text: str,
+        channel: str,
+    ) -> None:
+        """
+        Append text to the appropriate buffer and dispatch an output event.
+
+        Args:
+            task_id: Session identifier
+            io_state: Shared I/O state containing the buffers and lock
+            target: The buffer to append to
+            text: Line text without trailing newline
+            channel: 'stdout' or 'stderr'
+        """
+        with io_state.lock:
+            target.append(text)
+
+        if self.event_bus:
+            try:
+                payload = {
+                    "task_id": task_id,
+                    "text": text,
+                    "stream_type": channel,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                }
+                self.event_bus.dispatch(Event(event_type=TERMINAL_OUTPUT_RECEIVED, payload=payload))
+            except Exception as exc:
+                logger.debug("Failed dispatching terminal output event for %s: %s", task_id, exc)
 
     def _check_completion_signals(self, status: SessionStatus) -> Optional[Dict]:
         """

@@ -138,6 +138,18 @@ Payload:
     aborted_by (str): User or system identifier
 """
 
+# Terminal I/O streaming events
+TERMINAL_OUTPUT_RECEIVED = "TERMINAL_OUTPUT_RECEIVED"
+"""
+Dispatched whenever new terminal output is buffered from an active session.
+
+Payload:
+    task_id (str): Unique identifier for the task
+    text (str): The line of output captured (without trailing newline)
+    stream_type (str): 'stdout' or 'stderr'
+    timestamp (str): ISO timestamp when line was captured
+"""
+
 # Application lifecycle events
 APP_START = "APP_START"
 APP_SHUTDOWN = "APP_SHUTDOWN"

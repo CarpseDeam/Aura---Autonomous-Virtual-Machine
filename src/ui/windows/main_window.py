@@ -23,6 +23,7 @@ from src.ui.windows.settings_window import SettingsWindow
 from src.ui.widgets.chat_display_widget import ChatDisplayWidget
 from src.ui.widgets.chat_input_widget import ChatInputWidget
 from src.ui.widgets.terminal_monitor_widget import TerminalMonitorWidget
+from src.ui.widgets.agent_console_widget import AgentConsoleWidget
 from src.ui.widgets.thinking_indicator_widget import ThinkingIndicatorWidget
 from src.ui.widgets.toolbar_widget import ToolbarWidget
 
@@ -64,6 +65,7 @@ class MainWindow(QMainWindow):
                 terminal_session_manager,
                 parent=self,
             )
+        self.agent_console = AgentConsoleWidget(self.event_bus, parent=self)
 
         self._event_controller = MainWindowEventController(
             event_bus=self.event_bus,
@@ -100,15 +102,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.toolbar)
         layout.addWidget(banner_label)
 
-        if self.terminal_monitor:
-            splitter = QSplitter(Qt.Horizontal)
-            splitter.addWidget(self.chat_display)
-            splitter.addWidget(self.terminal_monitor)
-            splitter.setStretchFactor(0, 3)
-            splitter.setStretchFactor(1, 1)
-            layout.addWidget(splitter, 1)
-        else:
-            layout.addWidget(self.chat_display, 1)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.chat_display)
+        splitter.addWidget(self.agent_console)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        layout.addWidget(splitter, 1)
 
         layout.addWidget(self.thinking_indicator)
         layout.addWidget(self.chat_input)
