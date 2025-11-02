@@ -20,6 +20,8 @@ from src.aura.worker import BrainExecutorWorker
 from src.aura.models.event_types import (
     CONVERSATION_MESSAGE_ADDED,
     CONVERSATION_SESSION_STARTED,
+    CONVERSATION_THREAD_SWITCHED,
+    PROJECT_ACTIVATED,
     TERMINAL_SESSION_COMPLETED,
 )
 
@@ -112,6 +114,7 @@ class AuraInterface:
         # Subscribe to Conversation Management events
         self.event_bus.subscribe(CONVERSATION_SESSION_STARTED, self._handle_conversation_session_started)
         self.event_bus.subscribe(CONVERSATION_MESSAGE_ADDED, self._handle_conversation_message_added)
+        self.event_bus.subscribe(CONVERSATION_THREAD_SWITCHED, self._handle_thread_switched)
 
         # Subscribe to Context Manager events
         if self.context_manager:
@@ -154,6 +157,35 @@ class AuraInterface:
             logger.debug(f"Conversation message added: {role} - {content_preview}...")
         except Exception as exc:
             logger.debug(f"Failed to process CONVERSATION_MESSAGE_ADDED event: {exc}")
+
+    def _handle_thread_switched(self, event: Event) -> None:
+        """Handle conversation thread switched event.
+
+        Called when the user switches to a different conversation thread.
+        If the thread belongs to a different project, trigger PROJECT_ACTIVATED.
+        """
+        try:
+            payload = event.payload or {}
+            session_id = payload.get("session_id")
+            project_name = payload.get("project_name")
+            previous_session_id = payload.get("previous_session_id")
+
+            logger.info(f"Thread switched from {previous_session_id} to {session_id} (project: {project_name})")
+
+            # Check if we need to activate a different project
+            current_project = getattr(self.conversations, 'active_project', None)
+            if project_name and project_name != current_project:
+                logger.info(f"Switching project context from {current_project} to {project_name}")
+                # Dispatch PROJECT_ACTIVATED event to update workspace context
+                self.event_bus.dispatch(
+                    Event(
+                        event_type=PROJECT_ACTIVATED,
+                        payload={"project_name": project_name}
+                    )
+                )
+
+        except Exception as exc:
+            logger.error(f"Failed to process CONVERSATION_THREAD_SWITCHED event: {exc}", exc_info=True)
 
     def _handle_terminal_completed(self, event: Event) -> None:
         """Render a concise completion summary for terminal agent sessions.

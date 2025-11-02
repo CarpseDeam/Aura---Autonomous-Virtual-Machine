@@ -83,6 +83,7 @@ class MainWindowEventController:
         self.event_bus.subscribe("TOKEN_THRESHOLD_CROSSED", self._handle_token_threshold_crossed)
         # Track conversation switches for scroll preservation
         self.event_bus.subscribe("CONVERSATION_SESSION_STARTED", self._handle_session_switched)
+        self.event_bus.subscribe("CONVERSATION_THREAD_SWITCHED", self._handle_thread_switched)
 
         # Optional lifecycle signals
         self.event_bus.subscribe("AGENT_STARTED", self._handle_agent_started)
@@ -389,3 +390,38 @@ class MainWindowEventController:
                 logger.debug("Failed restoring scroll position", exc_info=True)
         except Exception as exc:
             logger.debug(f"Failed handling session switch: {exc}")
+
+    def _handle_thread_switched(self, event: Event) -> None:
+        """Load conversation history when user switches to a different thread."""
+        try:
+            payload = event.payload or {}
+            session_id = payload.get("session_id")
+            message_count = payload.get("message_count", 0)
+            messages = payload.get("messages", [])
+
+            if not session_id:
+                logger.warning("Thread switched event missing session_id")
+                return
+
+            logger.info(f"Loading conversation history for thread {session_id} ({message_count} messages)")
+
+            if messages:
+                # Display the conversation history
+                self.chat_display.load_conversation_history(messages)
+                logger.info(f"Loaded {len(messages)} messages into chat display")
+            else:
+                # Clear chat and show appropriate message
+                self.chat_display.clear_chat()
+                if message_count > 0:
+                    self.chat_display.display_system_message(
+                        "INFO",
+                        f"Thread loaded ({message_count} messages - reload to view)"
+                    )
+                else:
+                    self.chat_display.display_system_message(
+                        "INFO",
+                        "New conversation - start chatting!"
+                    )
+
+        except Exception as exc:
+            logger.error(f"Failed handling thread switch: {exc}", exc_info=True)

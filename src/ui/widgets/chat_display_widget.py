@@ -484,3 +484,57 @@ class ChatDisplayWidget(QTextBrowser):
         if not change_id:
             return "N/A"
         return change_id[:8].upper()
+
+    def clear_chat(self) -> None:
+        """Clear all content from the chat display."""
+        self.setText("")
+        self._styles_injected = False
+
+    def load_conversation_history(self, messages: List[Dict[str, Any]], limit: int = 100) -> None:
+        """
+        Load and display a conversation's message history.
+
+        Args:
+            messages: List of message dicts with 'role', 'content', and optional 'metadata'
+            limit: Maximum number of recent messages to display (default 100)
+        """
+        # Clear existing content
+        self.setText("")
+        self._styles_injected = False
+
+        # Limit to most recent messages if needed
+        total_messages = len(messages)
+        if total_messages > limit:
+            display_messages = messages[-limit:]
+            # Show a notice about hidden messages
+            self.display_system_message(
+                "INFO",
+                f"Showing last {limit} messages (older {total_messages - limit} messages hidden)"
+            )
+        else:
+            display_messages = messages
+
+        # Render each message without auto-scrolling
+        for msg in display_messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            metadata = msg.get("metadata", {})
+
+            # Handle images from metadata
+            image_ref = None
+            if isinstance(metadata, dict):
+                image_ref = metadata.get("image")
+
+            # Render based on role
+            if role == "user":
+                self.display_user_message(content, image_ref)
+            elif role == "assistant":
+                self.display_aura_response(content)
+            elif role == "system":
+                # System messages are typically internal, skip or show as info
+                if content:
+                    self.display_system_message("SYSTEM", content)
+
+        # Scroll to bottom after all messages loaded
+        self.moveCursor(QTextCursor.End)
+        self.ensureCursorVisible()

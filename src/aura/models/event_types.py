@@ -35,6 +35,17 @@ Payload:
     token_usage (dict|int, optional): Provider-reported token usage metadata
 """
 
+CONVERSATION_THREAD_SWITCHED = "CONVERSATION_THREAD_SWITCHED"
+"""
+Dispatched when the user switches to a different conversation thread.
+
+Payload:
+    session_id (str): Identifier for the conversation session being switched to
+    project_name (str): Project associated with the session
+    previous_session_id (str, optional): ID of the previous active session
+    message_count (int): Number of messages in the conversation
+"""
+
 # Token usage events
 TOKEN_USAGE_UPDATED = "TOKEN_USAGE_UPDATED"
 """

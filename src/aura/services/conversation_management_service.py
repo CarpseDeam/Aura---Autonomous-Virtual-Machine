@@ -8,6 +8,7 @@ from src.aura.models.events import Event
 from src.aura.models.event_types import (
     CONVERSATION_MESSAGE_ADDED,
     CONVERSATION_SESSION_STARTED,
+    CONVERSATION_THREAD_SWITCHED,
 )
 from src.aura.models.session import Session
 from src.aura.services.conversation_persistence_service import ConversationPersistenceService
@@ -68,6 +69,65 @@ class ConversationManagementService:
             self.active_session_id = session.id
 
         self._emit_session_started(session)
+
+    def switch_to_conversation(self, conversation_id: str) -> Optional[Session]:
+        """
+        Switch to an existing conversation by loading it from the database.
+
+        Args:
+            conversation_id: The ID of the conversation to switch to
+
+        Returns:
+            The loaded Session object, or None if the conversation doesn't exist
+        """
+        logger.info("Switching to conversation: %s", conversation_id)
+
+        # Fetch the conversation metadata
+        conversation = self.persistence.get_conversation(conversation_id)
+        if not conversation:
+            logger.error("Conversation %s not found", conversation_id)
+            return None
+
+        # Load all messages for this conversation
+        messages = self.persistence.load_messages(conversation_id)
+
+        # Mark it as active in the database
+        self.persistence.mark_conversation_active(conversation_id)
+
+        # Create or update the Session object
+        session = Session(
+            id=conversation["id"],
+            project_name=conversation.get("project_name", STANDALONE_PROJECT_NAME),
+            title=conversation.get("title"),
+            created_at=conversation.get("created_at"),
+            updated_at=conversation.get("updated_at"),
+            is_active=True,
+            history=messages,
+        )
+
+        # Track the previous session ID for the event
+        previous_session_id = self.active_session_id
+
+        # Update in-memory state
+        with self._lock:
+            # Deactivate other sessions for the same project
+            for existing in self.sessions.values():
+                if existing.project_name == session.project_name:
+                    existing.is_active = False
+
+            self.sessions[session.id] = session
+            self.active_session_id = session.id
+            self.active_project = session.project_name
+
+        # Emit thread switched event
+        self._emit_thread_switched(
+            session=session,
+            previous_session_id=previous_session_id,
+            message_count=len(messages),
+        )
+
+        logger.info("Successfully switched to conversation %s with %d messages", conversation_id, len(messages))
+        return session
 
     def get_active_session(self) -> Optional[Session]:
         """
@@ -140,6 +200,32 @@ class ConversationManagementService:
             )
         except Exception:
             logger.debug("Failed to dispatch CONVERSATION_SESSION_STARTED event", exc_info=True)
+
+    def _emit_thread_switched(
+        self,
+        session: Session,
+        previous_session_id: Optional[str],
+        message_count: int,
+    ) -> None:
+        """Notify listeners that the user has switched to a different conversation thread."""
+        if not self.event_bus or not isinstance(session, Session):
+            return
+        try:
+            payload = {
+                "session_id": session.id,
+                "project_name": session.project_name,
+                "previous_session_id": previous_session_id,
+                "message_count": message_count,
+                "messages": session.history,  # Include the messages so UI can display them
+            }
+            self.event_bus.dispatch(
+                Event(
+                    event_type=CONVERSATION_THREAD_SWITCHED,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.debug("Failed to dispatch CONVERSATION_THREAD_SWITCHED event", exc_info=True)
 
     def _dispatch_message_event(
         self,

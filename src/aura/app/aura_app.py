@@ -35,6 +35,7 @@ from src.aura.agent.iteration_controller import IterationController
 from src.aura.models.iteration_models import IterationConfig
 from src.aura.config import ASSETS_DIR, WORKSPACE_DIR
 from src.ui.windows.main_window import MainWindow
+from src.ui.controllers.conversation_sidebar_controller import ConversationSidebarController
 
 
 def get_project_from_args_or_prompt(argv: Optional[List[str]] = None) -> str:
@@ -233,6 +234,13 @@ class AuraApp:
             self.event_bus,
             self.image_storage_service,
             self.terminal_session_manager,
+        )
+
+        # Initialize conversation sidebar controller to manage thread navigation
+        self.conversation_sidebar_controller = ConversationSidebarController(
+            sidebar=self.main_window.conversation_sidebar,
+            conversations=self.conversation_management_service,
+            event_bus=self.event_bus,
         )
 
         self._register_event_handlers()

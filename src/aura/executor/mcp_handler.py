@@ -13,8 +13,8 @@ or via lightweight mapping.
 import logging
 from typing import Any, Dict, Optional
 
-from aura.services.mcp.mcp_client_service import MCPClientService
-from aura.services.mcp.mcp_server_configs import MCPServerConfig, build_config
+from src.aura.services.mcp.mcp_client_service import MCPClientService
+from src.aura.services.mcp.mcp_server_configs import MCPServerConfig, build_config
 
 logger = logging.getLogger(__name__)
 

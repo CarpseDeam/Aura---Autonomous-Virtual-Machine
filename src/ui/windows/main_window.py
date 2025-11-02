@@ -26,6 +26,7 @@ from src.ui.widgets.terminal_monitor_widget import TerminalMonitorWidget
 from src.ui.widgets.agent_console_widget import AgentConsoleWidget
 from src.ui.widgets.thinking_indicator_widget import ThinkingIndicatorWidget
 from src.ui.widgets.toolbar_widget import ToolbarWidget
+from src.ui.widgets.conversation_sidebar_widget import ConversationSidebarWidget
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
         self._set_window_icon()
 
         self.toolbar = ToolbarWidget(auto_accept_enabled=self._auto_accept_enabled, parent=self)
+        self.conversation_sidebar = ConversationSidebarWidget(parent=self)
         self.chat_display = ChatDisplayWidget(image_storage=image_storage, parent=self)
         self.chat_input = ChatInputWidget(image_storage=image_storage, parent=self)
         self.thinking_indicator = ThinkingIndicatorWidget(parent=self)
@@ -103,10 +105,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(banner_label)
 
         splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.conversation_sidebar)
         splitter.addWidget(self.chat_display)
         splitter.addWidget(self.agent_console)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 0)  # Sidebar has fixed width
+        splitter.setStretchFactor(1, 3)  # Chat display gets most space
+        splitter.setStretchFactor(2, 2)  # Agent console gets less space
         layout.addWidget(splitter, 1)
 
         layout.addWidget(self.thinking_indicator)

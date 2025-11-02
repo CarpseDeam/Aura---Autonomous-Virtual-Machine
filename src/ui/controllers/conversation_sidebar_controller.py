@@ -141,43 +141,13 @@ class ConversationSidebarController:
         try:
             logger.info(f"Switching to conversation thread: {thread_id}")
 
-            # Load the conversation
-            conversation = self.conversations.persistence.get_conversation(thread_id)
-            if not conversation:
+            # Use the conversation management service to switch
+            session = self.conversations.switch_to_conversation(thread_id)
+
+            if not session:
                 logger.error(f"Conversation {thread_id} not found")
                 self._show_error("Thread not found", "The selected conversation could not be found.")
                 return
-
-            # Mark it as active
-            self.conversations.persistence.mark_conversation_active(thread_id)
-
-            # Load messages
-            messages = self.conversations.persistence.load_messages(thread_id)
-
-            # Update the active session in memory
-            from src.aura.models.session import Session
-
-            session = Session(
-                id=conversation["id"],
-                project_name=conversation.get("project_name", "default_project"),
-                title=conversation.get("title"),
-                created_at=conversation.get("created_at"),
-                updated_at=conversation.get("updated_at"),
-                is_active=True,
-                history=messages,
-            )
-
-            with self.conversations._lock:
-                # Deactivate other sessions for the same project
-                for existing in self.conversations.sessions.values():
-                    if existing.project_name == session.project_name:
-                        existing.is_active = False
-
-                self.conversations.sessions[session.id] = session
-                self.conversations.active_session_id = session.id
-
-            # Dispatch session started event
-            self.conversations._emit_session_started(session)
 
             # Update sidebar highlight
             self.sidebar.set_active_thread(thread_id)
