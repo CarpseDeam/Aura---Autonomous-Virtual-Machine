@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from src.aura.models.agent_task import AgentSpecification, TerminalSession
+from src.aura.services.agents_md_formatter import format_specification_for_codex
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,10 @@ class TerminalAgentService:
         """
         Persist the specification and launch the external agent.
         """
+        project_root = self._resolve_project_root(spec)
         spec_path = self._persist_specification(spec)
+
+        self._write_agents_md(project_root, spec)
 
         # Use command override if provided, otherwise build from template
         if command_override:
@@ -109,7 +113,7 @@ class TerminalAgentService:
 
         # Prepare subprocess creation flags for visible terminal windows
         popen_kwargs = {
-            "cwd": str(self.workspace_root),
+            "cwd": str(project_root),
             "env": session_env,
         }
 
@@ -145,3 +149,33 @@ class TerminalAgentService:
         spec_file.write_text(spec.prompt, encoding="utf-8")
         logger.debug("Wrote agent specification for task %s to %s", spec.task_id, spec_file)
         return spec_file
+
+    def _resolve_project_root(self, spec: AgentSpecification) -> Path:
+        base_root = self.workspace_root
+        if spec.project_name:
+            candidate = (base_root / spec.project_name).resolve()
+            try:
+                candidate.relative_to(base_root.resolve())
+            except ValueError:
+                logger.warning(
+                    "Project name '%s' resolved outside workspace; defaulting to workspace root.",
+                    spec.project_name,
+                )
+                candidate = base_root
+        else:
+            candidate = base_root
+
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+
+    def _write_agents_md(self, project_root: Path, spec: AgentSpecification) -> Path:
+        agents_md = project_root / "AGENTS.md"
+        content = format_specification_for_codex(spec)
+        try:
+            agents_md.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            logger.error("Failed to write AGENTS.md for task %s: %s", spec.task_id, exc, exc_info=True)
+            raise RuntimeError(f"Failed to write AGENTS.md for task {spec.task_id}") from exc
+
+        logger.info("Wrote AGENTS.md for task %s to %s", spec.task_id, agents_md)
+        return agents_md
