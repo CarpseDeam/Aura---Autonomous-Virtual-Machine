@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QWidget, QPushButton, QSizePolicy
 
 from src.aura.services.image_storage_service import ImageStorageService
 from src.ui.widgets.chat_input import ChatInputTextEdit
@@ -24,14 +24,41 @@ class ChatInputWidget(QWidget):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         self._image_storage = image_storage
         self._text_edit = ChatInputTextEdit(image_storage=image_storage)
         self._text_edit.setObjectName("chat_input")
         self._text_edit.setPlaceholderText("Type here. Shift+Enter for newline. Enter to send.")
         self._text_edit.sendMessage.connect(self.message_requested.emit)
+        self._text_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        layout.addWidget(self._text_edit, 1)
+        # Send button (visible action next to input)
+        self._send_button = QPushButton("Send", self)
+        self._send_button.setObjectName("send_button")
+        self._send_button.setFixedWidth(70)
+        # Match input height within the row
+        self._send_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self._send_button.setToolTip("Send (Enter). Shift+Enter for newline")
+        self._send_button.clicked.connect(self._handle_send)
+
+        # Style matches Aura theme (amber accent, dark background)
+        self._send_button.setStyleSheet(
+            "QPushButton#send_button {"
+            "  background-color: #2a170a;"
+            "  color: #dcdcdc;"
+            "  border: 1px solid #FFB74D;"
+            "  border-radius: 5px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton#send_button:hover {"
+            "  background-color: #FFB74D;"
+            "  color: #2a170a;"
+            "}"
+        )
+
+        layout.addWidget(self._text_edit, 5)
+        layout.addWidget(self._send_button)
 
     def take_message(self) -> Optional[Tuple[str, NormalizedAttachment]]:
         """
@@ -52,6 +79,10 @@ class ChatInputWidget(QWidget):
         Restore focus to the text edit.
         """
         self._text_edit.setFocus()
+
+    def _handle_send(self) -> None:
+        """Emit the message request when the send button is pressed."""
+        self.message_requested.emit()
 
     def setEnabled(self, enabled: bool) -> None:  # noqa: D401 - QWidget signature
         super().setEnabled(enabled)

@@ -24,7 +24,7 @@ TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
     },
     "claude_code": {
         "label": "Claude Code",
-        "command_template": "claude-code"  # Or just "claude"?
+        "command_template": "claude"  # Correct executable name
     },
 }
 
@@ -74,8 +74,12 @@ def _normalize_terminal_selection(value: Any) -> str:
 def _infer_terminal_preset_from_command(command: Optional[str]) -> str:
     if not command:
         return "codex"
+    normalized = command.strip()
+    # Support legacy alias where the executable was named 'claude-code'
+    if normalized in {"claude", "claude-code"}:
+        return "claude_code"
     for key, preset in TERMINAL_AGENT_PRESETS.items():
-        if command.strip() == preset["command_template"].strip():
+        if normalized == preset["command_template"].strip():
             return key
     return "custom"
 

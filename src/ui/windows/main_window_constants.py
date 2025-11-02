@@ -12,6 +12,16 @@ AURA_ASCII_BANNER = """
       A U T O N O M O U S  V I R T U A L  M A C H I N E
     """
 
+AURA_ASCII_BANNER = """
+        █████╗ ██╗   ██╗██████╗  █████╗
+       ██╔══██╗██║   ██║██╔══██╗██╔══██╗
+       ███████║██║   ██║██████╔╝███████║
+       ██╔══██║██║   ██║██╔══██╗██╔══██║
+       ██║  ██║╚██████╔╝██║  ██║██║  ██║
+       ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
+   A U T O N O M O U S   V I R T U A L   M A C H I N E
+"""
+
 AURA_STYLESHEET = """
         QMainWindow, QWidget {
             background-color: #000000;
