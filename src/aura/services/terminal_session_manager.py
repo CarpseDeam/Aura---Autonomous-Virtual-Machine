@@ -260,15 +260,19 @@ class TerminalSessionManager:
             logger.debug("Process for task %s has no pipes; skipping I/O capture", task_id)
             return
 
+        logger.info("Starting I/O capture for task %s (pid=%s)", task_id, getattr(process, "pid", None))
+
         io_state = TerminalSessionManager._ProcessIO(process=process)
         self._io_registry[task_id] = io_state
 
         def _reader(stream, target: Deque[str], channel: str) -> None:
+            logger.debug("I/O reader thread started for task %s (%s)", task_id, channel)
             try:
                 # Read line by line to avoid blocking on partial buffers
                 while True:
                     line = stream.readline()
                     if not line:
+                        logger.debug("EOF reached for task %s (%s)", task_id, channel)
                         break
                     try:
                         text = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
@@ -277,13 +281,15 @@ class TerminalSessionManager:
                     # Strip trailing newline and buffer + notify
                     self._buffer_and_dispatch(task_id, io_state, target, text.rstrip("\n"), channel)
             except Exception as exc:
-                logger.debug("I/O reader for task %s (%s) stopped: %s", task_id, channel, exc)
+                logger.error("I/O reader for task %s (%s) failed: %s", task_id, channel, exc, exc_info=True)
 
         # Launch daemon threads
         if process.stdout is not None:
+            logger.debug("Launching stdout reader thread for task %s", task_id)
             t_out = threading.Thread(target=_reader, args=(process.stdout, io_state.stdout_buffer, "stdout"), daemon=True)
             t_out.start()
         if process.stderr is not None:
+            logger.debug("Launching stderr reader thread for task %s", task_id)
             t_err = threading.Thread(target=_reader, args=(process.stderr, io_state.stderr_buffer, "stderr"), daemon=True)
             t_err.start()
 

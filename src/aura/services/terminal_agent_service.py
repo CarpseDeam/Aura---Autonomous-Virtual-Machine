@@ -410,6 +410,12 @@ class TerminalAgentService:
         Persist the specification and launch the external agent.
         """
         project_root = self._resolve_project_root(spec)
+        logger.debug(
+            "Project root resolved for task %s: %s (project_name=%s)",
+            spec.task_id,
+            project_root,
+            getattr(spec, "project_name", None),
+        )
         spec_path = self._persist_specification(spec)
 
         self._write_agents_md(project_root, spec)
@@ -486,6 +492,12 @@ class TerminalAgentService:
             RuntimeError: If process spawn fails or workspace setup fails
         """
         project_root = self._resolve_project_root(spec)
+        logger.debug(
+            "Project root resolved for supervised task %s: %s (project_name=%s)",
+            spec.task_id,
+            project_root,
+            getattr(spec, "project_name", None),
+        )
         spec_path = self._persist_specification(spec)
         self._write_agents_md(project_root, spec)
 
@@ -760,14 +772,24 @@ class TerminalAgentService:
 
     def _resolve_project_root(self, spec: AgentSpecification) -> Path:
         base_root = self.workspace_root
-        if spec.project_name:
-            candidate = (base_root / spec.project_name).resolve()
+        name = (spec.project_name or "").strip() if getattr(spec, "project_name", None) else ""
+
+        # Treat metadata directory names as invalid project roots
+        if name in {self.SPEC_DIR_NAME}:
+            logger.error(
+                "Invalid project_name '%s' on specification; using workspace root instead.",
+                name,
+            )
+            name = ""
+
+        if name:
+            candidate = (base_root / name).resolve()
             try:
                 candidate.relative_to(base_root.resolve())
             except ValueError:
                 logger.warning(
                     "Project name '%s' resolved outside workspace; defaulting to workspace root.",
-                    spec.project_name,
+                    name,
                 )
                 candidate = base_root
         else:

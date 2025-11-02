@@ -48,6 +48,11 @@ class BlueprintHandler:
         """
         user_text = action.get_param("request", "")
         generation_context = self.project_resolver.determine_generation_context(user_text, ctx)
+        logger.debug(
+            "Generation context resolved: mode=%s, project_name=%s",
+            generation_context.mode,
+            generation_context.project_name,
+        )
         architect_prompt = self.prompts.render(
             "architect.jinja2",
             user_text=user_text,
@@ -69,6 +74,10 @@ class BlueprintHandler:
                 blueprint.setdefault("project_name", project)
                 blueprint.setdefault("project_slug", project)
 
+        if isinstance(blueprint, dict):
+            logger.debug("Blueprint returned project_name: %s", blueprint.get("project_name"))
+            logger.debug("Blueprint returned project_slug: %s", blueprint.get("project_slug"))
+
         self.project_resolver.activate_project_from_blueprint(
             blueprint if isinstance(blueprint, dict) else {},
             generation_context,
@@ -83,11 +92,41 @@ class BlueprintHandler:
             f"Blueprint ready: {len(planned_files)} file{'s' if len(planned_files) != 1 else ''}"
         )
 
-        project_name = (
-            generation_context.project_name
-            or (blueprint.get("project_name") if isinstance(blueprint, dict) else None)
-            or self.project_resolver.current_project_name
-        )
+        # Resolve the project name for the outgoing specification with strict rules:
+        # - In EDIT mode: always use the matched project from generation_context
+        # - In CREATE mode: prefer blueprint project_slug/name, then active context project
+        # - Never allow metadata directory names like ".aura" to be used
+        invalid_project_names = {".aura"}
+        resolved_name: Optional[str]
+        if generation_context.mode == "edit":
+            resolved_name = generation_context.project_name
+        else:
+            bp_name = None
+            if isinstance(blueprint, dict):
+                bp_name = (
+                    blueprint.get("project_slug")
+                    or blueprint.get("project_name")
+                    or blueprint.get("slug")
+                    or blueprint.get("name")
+                )
+            resolved_name = (str(bp_name).strip() if isinstance(bp_name, str) and bp_name.strip() else None) or (
+                (ctx.active_project.strip() if getattr(ctx, "active_project", None) else None)
+            ) or self.project_resolver.current_project_name
+
+        # Final guard: never propagate an invalid/metadata project name
+        if isinstance(resolved_name, str) and resolved_name.strip() in invalid_project_names:
+            logger.warning(
+                "Resolved project_name '%s' is invalid for specifications; falling back to workspace root",
+                resolved_name,
+            )
+            resolved_name = None
+
+        # Default to a safe project when still unresolved
+        if not resolved_name:
+            resolved_name = "default_project"
+
+        project_name = resolved_name
+        logger.debug("Resolved spec project_name: %s", project_name)
 
         task_id = str(uuid.uuid4())
         prompt_content = self._render_terminal_prompt(
