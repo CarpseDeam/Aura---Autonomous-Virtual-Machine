@@ -14,6 +14,7 @@ from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.terminal_session_manager import TerminalSessionManager
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor, WorkspaceChanges
 from src.aura.services.workspace_service import WorkspaceService
+from src.aura.services.mcp.mcp_client_service import MCPClientService
 
 from .blueprint_handler import BlueprintHandler
 from .code_sanitizer import CodeSanitizer
@@ -22,6 +23,7 @@ from .file_operations import FileOperations
 from .project_resolver import ProjectResolver
 from .terminal_supervisor import TerminalSupervisor
 from .prompt_builder import PromptBuilder
+from .mcp_handler import MCPHandler
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,10 @@ class AuraExecutor:
         )
         self.terminal_supervisor = TerminalSupervisor(terminal_session_manager)
 
+        # MCP: client + handler
+        self.mcp_client = MCPClientService()
+        self.mcp_handler = MCPHandler(self.mcp_client)
+
         self._tools: Dict[ActionType, Handler] = {
             ActionType.DESIGN_BLUEPRINT: self._handle_design_blueprint,
             ActionType.REFINE_CODE: self._handle_refine_code,
@@ -81,6 +87,12 @@ class AuraExecutor:
             ActionType.READ_FILE: self.file_operations.execute_read_file,
             ActionType.READ_TERMINAL_OUTPUT: self.terminal_supervisor.execute_read_terminal_output,
             ActionType.SEND_TO_TERMINAL: self.terminal_supervisor.execute_send_to_terminal,
+            # MCP actions
+            ActionType.MCP_START_SERVER: self._handle_mcp_start_server,
+            ActionType.MCP_STOP_SERVER: self._handle_mcp_stop_server,
+            ActionType.MCP_LIST_TOOLS: self._handle_mcp_list_tools,
+            ActionType.MCP_CALL_TOOL: self._handle_mcp_call_tool,
+            ActionType.MCP_SERVER_STATUS: self._handle_mcp_server_status,
         }
 
     def execute(self, action: Action, project_context: ProjectContext) -> Any:
@@ -90,6 +102,54 @@ class AuraExecutor:
             logger.warning("Unsupported action type requested: %s", action.type)
             raise RuntimeError(f"Unsupported action type: {action.type}")
         return tool(action, project_context)
+
+    # -- MCP handlers ---------------------------------------------------------------
+
+    def _handle_mcp_start_server(self, action: Action, context: ProjectContext) -> dict:
+        template = action.get_param("template")
+        if not template:
+            raise RuntimeError("Missing 'template' parameter for MCP_START_SERVER")
+        root = action.get_param("root")
+        overrides = action.get_param("overrides")
+        logger.info("Starting MCP server from template %s", template)
+        return self.mcp_handler.start_server(template=template, root=root, overrides=overrides)
+
+    def _handle_mcp_stop_server(self, action: Action, context: ProjectContext) -> dict:
+        server_id = action.get_param("server_id")
+        if not server_id:
+            raise RuntimeError("Missing 'server_id' parameter for MCP_STOP_SERVER")
+        logger.info("Stopping MCP server %s", server_id)
+        return self.mcp_handler.stop_server(server_id=server_id)
+
+    def _handle_mcp_list_tools(self, action: Action, context: ProjectContext) -> dict:
+        server_id = action.get_param("server_id")
+        if not server_id:
+            raise RuntimeError("Missing 'server_id' parameter for MCP_LIST_TOOLS")
+        logger.info("Listing tools for MCP server %s", server_id)
+        return self.mcp_handler.list_tools(server_id=server_id)
+
+    def _handle_mcp_call_tool(self, action: Action, context: ProjectContext) -> dict:
+        server_id = action.get_param("server_id")
+        tool_name = action.get_param("tool_name")
+        arguments = action.get_param("arguments", {})
+        timeout = action.get_param("timeout")
+        if not server_id or not tool_name:
+            raise RuntimeError("Missing 'server_id' or 'tool_name' for MCP_CALL_TOOL")
+        logger.info("Calling tool %s on MCP server %s", tool_name, server_id)
+        return self.mcp_handler.call_tool(server_id=server_id, tool_name=tool_name, arguments=arguments, timeout=timeout)
+
+    def _handle_mcp_server_status(self, action: Action, context: ProjectContext) -> dict:
+        server_id = action.get_param("server_id")
+        return self.mcp_handler.server_status(server_id=server_id)
+
+    def __del__(self) -> None:
+        try:
+            # Best-effort cleanup of MCP servers
+            if hasattr(self, "mcp_client") and self.mcp_client:
+                self.mcp_client.shutdown_all()
+        except Exception:
+            # Avoid destructor-time exceptions
+            pass
 
     # -- Design & specification generation -------------------------------------------------
 

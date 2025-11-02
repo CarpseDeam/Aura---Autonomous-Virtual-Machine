@@ -16,6 +16,12 @@ class ActionType(str, Enum):
     READ_FILE = "read_file"
     READ_TERMINAL_OUTPUT = "read_terminal_output"
     SEND_TO_TERMINAL = "send_to_terminal"
+    # MCP actions
+    MCP_START_SERVER = "mcp_start_server"
+    MCP_STOP_SERVER = "mcp_stop_server"
+    MCP_LIST_TOOLS = "mcp_list_tools"
+    MCP_CALL_TOOL = "mcp_call_tool"
+    MCP_SERVER_STATUS = "mcp_server_status"
 
 
 class Action(BaseModel):
