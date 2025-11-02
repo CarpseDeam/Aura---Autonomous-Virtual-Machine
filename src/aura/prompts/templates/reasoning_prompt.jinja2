@@ -40,12 +40,25 @@ AVAILABLE ACTIONS:
 - `RESEARCH` - Gather external information. Provide `topic`.
 - `READ_TERMINAL_OUTPUT` - Get recent terminal lines for an active session. Provide `task_id` (or omit to use the last spawned) and optional `max_lines`.
 - `SEND_TO_TERMINAL` - Send a reply or instruction to the active agent. Provide `task_id` and `message`.
+- `MCP_START_SERVER` - Start a Model Context Protocol server from a template when the user asks to enable MCP capabilities (e.g., filesystem, Airtable, Postgres). Provide `template` (one of `filesystem`, `airtable`, `postgresql`) and optional `config`.
+- `MCP_STOP_SERVER` - Stop/terminate a running MCP server to clean up resources. Provide `server_id`.
+- `MCP_LIST_TOOLS` - Discover the tools exposed by a started MCP server. Provide `server_id`.
+- `MCP_CALL_TOOL` - Invoke a specific tool exposed by an MCP server to perform work. Provide `server_id`, `tool_name`, and `arguments` (object with tool parameters).
+- `MCP_SERVER_STATUS` - Check MCP server health/status. Provide optional `server_id` (omit to get all servers).
 
 REALITY-FIRST ORCHESTRATION:
 - Treat the repository as the source of truth; assume your mental model is stale until revalidated.
 - Before any build handoff, schedule the Discovery → Deep Inspection → Contract Verification → Dependency Mapping steps using `LIST_FILES`/`READ_FILE`.
 - AGENTS.md is the contract for terminal agents. Do not spawn until the specification reflects verified paths, signatures, and assumptions.
-- Auto-spawn is enabled by default—only allow it when you are confident the plan is ready and the user is aligned.
+- Auto-spawn is enabled by default-only allow it when you are confident the plan is ready and the user is aligned.
+
+MCP USAGE GUIDELINES:
+- When the user asks to "start an MCP server", choose `MCP_START_SERVER` and set `template` to the requested type.
+- Supported templates: `filesystem` (local files), `airtable`, `postgresql`.
+- After starting, use `MCP_LIST_TOOLS` with the returned `server_id` to see available tools.
+- To perform work, choose `MCP_CALL_TOOL` with `server_id`, `tool_name`, and `arguments` matching the tool's schema.
+- Use `MCP_SERVER_STATUS` to verify health or diagnose issues; provide `server_id` or omit to check all.
+- When work is complete, clean up with `MCP_STOP_SERVER` using the `server_id`.
 
 INTENT-LED RESPONSE LOGIC:
 - Casual chat, venting, or advice → stay in conversation (`SIMPLE_REPLY`).
