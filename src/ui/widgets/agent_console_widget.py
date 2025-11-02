@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Deque, List, Optional, Tuple
 from collections import deque
 
@@ -40,6 +41,7 @@ class AgentConsoleWidget(QWidget):
     def __init__(self, event_bus: EventBus, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.event_bus = event_bus
+        self._logger = logging.getLogger(__name__)
 
         self._active_task_id: Optional[str] = None
         self._pending: Deque[Tuple[str, str, str]] = deque(maxlen=500)  # (task_id, stream, line)
@@ -109,6 +111,7 @@ class AgentConsoleWidget(QWidget):
         self.event_bus.subscribe(TERMINAL_SESSION_FAILED, self._on_session_status)
         self.event_bus.subscribe(TERMINAL_SESSION_TIMEOUT, self._on_session_status)
         self.event_bus.subscribe(TERMINAL_SESSION_ABORTED, self._on_session_status)
+        self._logger.debug("AgentConsoleWidget subscribed to terminal events")
 
     def _on_session_started(self, event: Event) -> None:
         task_id = event.payload.get("task_id")
@@ -116,6 +119,7 @@ class AgentConsoleWidget(QWidget):
             self._active_task_id = task_id
             self._update_active_label()
             self._update_status_badge("running")
+            self._logger.info("AgentConsoleWidget detected session start (task_id=%s)", task_id)
 
     def _on_session_status(self, event: Event) -> None:
         task_id = str(event.payload.get("task_id", ""))
@@ -136,6 +140,12 @@ class AgentConsoleWidget(QWidget):
         text = str(payload.get("text", ""))
         stream = str(payload.get("stream_type", "stdout"))
         timestamp = str(payload.get("timestamp", ""))
+        self._logger.debug(
+            "AgentConsoleWidget received output event (task_id=%s, stream=%s, text_length=%d)",
+            task_id,
+            stream,
+            len(text),
+        )
 
         # Normalize timestamp to [HH:MM:SS]
         time_str = timestamp[-8:] if len(timestamp) >= 8 else timestamp
@@ -145,6 +155,7 @@ class AgentConsoleWidget(QWidget):
         self._pending.append((task_id, stream, line))
         if not self._flush_timer.isActive():
             self._flush_timer.start()
+            self._logger.debug("Starting console flush timer")
 
     def _flush_pending(self) -> None:
         if not self._pending:
@@ -166,6 +177,7 @@ class AgentConsoleWidget(QWidget):
             self.console.moveCursor(self.console.textCursor().End)
             self.console.insertHtml("<br/>".join(lines) + "<br/>")
             self.console.moveCursor(self.console.textCursor().End)
+            self._logger.debug("Updating console display with %d new lines", len(lines))
 
         # Stop timer if queue drained
         if not self._pending:

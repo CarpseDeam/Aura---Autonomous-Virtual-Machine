@@ -517,6 +517,8 @@ class TerminalAgentService:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                bufsize=1,
+                universal_newlines=True,
             )
             logger.info(
                 "Spawned supervised terminal agent (task=%s, pid=%s, command=%s)",
@@ -524,6 +526,16 @@ class TerminalAgentService:
                 process.pid if process else None,
                 agent_tokens,
             )
+            try:
+                logger.debug(
+                    "Process pipes: stdin=%s, stdout=%s, stderr=%s",
+                    process.stdin is not None,
+                    process.stdout is not None,
+                    process.stderr is not None,
+                )
+            except Exception:
+                # Defensive: some environments may not allow accessing pipes
+                logger.debug("Unable to log process pipe status for task %s", spec.task_id)
         except Exception as exc:
             logger.error(
                 "Failed to spawn supervised agent for task %s: %s", spec.task_id, exc, exc_info=True

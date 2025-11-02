@@ -260,13 +260,20 @@ class TerminalSessionManager:
             logger.debug("Process for task %s has no pipes; skipping I/O capture", task_id)
             return
 
-        logger.info("Starting I/O capture for task %s (pid=%s)", task_id, getattr(process, "pid", None))
+        pid = getattr(process, "pid", None)
+        logger.debug("Starting I/O capture for task %s (pid=%s)", task_id, pid)
+        logger.debug(
+            "Process has stdout/stderr pipes: %s/%s",
+            process.stdout is not None,
+            process.stderr is not None,
+        )
 
         io_state = TerminalSessionManager._ProcessIO(process=process)
         self._io_registry[task_id] = io_state
+        logger.debug("Created I/O state for task %s", task_id)
 
         def _reader(stream, target: Deque[str], channel: str) -> None:
-            logger.debug("I/O reader thread started for task %s (%s)", task_id, channel)
+            logger.debug("I/O reader thread started for task %s (channel=%s)", task_id, channel)
             try:
                 # Read line by line to avoid blocking on partial buffers
                 while True:
@@ -278,6 +285,8 @@ class TerminalSessionManager:
                         text = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
                     except Exception:
                         text = str(line)
+                    preview = text[:100].rstrip("\n")
+                    logger.debug("Read from %s (task=%s): %s", channel, task_id, preview)
                     # Strip trailing newline and buffer + notify
                     self._buffer_and_dispatch(task_id, io_state, target, text.rstrip("\n"), channel)
             except Exception as exc:
@@ -380,9 +389,16 @@ class TerminalSessionManager:
                     "stream_type": channel,
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                 }
+                logger.debug(
+                    "About to dispatch TERMINAL_OUTPUT_RECEIVED (task=%s, stream=%s, text_length=%d)",
+                    task_id,
+                    channel,
+                    len(text),
+                )
                 self.event_bus.dispatch(Event(event_type=TERMINAL_OUTPUT_RECEIVED, payload=payload))
+                logger.debug("Event dispatched successfully (task=%s, stream=%s)", task_id, channel)
             except Exception as exc:
-                logger.debug("Failed dispatching terminal output event for %s: %s", task_id, exc)
+                logger.error("Failed dispatching terminal output event for %s: %s", task_id, exc, exc_info=True)
 
     def _check_completion_signals(self, status: SessionStatus) -> Optional[Dict]:
         """
