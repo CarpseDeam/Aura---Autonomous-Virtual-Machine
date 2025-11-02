@@ -152,8 +152,12 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
     command = service._build_terminal_command(spec_path, project_root)
 
     assert isinstance(command, list)
-    assert any("--dangerously-skip-permissions" in part for part in command), "Claude command should skip approvals"
-    assert any("claude-code --dangerously-skip-permissions -".strip() in part for part in command), "Claude command should read from stdin via '-'"
+    # On Unix with no emulator, we run: ["bash", "-c", headless_cmd]
+    # Ensure headless flags are included and prompt passed via -p
+    assert any("--dangerously-skip-permissions" in str(part) for part in command), "Claude command should skip approvals"
+    combined = " ".join(str(p) for p in command)
+    assert " -p " in combined or combined.endswith(" -p"), "Claude headless mode should pass prompt with -p"
+    assert "cat " in combined and "AGENTS.md" in combined, "Claude headless command should source AGENTS.md content"
 
 
 def test_spawn_agent_creates_codex_config_on_windows(
