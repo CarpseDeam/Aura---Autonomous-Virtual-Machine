@@ -26,6 +26,7 @@ class ToolbarWidget(QWidget):
     switch_project_requested = Signal()
     import_project_requested = Signal()
     configure_requested = Signal()
+    console_toggle_requested = Signal()
 
     def __init__(self, *, auto_accept_enabled: bool, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -87,6 +88,12 @@ class ToolbarWidget(QWidget):
             icon=self._resolve_icon(configure_icon),
         )
 
+        btn_console_toggle = self._create_icon_button(
+            tooltip="Toggle Agent Console",
+            handler=self.console_toggle_requested.emit,
+            icon=self._resolve_icon(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)),
+        )
+
         self._token_display = TokenDisplayWidget(self)
         self._auto_accept_label = QLabel(self)
         self._auto_accept_label.setObjectName("auto_accept_label")
@@ -98,6 +105,7 @@ class ToolbarWidget(QWidget):
         layout.addWidget(btn_new_project)
         layout.addWidget(btn_switch_project)
         layout.addWidget(btn_import_project)
+        layout.addWidget(btn_console_toggle)
         layout.addWidget(btn_configure)
         layout.addWidget(self._token_display)
         layout.addWidget(self._auto_accept_label)

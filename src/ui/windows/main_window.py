@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self.toolbar.switch_project_requested.connect(self.project_actions.open_project_switcher)
         self.toolbar.import_project_requested.connect(self.project_actions.import_project)
         self.toolbar.configure_requested.connect(self._open_settings_dialog)
+        self.toolbar.console_toggle_requested.connect(self._toggle_agent_console)
 
         self.chat_input.message_requested.connect(self._handle_message_requested)
         self.chat_display.anchor_requested.connect(self._event_controller.handle_anchor_clicked)
@@ -130,6 +131,10 @@ class MainWindow(QMainWindow):
         if self.settings_window is None:
             self.settings_window = SettingsWindow(self.event_bus)
         self.settings_window.show()
+
+    def _toggle_agent_console(self) -> None:
+        is_visible = self.agent_console.isVisible()
+        self.agent_console.setVisible(not is_visible)
 
     def _handle_message_requested(self) -> None:
         result = self.chat_input.take_message()

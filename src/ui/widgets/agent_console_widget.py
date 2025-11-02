@@ -19,6 +19,10 @@ from src.aura.models.events import Event
 from src.aura.models.event_types import (
     TERMINAL_OUTPUT_RECEIVED,
     TERMINAL_SESSION_STARTED,
+    TERMINAL_SESSION_COMPLETED,
+    TERMINAL_SESSION_FAILED,
+    TERMINAL_SESSION_TIMEOUT,
+    TERMINAL_SESSION_ABORTED,
 )
 
 
@@ -65,6 +69,15 @@ class AgentConsoleWidget(QWidget):
         self.active_label.setFont(QFont("JetBrains Mono", 9))
         self.active_label.setStyleSheet("color: #00aa00;")
         header.addWidget(self.active_label)
+
+        # Status badge
+        self.status_badge = QLabel("Idle")
+        self.status_badge.setObjectName("status_badge")
+        self.status_badge.setAlignment(Qt.AlignCenter)
+        self.status_badge.setMinimumWidth(70)
+        self.status_badge.setFont(QFont("JetBrains Mono", 9, QFont.Bold))
+        self._set_badge_style("idle")
+        header.addWidget(self.status_badge)
         header.addStretch()
 
         clear_button = QPushButton("Clear")
@@ -92,12 +105,30 @@ class AgentConsoleWidget(QWidget):
     def _subscribe_events(self) -> None:
         self.event_bus.subscribe(TERMINAL_OUTPUT_RECEIVED, self._on_output)
         self.event_bus.subscribe(TERMINAL_SESSION_STARTED, self._on_session_started)
+        self.event_bus.subscribe(TERMINAL_SESSION_COMPLETED, self._on_session_status)
+        self.event_bus.subscribe(TERMINAL_SESSION_FAILED, self._on_session_status)
+        self.event_bus.subscribe(TERMINAL_SESSION_TIMEOUT, self._on_session_status)
+        self.event_bus.subscribe(TERMINAL_SESSION_ABORTED, self._on_session_status)
 
     def _on_session_started(self, event: Event) -> None:
         task_id = event.payload.get("task_id")
         if isinstance(task_id, str) and task_id:
             self._active_task_id = task_id
             self._update_active_label()
+            self._update_status_badge("running")
+
+    def _on_session_status(self, event: Event) -> None:
+        task_id = str(event.payload.get("task_id", ""))
+        if not self._active_task_id or task_id != self._active_task_id:
+            return
+        mapping = {
+            TERMINAL_SESSION_COMPLETED: "completed",
+            TERMINAL_SESSION_FAILED: "failed",
+            TERMINAL_SESSION_TIMEOUT: "timeout",
+            TERMINAL_SESSION_ABORTED: "aborted",
+        }
+        status_key = mapping.get(event.event_type, "idle")
+        self._update_status_badge(status_key)
 
     def _on_output(self, event: Event) -> None:
         payload = event.payload
@@ -149,6 +180,8 @@ class AgentConsoleWidget(QWidget):
 
     def clear(self) -> None:
         self.console.clear()
+        if not self._active_task_id:
+            self._update_status_badge("idle")
 
     @staticmethod
     def _escape_html(s: str) -> str:
@@ -160,3 +193,21 @@ class AgentConsoleWidget(QWidget):
             .replace("'", "&#39;")
         )
 
+    def _update_status_badge(self, status: str) -> None:
+        self.status_badge.setText(status.upper())
+        self._set_badge_style(status)
+
+    def _set_badge_style(self, status: str) -> None:
+        styles = {
+            "running": ("#1a3a1a", "#00ff00", "#003300"),
+            "completed": ("#1a2a1a", "#00ff00", "#003300"),
+            "failed": ("#3a1a1a", "#ff5555", "#550000"),
+            "timeout": ("#3a2a1a", "#ffcc66", "#664400"),
+            "aborted": ("#2a2a2a", "#cccccc", "#444444"),
+            "idle": ("#1f1f1f", "#aaaaaa", "#333333"),
+        }
+        bg, fg, border = styles.get(status, styles["idle"])
+        self.status_badge.setStyleSheet(
+            f"QLabel#status_badge {{ background-color: {bg}; color: {fg}; border: 1px solid {border};"
+            " padding: 2px 6px; border-radius: 6px; }}"
+        )
