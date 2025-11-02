@@ -27,7 +27,7 @@ except ImportError:
     psutil = None  # type: ignore[assignment]
     PSUTIL_AVAILABLE = False
 
-from src.aura.models.agent_task import TerminalSession
+from src.aura.models.agent_task import TerminalSession, TaskSummary
 from src.aura.models.event_types import (
     TERMINAL_SESSION_STARTED,
     TERMINAL_SESSION_PROGRESS,
@@ -186,6 +186,23 @@ class TerminalSessionManager:
                     if status.process_exit_code is not None:
                         payload["exit_code"] = status.process_exit_code
 
+                    # Attach summary.json if present
+                    try:
+                        summary_path = self.workspace_root / ".aura" / f"{task_id}.summary.json"
+                        if summary_path.exists():
+                            import json as _json
+                            raw = summary_path.read_text(encoding="utf-8")
+                            parsed = _json.loads(raw)
+                            try:
+                                payload["summary"] = TaskSummary(**parsed).model_dump()
+                            except Exception:
+                                if isinstance(parsed, dict):
+                                    payload["summary"] = parsed
+                    except Exception as exc:
+                        logger.warning(
+                            "Unable to attach summary for task %s: %s", task_id, exc
+                        )
+
                     # Choose event type based on status
                     if status.status == "completed":
                         event_type = TERMINAL_SESSION_COMPLETED
@@ -247,9 +264,26 @@ class TerminalSessionManager:
         # Signal 3: Check for completion marker file
         marker_file = self.workspace_root / ".aura" / f"{task_id}.done"
         if marker_file.exists():
+            summary_path = self.workspace_root / ".aura" / f"{task_id}.summary.json"
+            summary_data: Optional[dict] = None
+            if summary_path.exists():
+                try:
+                    raw = summary_path.read_text(encoding="utf-8")
+                    import json as _json
+                    parsed = _json.loads(raw)
+                    try:
+                        summary = TaskSummary(**parsed)
+                        summary_data = summary.model_dump()
+                    except Exception:
+                        summary_data = parsed if isinstance(parsed, dict) else None
+                except Exception as exc:
+                    logger.error(
+                        "Failed to read summary.json for task %s: %s", task_id, exc, exc_info=True
+                    )
             return {
                 "status": "completed",
                 "reason": "Completion marker file found",
+                "summary": summary_data,
             }
 
         # Signal 4: Check for workspace change stabilization

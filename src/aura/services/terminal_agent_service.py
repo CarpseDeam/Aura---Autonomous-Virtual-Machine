@@ -91,29 +91,33 @@ class TerminalAgentService:
                 logger.debug("Constructed Windows Codex command: %s", windows_command)
                 return windows_command
 
-            # Claude Code: Use Windows Terminal (required for raw mode stdin)
+            # Claude Code: Launch in headless mode with -p and AGENTS.md content
             if agent_tokens and agent_tokens[0].lower() in {"claude", "claude-code", "claude.exe"}:
-                windows_command = self._build_windows_terminal_command(
-                    agent_command,
-                    agents_md_path,
-                    project_root,
+                windows_command = self._build_windows_claude_headless_command(
+                    agents_md_path=agents_md_path,
+                    project_root=project_root,
                 )
-                logger.debug("Constructed Windows Terminal command for Claude Code: %s", windows_command)
+                logger.debug("Constructed Windows headless command for Claude Code: %s", windows_command)
                 return windows_command
 
             # Default: Try Windows Terminal, fallback to PowerShell
             logger.debug("Unknown agent type on Windows, attempting Windows Terminal")
             return self._build_windows_terminal_command(agent_command, agents_md_path, project_root)
         else:
-            # Unix: Pipe AGENTS.md with 2-second delay
+            # Unix: Launch Claude in headless mode with -p and AGENTS.md content when applicable
+            first_token = agent_tokens[0].lower() if agent_tokens else ""
             agents_md_quoted = shlex.quote(str(agents_md_path))
-            delayed_command = f"sleep 2 && cat {agents_md_quoted} | {agent_command}"
+            if first_token in {"claude", "claude-code"}:
+                headless_cmd = f"CLAUDE_PROMPT=$(cat {agents_md_quoted}) && claude -p \"$CLAUDE_PROMPT\" --dangerously-skip-permissions"
+            else:
+                # Default behaviour for non-Claude agents: keep previous pipe with slight delay
+                headless_cmd = f"sleep 2 && cat {agents_md_quoted} | {agent_command}"
 
             # Unix: Try to find an available terminal emulator
             terminal_emulators = [
-                ("gnome-terminal", ["--", "bash", "-c", f"{delayed_command}; exec bash"]),
-                ("konsole", ["-e", "bash", "-c", f"{delayed_command}; exec bash"]),
-                ("xterm", ["-hold", "-e", "bash", "-c", delayed_command]),
+                ("gnome-terminal", ["--", "bash", "-c", f"{headless_cmd}; exec bash"]),
+                ("konsole", ["-e", "bash", "-c", f"{headless_cmd}; exec bash"]),
+                ("xterm", ["-hold", "-e", "bash", "-c", headless_cmd]),
             ]
 
             # Try each terminal emulator until we find one that exists
@@ -125,7 +129,7 @@ class TerminalAgentService:
 
             # Fallback: just run bash directly (won't be visible on Unix without terminal)
             logger.warning("No terminal emulator found, falling back to direct bash execution")
-            return ["bash", "-c", delayed_command]
+            return ["bash", "-c", headless_cmd]
 
     def _build_windows_passthrough_command(self, agent_command: str, agents_md_path: Path) -> List[str]:
         """
@@ -178,18 +182,11 @@ class TerminalAgentService:
         is_claude_code = first_token in {"claude", "claude-code", "claude.exe"}
 
         if is_claude_code:
-            # Launch Claude Code WITHOUT piping so it can use raw mode on real stdin
-            logger.debug(
-                "Launching Claude Code without piping AGENTS.md (cwd=%s)", project_root
+            # Prefer headless mode for Claude: pass AGENTS.md content via -p
+            return self._build_windows_claude_headless_command(
+                agents_md_path=agents_md_path,
+                project_root=project_root,
             )
-            return [
-                "wt.exe",
-                "-d",
-                str(project_root),
-                "cmd",
-                "/c",
-                agent_command,
-            ]
 
         # For other agents that don't require raw mode, keep the pipe behavior
         agents_md_literal = str(agents_md_path).replace('"', '""')
@@ -204,6 +201,35 @@ class TerminalAgentService:
             "cmd",
             "/c",
             delayed_command,
+        ]
+
+    def _build_windows_claude_headless_command(self, agents_md_path: Path, project_root: Path) -> List[str]:
+        """
+        Build a Windows Terminal command that invokes Claude Code headlessly:
+        - Reads AGENTS.md content in PowerShell with proper encoding
+        - Passes content via the -p argument (headless mode)
+        - Skips permission prompts via --dangerously-skip-permissions
+
+        Quote handling:
+        We avoid fragile cmd.exe quoting by invoking PowerShell directly and
+        using Get-Content -Raw to construct the prompt string, then passing it
+        as a single argument to the Claude CLI.
+        """
+        agents_md_literal = str(agents_md_path).replace("'", "''")
+        ps_command = (
+            f"$p = Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'; "
+            "claude -p $p --dangerously-skip-permissions"
+        )
+        logger.debug("Preparing Windows headless PowerShell command for Claude Code")
+        return [
+            "wt.exe",
+            "-d",
+            str(project_root),
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            ps_command,
         ]
 
     def _build_windows_codex_command(

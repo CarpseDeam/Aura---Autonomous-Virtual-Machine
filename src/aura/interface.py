@@ -17,6 +17,7 @@ from src.aura.services.conversation_management_service import ConversationManage
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.project.project_manager import ProjectManager
 from src.aura.worker import BrainExecutorWorker
+from src.aura.models.event_types import TERMINAL_SESSION_COMPLETED
 
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,65 @@ class AuraInterface:
             self.event_bus.subscribe("ITERATION_INITIALIZED", self._handle_iteration_initialized)
             self.event_bus.subscribe("ITERATION_PROGRESS", self._handle_iteration_progress)
             self.event_bus.subscribe("ITERATION_STOPPED", self._handle_iteration_stopped)
+
+        # Present terminal completion results nicely in the chat stream
+        self.event_bus.subscribe(TERMINAL_SESSION_COMPLETED, self._handle_terminal_completed)
+
+    def _handle_terminal_completed(self, event: Event) -> None:
+        """Render a concise completion summary for terminal agent sessions.
+
+        Expects payload fields:
+        - task_id: str
+        - duration_seconds: float
+        - completion_reason: str
+        - summary: optional dict with keys matching TaskSummary
+        """
+        try:
+            payload = event.payload or {}
+            task_id = payload.get("task_id", "?")
+            duration = payload.get("duration_seconds")
+            summary = payload.get("summary") or {}
+            status = summary.get("status") or "completed"
+            created = summary.get("files_created") or []
+            modified = summary.get("files_modified") or []
+            deleted = summary.get("files_deleted") or []
+            errors = summary.get("errors") or []
+            warnings = summary.get("warnings") or []
+            suggestions = summary.get("suggestions") or []
+
+            created_n = len(created)
+            modified_n = len(modified)
+            deleted_n = len(deleted)
+
+            header = f"✨ Task {task_id} {status}!"
+            parts = []
+            if any([created_n, modified_n, deleted_n]):
+                parts.append(
+                    f"Files: created {created_n}, modified {modified_n}, deleted {deleted_n}."
+                )
+            else:
+                parts.append("No file changes recorded.")
+
+            if errors:
+                parts.append("Errors:\n- " + "\n- ".join(str(e) for e in errors))
+            if warnings:
+                parts.append("Warnings:\n- " + "\n- ".join(str(w) for w in warnings))
+
+            if suggestions:
+                parts.append("Next steps:\n- " + "\n- ".join(str(s) for s in suggestions))
+
+            if duration is not None:
+                parts.append(f"Duration: {duration:.1f}s")
+
+            message = header + "\n" + "\n".join(parts)
+
+            # Stream as a single assistant message for UI
+            self.event_bus.dispatch(
+                Event(event_type="MODEL_CHUNK_RECEIVED", payload={"chunk": message})
+            )
+            self.event_bus.dispatch(Event(event_type="MODEL_STREAM_ENDED", payload={}))
+        except Exception as exc:
+            logger.error("Failed to present terminal completion summary: %s", exc, exc_info=True)
 
     def _handle_project_language_detected(self, event: Event) -> None:
         """Update current language from WorkspaceService detection events."""

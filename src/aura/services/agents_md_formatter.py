@@ -94,8 +94,17 @@ def format_specification_for_codex(spec: AgentSpecification) -> str:
         lines.extend(f"- {path}" for path in watch_paths)
 
     lines.append("")
-    lines.append("## Completion Marker")
-    lines.append(f"- Write `.aura/{spec.task_id}.done` with a short summary when the task is finished.")
+    lines.append("## Completion & Summary")
+    lines.append(f"- Write `.aura/{spec.task_id}.done` when the task is finished.")
+    lines.append(f"- Also write `.aura/{spec.task_id}.summary.json` capturing:")
+    lines.append("  - status: one of `completed`, `failed`, or `partial`")
+    lines.append("  - files_created: list of file paths created")
+    lines.append("  - files_modified: list of file paths modified")
+    lines.append("  - files_deleted: list of file paths deleted")
+    lines.append("  - errors: list of error strings (if any)")
+    lines.append("  - warnings: list of warning strings (if any)")
+    lines.append("  - execution_time_seconds: total number of seconds taken")
+    lines.append("  - suggestions: list of concise next-step suggestions")
 
     return "\n".join(lines).strip() + "\n"
 
