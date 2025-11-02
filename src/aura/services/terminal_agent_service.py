@@ -42,6 +42,17 @@ class TerminalAgentService:
         logger.info("TerminalAgentService ready (spec dir: %s, template: %s)",
                    self.spec_dir, self.agent_command_template)
 
+    def _has_windows_terminal(self) -> bool:
+        """
+        Check if Windows Terminal (wt.exe) is available on the system.
+
+        Returns:
+            True if Windows Terminal is found, False otherwise.
+        """
+        import shutil
+        wt_path = shutil.which("wt") or shutil.which("wt.exe")
+        return wt_path is not None
+
     def _build_terminal_command(self, spec_path: Path, project_root: Path) -> List[str]:
         """
         Build a platform-specific command that opens a visible terminal and runs the agent.
@@ -70,6 +81,7 @@ class TerminalAgentService:
         agent_command = " ".join(agent_tokens) if agent_tokens else agent_command_template
 
         if is_windows:
+            # Codex: Use special Windows command with auto-approval bypass
             if agent_tokens and agent_tokens[0].lower() in {"codex", "codex.exe"}:
                 windows_command = self._build_windows_codex_command(
                     agent_tokens,
@@ -79,7 +91,19 @@ class TerminalAgentService:
                 logger.debug("Constructed Windows Codex command: %s", windows_command)
                 return windows_command
 
-            return self._build_windows_passthrough_command(agent_command, agents_md_path)
+            # Claude Code: Use Windows Terminal (required for raw mode stdin)
+            if agent_tokens and agent_tokens[0].lower() in {"claude", "claude-code", "claude.exe"}:
+                windows_command = self._build_windows_terminal_command(
+                    agent_command,
+                    agents_md_path,
+                    project_root,
+                )
+                logger.debug("Constructed Windows Terminal command for Claude Code: %s", windows_command)
+                return windows_command
+
+            # Default: Try Windows Terminal, fallback to PowerShell
+            logger.debug("Unknown agent type on Windows, attempting Windows Terminal")
+            return self._build_windows_terminal_command(agent_command, agents_md_path, project_root)
         else:
             # Unix: Pipe AGENTS.md with 2-second delay
             agents_md_quoted = shlex.quote(str(agents_md_path))
@@ -115,6 +139,52 @@ class TerminalAgentService:
             "-NoExit",
             "-Command",
             delayed_command,
+        ]
+
+    def _build_windows_terminal_command(
+        self,
+        agent_command: str,
+        agents_md_path: Path,
+        project_root: Path,
+    ) -> List[str]:
+        """
+        Build command using Windows Terminal (wt.exe) for interactive TUI apps like Claude Code.
+
+        Windows Terminal provides proper stdin/stdout for apps that use raw mode for
+        interactive interfaces (e.g., Claude Code with Ink/React).
+
+        Args:
+            agent_command: The command to execute (e.g., "claude-code -")
+            agents_md_path: Path to AGENTS.md file to pipe to the agent
+            project_root: Project root directory
+
+        Returns:
+            Command list for Windows Terminal execution
+        """
+        if not self._has_windows_terminal():
+            logger.warning(
+                "Windows Terminal (wt.exe) not found. Claude Code requires Windows Terminal "
+                "for interactive mode. Install from: https://aka.ms/terminal"
+            )
+            logger.info(
+                "Alternative: Run Aura inside WSL2 for native terminal support. "
+                "See: https://learn.microsoft.com/en-us/windows/wsl/install"
+            )
+            # Fallback to PowerShell (will likely fail for Claude Code)
+            return self._build_windows_passthrough_command(agent_command, agents_md_path)
+
+        # Escape double quotes in path for cmd.exe
+        agents_md_literal = str(agents_md_path).replace('"', '""')
+
+        # Build command with delay, then pipe AGENTS.md to agent
+        # Using cmd.exe because it's more reliable for piping with Windows Terminal
+        delayed_command = f'timeout /t 2 /nobreak > nul && type "{agents_md_literal}" | {agent_command}'
+
+        # Windows Terminal command: wt.exe -d <working-dir> cmd /c "<command>"
+        return [
+            "wt.exe",
+            "-d", str(project_root),  # Set working directory
+            "cmd", "/c", delayed_command
         ]
 
     def _build_windows_codex_command(
@@ -323,9 +393,16 @@ class TerminalAgentService:
         }
 
         if sys.platform.startswith("win"):
-            # On Windows, create a new visible console window
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
-            logger.debug("Using CREATE_NEW_CONSOLE flag for Windows terminal visibility")
+            # Check if using Windows Terminal (wt.exe)
+            # Windows Terminal creates its own window, so CREATE_NEW_CONSOLE is not needed
+            uses_windows_terminal = command and len(command) > 0 and command[0].lower() in {"wt.exe", "wt"}
+
+            if uses_windows_terminal:
+                logger.debug("Using Windows Terminal - CREATE_NEW_CONSOLE not required")
+            else:
+                # For PowerShell/cmd without wt.exe, create a new visible console window
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+                logger.debug("Using CREATE_NEW_CONSOLE flag for Windows terminal visibility")
         else:
             # On Unix-like systems, the terminal emulator command itself creates a visible window
             logger.debug("Using native terminal emulator for Unix terminal visibility")
