@@ -132,7 +132,7 @@ class AuraInterface:
             logger.info(f"Auto-integrate triggered for task {task_id}")
 
             # Build a context snapshot
-            context = self._build_context(user_text="[Auto-integrate terminal results]")
+            context = self._build_context()
 
             # Create INTEGRATE_RESULTS action
             from src.aura.models.action import Action, ActionType

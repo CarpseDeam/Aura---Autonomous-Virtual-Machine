@@ -40,16 +40,20 @@ class TerminalAgentService:
         logger.info("TerminalAgentService ready (spec dir: %s, template: %s)",
                    self.spec_dir, self.agent_command_template)
 
-    def _build_terminal_command(self, spec_path: Path) -> List[str]:
+    def _build_terminal_command(self, spec_path: Path, project_root: Path) -> List[str]:
         """
         Build a platform-specific command that opens a visible terminal and runs the agent.
 
         Args:
             spec_path: Path to the persisted specification file
+            project_root: Path to the project root directory
 
         Returns:
             Command list ready for subprocess.Popen
         """
+        # Construct AGENTS.md path in project root
+        agents_md_path = project_root / "AGENTS.md"
+
         # Format the agent command with the spec path
         agent_command = self.agent_command_template.format(
             spec_path=str(spec_path),
@@ -57,31 +61,28 @@ class TerminalAgentService:
         ).strip()
 
         if sys.platform.startswith("win"):
-            spec_path_literal = str(spec_path).replace("'", "''")
-            reader_command = f"Get-Content -Raw -Encoding UTF8 '{spec_path_literal}'"
-            pipeline_command = (
-                f"{reader_command} | {agent_command}" if agent_command else reader_command
-            )
+            # Windows: Pipe AGENTS.md with 2-second delay
+            agents_md_literal = str(agents_md_path).replace("'", "''")
+            reader_command = f"Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'"
+            delayed_command = f"Start-Sleep -Seconds 2; {reader_command} | {agent_command}"
 
             # Windows: Use PowerShell with -NoExit to keep window open
             return [
                 "pwsh.exe",
                 "-NoExit",
                 "-Command",
-                pipeline_command,
+                delayed_command,
             ]
         else:
-            spec_path_quoted = shlex.quote(str(spec_path))
-            reader_command = f"cat {spec_path_quoted}"
-            pipeline_command = (
-                f"{reader_command} | {agent_command}" if agent_command else reader_command
-            )
+            # Unix: Pipe AGENTS.md with 2-second delay
+            agents_md_quoted = shlex.quote(str(agents_md_path))
+            delayed_command = f"sleep 2 && cat {agents_md_quoted} | {agent_command}"
 
             # Unix: Try to find an available terminal emulator
             terminal_emulators = [
-                ("gnome-terminal", ["--", "bash", "-c", f"{pipeline_command}; exec bash"]),
-                ("konsole", ["-e", "bash", "-c", f"{pipeline_command}; exec bash"]),
-                ("xterm", ["-hold", "-e", "bash", "-c", pipeline_command]),
+                ("gnome-terminal", ["--", "bash", "-c", f"{delayed_command}; exec bash"]),
+                ("konsole", ["-e", "bash", "-c", f"{delayed_command}; exec bash"]),
+                ("xterm", ["-hold", "-e", "bash", "-c", delayed_command]),
             ]
 
             # Try each terminal emulator until we find one that exists
@@ -93,7 +94,7 @@ class TerminalAgentService:
 
             # Fallback: just run bash directly (won't be visible on Unix without terminal)
             logger.warning("No terminal emulator found, falling back to direct bash execution")
-            return ["bash", "-c", pipeline_command]
+            return ["bash", "-c", delayed_command]
 
     def spawn_agent(
         self,
@@ -117,7 +118,7 @@ class TerminalAgentService:
             command = self.default_command
         else:
             # Build command using template and spec path
-            command = self._build_terminal_command(spec_path)
+            command = self._build_terminal_command(spec_path, project_root)
 
         session_env = os.environ.copy()
         session_env.update(env or {})
