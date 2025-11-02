@@ -470,6 +470,96 @@ class TerminalAgentService:
             process_id=process.pid if process else None,
         )
 
+    def spawn_agent_for_supervision(
+        self,
+        spec: AgentSpecification,
+        *,
+        env: Optional[Dict[str, str]] = None,
+    ) -> tuple[TerminalSession, subprocess.Popen]:
+        """
+        Spawn the agent process with pipes for supervised I/O (no external terminal window).
+
+        Returns:
+            A tuple of (TerminalSession, subprocess handle)
+
+        Raises:
+            RuntimeError: If process spawn fails or workspace setup fails
+        """
+        project_root = self._resolve_project_root(spec)
+        spec_path = self._persist_specification(spec)
+        self._write_agents_md(project_root, spec)
+
+        # Build direct agent command tokens (no terminal wrappers)
+        agent_tokens = self._build_piped_agent_tokens(spec_path, project_root)
+
+        session_env = os.environ.copy()
+        session_env.update(env or {})
+        session_env["AURA_AGENT_SPEC_PATH"] = str(spec_path)
+        session_env["AURA_AGENT_TASK_ID"] = spec.task_id
+
+        try:
+            process = subprocess.Popen(
+                agent_tokens,
+                cwd=str(project_root),
+                env=session_env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            logger.info(
+                "Spawned supervised terminal agent (task=%s, pid=%s, command=%s)",
+                spec.task_id,
+                process.pid if process else None,
+                agent_tokens,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to spawn supervised agent for task %s: %s", spec.task_id, exc, exc_info=True
+            )
+            raise RuntimeError(f"Failed to spawn supervised agent for task {spec.task_id}") from exc
+
+        session = TerminalSession(
+            task_id=spec.task_id,
+            command=list(agent_tokens),
+            spec_path=str(spec_path),
+            process_id=process.pid if process else None,
+        )
+        return session, process
+
+    def _build_piped_agent_tokens(self, spec_path: Path, project_root: Path) -> List[str]:
+        """
+        Build a direct agent command suitable for Popen with pipes.
+
+        This avoids terminal emulator wrappers so stdout/stderr can be captured and stdin
+        can be written to for interactive supervision.
+        """
+        # Start from the template and apply autonomy flags
+        agent_command_template = self.agent_command_template.format(
+            spec_path=str(spec_path),
+            task_id=spec_path.stem,
+        ).strip()
+
+        tokens = self._apply_autonomy_flags(agent_command_template, require_stdin=True)
+        if not tokens:
+            raise RuntimeError("Invalid agent command template")
+
+        exe = tokens[0].lower()
+
+        # Ensure working directory flag for Codex on Windows for consistent behavior
+        if exe in {"codex", "codex.exe"}:
+            tokens = self._ensure_working_directory_flag(tokens, project_root)
+
+        # For Claude, prefer passing a brief -p instruction to read AGENTS.md
+        if exe in {"claude", "claude-code", "claude.exe"}:
+            # Add -p only if not already present
+            if "-p" not in tokens and not any(t.startswith("-p=") for t in tokens):
+                prompt = (
+                    "Read and execute the tasks described in the AGENTS.md file in the working directory."
+                )
+                tokens += ["-p", prompt]
+
+        return list(tokens)
+
     def _detect_agent_type(self) -> str:
         """
         Detect which terminal agent is being used based on command template.

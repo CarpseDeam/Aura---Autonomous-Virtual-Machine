@@ -20,6 +20,7 @@ from .code_sanitizer import CodeSanitizer
 from .conversation_handler import ConversationHandler
 from .file_operations import FileOperations
 from .project_resolver import ProjectResolver
+from .terminal_supervisor import TerminalSupervisor
 from .prompt_builder import PromptBuilder
 
 
@@ -65,6 +66,7 @@ class AuraExecutor:
             prompt_builder=self.prompt_builder,
             code_sanitizer=self.code_sanitizer,
         )
+        self.terminal_supervisor = TerminalSupervisor(terminal_session_manager)
 
         self._tools: Dict[ActionType, Handler] = {
             ActionType.DESIGN_BLUEPRINT: self._handle_design_blueprint,
@@ -77,6 +79,8 @@ class AuraExecutor:
             ActionType.RESEARCH: self.conversation_handler.execute_research,
             ActionType.LIST_FILES: self.file_operations.execute_list_files,
             ActionType.READ_FILE: self.file_operations.execute_read_file,
+            ActionType.READ_TERMINAL_OUTPUT: self.terminal_supervisor.execute_read_terminal_output,
+            ActionType.SEND_TO_TERMINAL: self.terminal_supervisor.execute_send_to_terminal,
         }
 
     def execute(self, action: Action, project_context: ProjectContext) -> Any:
@@ -86,22 +90,6 @@ class AuraExecutor:
             logger.warning("Unsupported action type requested: %s", action.type)
             raise RuntimeError(f"Unsupported action type: {action.type}")
         return tool(action, project_context)
-
-    def execute_blueprint(self, user_request: str, project_context: ProjectContext) -> AgentSpecification:
-        """
-        Convenience helper for triggering the DESIGN_BLUEPRINT workflow with auto-spawn enabled.
-        """
-        action = Action(
-            type=ActionType.DESIGN_BLUEPRINT,
-            params={
-                "request": user_request,
-                "auto_spawn": True,
-            },
-        )
-        result = self.execute(action, project_context)
-        if not isinstance(result, AgentSpecification):
-            raise TypeError("DESIGN_BLUEPRINT execution must return an AgentSpecification")
-        return result
 
     # -- Design & specification generation -------------------------------------------------
 
@@ -142,8 +130,8 @@ class AuraExecutor:
         if auto_spawn:
             logger.info("Auto-spawning terminal agent for task %s", spec.task_id)
             try:
-                session = self.terminal_service.spawn_agent(spec)
-                self.terminal_session_manager.register_session(session)
+                session, process = self.terminal_service.spawn_agent_for_supervision(spec)
+                self.terminal_session_manager.register_session(session, process=process)
                 context.extras["last_terminal_session"] = session.model_dump()
                 logger.info("Auto-spawned terminal session %s", session.task_id)
             except Exception as exc:
@@ -194,13 +182,19 @@ class AuraExecutor:
             raise ValueError("SPAWN_AGENT requires an AgentSpecification payload or a cached latest specification")
 
         command = command_override if isinstance(command_override, list) else None
-        session = self.terminal_service.spawn_agent(
-            specification,
-            command_override=command,
-        )
-
-        # Register the session for monitoring
-        self.terminal_session_manager.register_session(session)
+        if command is not None:
+            # If an explicit command is provided, use the legacy spawn (may open external terminal)
+            session = self.terminal_service.spawn_agent(
+                specification,
+                command_override=command,
+            )
+            self.terminal_session_manager.register_session(session)
+        else:
+            # Default to supervised spawn with I/O capture
+            session, process = self.terminal_service.spawn_agent_for_supervision(
+                specification,
+            )
+            self.terminal_session_manager.register_session(session, process=process)
         logger.info("Registered terminal session %s for monitoring", session.task_id)
 
         context.extras["last_terminal_session"] = session.model_dump()
@@ -243,3 +237,5 @@ class AuraExecutor:
             self.file_registry.refresh()
             context.active_files = self.file_registry.list_files()
         return result
+
+    # -- Terminal I/O supervision handled by TerminalSupervisor --------------------------

@@ -14,6 +14,8 @@ class ActionType(str, Enum):
     DISCUSS = "discuss"
     LIST_FILES = "list_files"
     READ_FILE = "read_file"
+    READ_TERMINAL_OUTPUT = "read_terminal_output"
+    SEND_TO_TERMINAL = "send_to_terminal"
 
 
 class Action(BaseModel):
