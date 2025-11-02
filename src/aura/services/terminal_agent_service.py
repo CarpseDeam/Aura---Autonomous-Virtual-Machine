@@ -533,6 +533,8 @@ class TerminalAgentService:
         This avoids terminal emulator wrappers so stdout/stderr can be captured and stdin
         can be written to for interactive supervision.
         """
+        import shutil
+
         # Start from the template and apply autonomy flags
         agent_command_template = self.agent_command_template.format(
             spec_path=str(spec_path),
@@ -542,6 +544,16 @@ class TerminalAgentService:
         tokens = self._apply_autonomy_flags(agent_command_template, require_stdin=True)
         if not tokens:
             raise RuntimeError("Invalid agent command template")
+
+        # Resolve executable to full path for subprocess.Popen on Windows
+        executable = tokens[0]
+        resolved = shutil.which(executable)
+
+        if resolved:
+            tokens[0] = resolved
+            logger.debug("Resolved %s to %s", executable, resolved)
+        else:
+            logger.warning("Could not resolve %s in PATH, trying as-is", executable)
 
         exe = tokens[0].lower()
 
