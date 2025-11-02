@@ -119,10 +119,8 @@ def _create_test_session(task_id: str = "test-task-123", process_id: int | None 
     """Helper to create a test terminal session."""
     return TerminalSession(
         task_id=task_id,
-        request="Test request",
-        project_name="test-project",
         command=["python", "script.py"],
-        working_directory="/workspace",
+        spec_path="/workspace/.aura/specs/test-spec.json",
         process_id=process_id,
     )
 
@@ -216,12 +214,19 @@ def test_check_session_returns_completed_session(session_manager: TerminalSessio
 # -- Completion detection via stabilization -------------------------------------------
 
 
+@patch("src.aura.services.terminal_session_manager.psutil")
 def test_completion_via_workspace_stabilization(
+    mock_psutil: Any,
     session_manager: TerminalSessionManager,
     workspace_monitor: StubWorkspaceMonitor,
     event_bus: StubEventBus,
 ) -> None:
     """Test that sessions complete when workspace changes stabilize."""
+    # Mock process to appear as still running
+    mock_process = MagicMock()
+    mock_process.is_running.return_value = True
+    mock_psutil.Process.return_value = mock_process
+
     session = _create_test_session()
     session_manager.register_session(session)
 
@@ -254,11 +259,18 @@ def test_completion_via_workspace_stabilization(
     assert completed_events[0].payload["task_id"] == session.task_id
 
 
+@patch("src.aura.services.terminal_session_manager.psutil")
 def test_no_completion_without_initial_changes(
+    mock_psutil: Any,
     session_manager: TerminalSessionManager,
     workspace_monitor: StubWorkspaceMonitor,
 ) -> None:
     """Test that sessions don't complete via stabilization without seeing initial changes."""
+    # Mock process to appear as still running
+    mock_process = MagicMock()
+    mock_process.is_running.return_value = True
+    mock_psutil.Process.return_value = mock_process
+
     session = _create_test_session()
     session_manager.register_session(session)
 
@@ -277,12 +289,19 @@ def test_no_completion_without_initial_changes(
 # -- Completion detection via marker file ----------------------------------------------
 
 
+@patch("src.aura.services.terminal_session_manager.psutil")
 def test_completion_via_marker_file(
+    mock_psutil: Any,
     session_manager: TerminalSessionManager,
     workspace_root: Path,
     event_bus: StubEventBus,
 ) -> None:
     """Test that sessions complete when marker file is detected."""
+    # Mock process to appear as still running
+    mock_process = MagicMock()
+    mock_process.is_running.return_value = True
+    mock_psutil.Process.return_value = mock_process
+
     session = _create_test_session(task_id="marker-test")
     session_manager.register_session(session)
 
@@ -514,12 +533,19 @@ def test_get_completed_sessions_respects_limit(session_manager: TerminalSessionM
 # -- Integration tests -----------------------------------------------------------------
 
 
+@patch("src.aura.services.terminal_session_manager.psutil")
 def test_full_session_lifecycle_with_changes(
+    mock_psutil: Any,
     session_manager: TerminalSessionManager,
     workspace_monitor: StubWorkspaceMonitor,
     event_bus: StubEventBus,
 ) -> None:
     """Test a complete session lifecycle from registration to completion."""
+    # Mock process to appear as still running
+    mock_process = MagicMock()
+    mock_process.is_running.return_value = True
+    mock_psutil.Process.return_value = mock_process
+
     session = _create_test_session()
 
     # Register session

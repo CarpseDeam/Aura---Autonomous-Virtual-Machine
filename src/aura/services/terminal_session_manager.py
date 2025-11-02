@@ -20,6 +20,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 import subprocess
 
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None  # type: ignore[assignment]
+    PSUTIL_AVAILABLE = False
+
 from src.aura.models.agent_task import TerminalSession
 from src.aura.models.event_types import (
     TERMINAL_SESSION_STARTED,
@@ -281,26 +288,23 @@ class TerminalSessionManager:
         if not status.session.process_id:
             return None
 
-        try:
-            # Try to get the process
-            import psutil
-
-            try:
-                process = psutil.Process(status.session.process_id)
-                if process.is_running():
-                    return None
-                else:
-                    # Process has terminated
-                    return process.wait() if hasattr(process, 'wait') else 0
-            except psutil.NoSuchProcess:
-                # Process doesn't exist, assume it exited
-                logger.debug("Process %d no longer exists", status.session.process_id)
-                return 0
-        except ImportError:
+        if not PSUTIL_AVAILABLE:
             # psutil not available, use subprocess polling as fallback
             logger.debug("psutil not available, using basic process checking")
             # We can't check without recreating the Popen object, so skip this check
             return None
+
+        try:
+            process = psutil.Process(status.session.process_id)
+            if process.is_running():
+                return None
+            else:
+                # Process has terminated
+                return process.wait() if hasattr(process, 'wait') else 0
+        except psutil.NoSuchProcess:
+            # Process doesn't exist, assume it exited
+            logger.debug("Process %d no longer exists", status.session.process_id)
+            return 0
 
     def abort_session(self, task_id: str) -> bool:
         """
@@ -318,9 +322,11 @@ class TerminalSessionManager:
             return False
 
         if status.session.process_id:
-            try:
-                import psutil
+            if not PSUTIL_AVAILABLE:
+                logger.warning("psutil not available, cannot terminate process")
+                return False
 
+            try:
                 process = psutil.Process(status.session.process_id)
                 process.terminate()
                 logger.info("Terminated process %d for session %s", status.session.process_id, task_id)
@@ -344,9 +350,6 @@ class TerminalSessionManager:
                 self.completed_sessions.append(status)
                 del self.active_sessions[task_id]
                 return True
-            except ImportError:
-                logger.warning("psutil not available, cannot terminate process")
-                return False
             except Exception as exc:
                 logger.error("Failed to terminate process %d: %s", status.session.process_id, exc)
                 return False

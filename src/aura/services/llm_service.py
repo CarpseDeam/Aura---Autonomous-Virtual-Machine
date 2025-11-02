@@ -114,7 +114,7 @@ class LLMService:
     # ------------------- Provider Mapping -------------------
     def _get_provider_for_agent(self, agent_name: str):
         config = self.agent_config.get(agent_name)
-        if not config:
+        if config is None:
             return None, None, None
 
         model_name = config.get("model")
