@@ -25,6 +25,7 @@ class TerminalAgentService:
     """
 
     SPEC_DIR_NAME = ".aura"
+    _TASK_SENTINEL = "__AURA_CODEX_TASK__"
 
     def __init__(
         self,
@@ -55,26 +56,29 @@ class TerminalAgentService:
         agents_md_path = project_root / "AGENTS.md"
 
         # Format the agent command with the spec path
-        agent_command = self.agent_command_template.format(
+        agent_command_template = self.agent_command_template.format(
             spec_path=str(spec_path),
             task_id=spec_path.stem,
         ).strip()
 
-        agent_command = self._apply_autonomy_flags(agent_command)
+        is_windows = sys.platform.startswith("win")
+        first_token = agent_command_template.split(maxsplit=1)[0].lower() if agent_command_template else ""
+        runs_codex = first_token in {"codex", "codex.exe"}
+        require_stdin = not (is_windows and runs_codex)
+        agent_tokens = self._apply_autonomy_flags(agent_command_template, require_stdin=require_stdin)
+        agent_command = " ".join(agent_tokens) if agent_tokens else agent_command_template
 
-        if sys.platform.startswith("win"):
-            # Windows: Pipe AGENTS.md with 2-second delay
-            agents_md_literal = str(agents_md_path).replace("'", "''")
-            reader_command = f"Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'"
-            delayed_command = f"Start-Sleep -Seconds 2; {reader_command} | {agent_command}"
+        if is_windows:
+            if agent_tokens and agent_tokens[0].lower() in {"codex", "codex.exe"}:
+                windows_command = self._build_windows_codex_command(
+                    agent_tokens,
+                    agents_md_path,
+                    project_root,
+                )
+                logger.debug("Constructed Windows Codex command: %s", windows_command)
+                return windows_command
 
-            # Windows: Use PowerShell with -NoExit to keep window open
-            return [
-                "pwsh.exe",
-                "-NoExit",
-                "-Command",
-                delayed_command,
-            ]
+            return self._build_windows_passthrough_command(agent_command, agents_md_path)
         else:
             # Unix: Pipe AGENTS.md with 2-second delay
             agents_md_quoted = shlex.quote(str(agents_md_path))
@@ -98,13 +102,156 @@ class TerminalAgentService:
             logger.warning("No terminal emulator found, falling back to direct bash execution")
             return ["bash", "-c", delayed_command]
 
-    def _apply_autonomy_flags(self, agent_command: str) -> str:
+    def _build_windows_passthrough_command(self, agent_command: str, agents_md_path: Path) -> List[str]:
         """
-        Ensure Codex and Claude Code run in autonomous mode and read specs from stdin.
+        Build the legacy Windows command that streams AGENTS.md into the agent process.
+        """
+        agents_md_literal = str(agents_md_path).replace("'", "''")
+        reader_command = f"Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'"
+        delayed_command = f"Start-Sleep -Seconds 2; {reader_command} | {agent_command}"
+        return [
+            "pwsh.exe",
+            "-NoExit",
+            "-Command",
+            delayed_command,
+        ]
+
+    def _build_windows_codex_command(
+        self,
+        tokens: Sequence[str],
+        agents_md_path: Path,
+        project_root: Path,
+    ) -> List[str]:
+        """
+        Build a Windows command that bypasses the Codex approval menu by passing the task directly.
+        """
+        if not tokens:
+            raise ValueError("Codex command tokens must not be empty")
+
+        task_description = self._build_codex_task_description(agents_md_path)
+        base_tokens = self._ensure_working_directory_flag(tokens, project_root)
+
+        variants: List[List[str]] = [
+            list(base_tokens),
+            self._append_unique_tokens(base_tokens, ["-a", "never", "-s", "danger-full-access"]),
+            self._append_unique_tokens(base_tokens, ["--dangerously-bypass-approvals-and-sandbox"]),
+        ]
+
+        script_variants = [
+            self._format_powershell_array([*variant, self._TASK_SENTINEL]) for variant in variants
+        ]
+        script = self._render_codex_launch_script(script_variants, task_description)
+
+        readable_variants = [[*variant, task_description] for variant in variants]
+        logger.debug("Codex command variants for Windows: %s", readable_variants)
+
+        return [
+            "pwsh.exe",
+            "-NoExit",
+            "-Command",
+            script,
+        ]
+
+    def _build_codex_task_description(self, agents_md_path: Path) -> str:
+        """
+        Build the Codex task description passed as a direct CLI argument.
+        """
+        return (
+            f"Open the AGENTS.md file located at {agents_md_path} and execute the instructions it contains."
+        )
+
+    def _ensure_working_directory_flag(self, tokens: Sequence[str], project_root: Path) -> List[str]:
+        """
+        Ensure the Codex command declares its working directory to avoid path confusion.
+        """
+        tokens_with_dir = list(tokens)
+        has_flag = any(token.startswith("--working-directory=") for token in tokens_with_dir)
+
+        if not has_flag:
+            for index, token in enumerate(tokens_with_dir):
+                if token == "--working-directory" and index + 1 < len(tokens_with_dir):
+                    has_flag = True
+                    break
+
+        if not has_flag:
+            tokens_with_dir.append(f"--working-directory={project_root}")
+
+        return tokens_with_dir
+
+    def _append_unique_tokens(self, tokens: Sequence[str], extras: Sequence[str]) -> List[str]:
+        """
+        Append additional flags when they are not already present.
+        """
+        updated = list(tokens)
+        for extra in extras:
+            if extra not in updated:
+                updated.append(extra)
+        return updated
+
+    def _format_powershell_array(self, tokens: Sequence[str]) -> str:
+        """
+        Format a sequence of tokens into a PowerShell array literal.
+        """
+        formatted_tokens = [self._powershell_quote_token(token) for token in tokens]
+        return f"@({', '.join(formatted_tokens)})"
+
+    def _powershell_quote_token(self, token: str) -> str:
+        """
+        Quote tokens for safe PowerShell consumption.
+        """
+        if token == self._TASK_SENTINEL:
+            return "$task"
+        escaped = token.replace("'", "''")
+        return f"'{escaped}'"
+
+    def _render_codex_launch_script(self, script_variants: Sequence[str], task_description: str) -> str:
+        """
+        Render the PowerShell command that attempts multiple Codex launch strategies.
+        """
+        commands_block = ",\n    ".join(script_variants)
+        fallback_message = (
+            "Codex approval bypass failed on Windows. Known issue: https://github.com/openai/codex/issues/2828 "
+            "Recommended: Install WSL2 and run Codex from Linux environment"
+        )
+        return (
+            "$task = @'\n"
+            f"{task_description}\n"
+            "'@\n"
+            "$commands = @(\n"
+            f"    {commands_block}\n"
+            ")\n"
+            "$launched = $false\n"
+            "$lastError = $null\n"
+            "foreach ($args in $commands) {\n"
+            "    if ($launched) { break }\n"
+            "    try {\n"
+            "        Write-Host ('Launching Codex: ' + ($args -join ' '))\n"
+            "        if ($args.Length -gt 1) {\n"
+            "            & $args[0] @($args[1..($args.Length - 1)])\n"
+            "        } else {\n"
+            "            & $args[0]\n"
+            "        }\n"
+            "        $launched = $true\n"
+            "    } catch {\n"
+            "        $lastError = $_\n"
+            "        Write-Warning ('Codex launch failed with configuration: ' + ($args -join ' '))\n"
+            "    }\n"
+            "}\n"
+            "if (-not $launched) {\n"
+            f"    Write-Error \"{fallback_message}\"\n"
+            "    if ($lastError) {\n"
+            "        Write-Error $lastError\n"
+            "    }\n"
+            "}\n"
+        )
+
+    def _apply_autonomy_flags(self, agent_command: str, *, require_stdin: bool) -> List[str]:
+        """
+        Ensure Codex and Claude Code run in autonomous mode and handle specification input correctly.
         """
         normalized = agent_command.strip()
         if not normalized:
-            return agent_command
+            return []
 
         try:
             tokens = shlex.split(normalized, posix=not sys.platform.startswith("win"))
@@ -113,7 +260,7 @@ class TerminalAgentService:
             tokens = normalized.split()
 
         if not tokens:
-            return agent_command
+            return []
 
         executable = tokens[0].lower()
 
@@ -127,13 +274,15 @@ class TerminalAgentService:
 
         if executable in {"codex", "codex.exe"}:
             _ensure_flag("--full-auto")
-            _ensure_stdin_marker()
+            if require_stdin:
+                _ensure_stdin_marker()
             self._ensure_codex_autonomy_config()
         elif executable in {"claude-code", "claude", "claude.exe"}:
             _ensure_flag("--dangerously-skip-permissions")
-            _ensure_stdin_marker()
+            if require_stdin:
+                _ensure_stdin_marker()
 
-        return " ".join(tokens)
+        return tokens
 
     def spawn_agent(
         self,
@@ -211,28 +360,60 @@ class TerminalAgentService:
         return (
             "# Generated by Aura to enable Codex autonomous mode on Windows.\n"
             'approval_policy = "never"\n'
-            'sandbox_mode = "workspace-write"\n'
+            'sandbox_mode = "danger-full-access"\n'
+            "\n"
+            "[sandbox_workspace_write]\n"
+            "network_access = true\n"
+            "\n"
+            "[tui]\n"
+            "notifications = false\n"
         )
 
     def _ensure_codex_autonomy_config(self) -> None:
         if not sys.platform.startswith("win"):
             return
 
-        candidates = self._codex_config_candidates()
-        for candidate in candidates:
-            if candidate.exists():
-                logger.debug("Codex config already present at %s", candidate)
-                return
-
         config_content = self._codex_config_template()
+        candidates = self._codex_config_candidates()
         last_error: Optional[Exception] = None
         last_path: Optional[Path] = None
 
         for candidate in candidates:
             try:
                 candidate.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.error(
+                    "Failed to prepare Codex config directory %s: %s",
+                    candidate,
+                    exc,
+                    exc_info=True,
+                )
+                last_error = exc
+                last_path = candidate
+                continue
+
+            existing_content: Optional[str] = None
+            try:
+                if candidate.exists():
+                    existing_content = candidate.read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.warning(
+                    "Unable to read Codex config from %s prior to update: %s",
+                    candidate,
+                    exc,
+                    exc_info=True,
+                )
+
+            if existing_content == config_content:
+                logger.debug("Codex config already up to date at %s", candidate)
+                return
+
+            try:
                 candidate.write_text(config_content, encoding="utf-8")
-                logger.info("Created Codex config for autonomy at %s", candidate)
+                if existing_content is None:
+                    logger.info("Created Codex config for autonomy at %s", candidate)
+                else:
+                    logger.info("Updated Codex config for autonomy at %s", candidate)
                 return
             except OSError as exc:
                 logger.error(

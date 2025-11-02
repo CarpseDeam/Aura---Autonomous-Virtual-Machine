@@ -190,7 +190,16 @@ def test_spawn_agent_creates_codex_config_on_windows(
     assert config_path.exists(), "Codex config should be created when missing on Windows"
     config_contents = config_path.read_text(encoding="utf-8")
     assert 'approval_policy = "never"' in config_contents
-    assert 'sandbox_mode = "workspace-write"' in config_contents
+    assert 'sandbox_mode = "danger-full-access"' in config_contents
+    assert "[sandbox_workspace_write]" in config_contents
+    assert "network_access = true" in config_contents
+    assert "[tui]" in config_contents
+    assert "notifications = false" in config_contents
 
     command_list = popen_calls["command"]
     assert any("--full-auto" in part for part in command_list), "Windows spawn command should include --full-auto flag"
+    script_argument = command_list[-1]
+    assert "--working-directory=" in script_argument, "Windows Codex command should set working directory"
+    assert "danger-full-access" in script_argument, "Windows Codex fallback should request full access"
+    assert "dangerously-bypass-approvals-and-sandbox" in script_argument, "Windows Codex script should include nuclear bypass"
+    assert "AGENTS.md" in script_argument, "Windows Codex task should instruct Codex to read AGENTS.md"
