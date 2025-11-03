@@ -787,18 +787,6 @@ class TerminalAgentService:
             )
             raise RuntimeError(message) from last_error
 
-    def _ensure_codex_config_for_command(self, command: Sequence[str]) -> None:
-        if not sys.platform.startswith("win"):
-            return
-
-        try:
-            lowered_tokens = [str(token).lower() for token in command]
-        except Exception:
-            return
-
-        if any("codex" in token for token in lowered_tokens):
-            self._ensure_codex_autonomy_config()
-
     def _persist_specification(self, spec: AgentSpecification) -> Path:
         spec_file = self.spec_dir / f"{spec.task_id}.md"
         spec_file.write_text(spec.prompt, encoding="utf-8")
