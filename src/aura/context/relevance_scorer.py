@@ -8,7 +8,7 @@ based on semantic similarity between the user request and file contents.
 import logging
 import numpy as np
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from ..models.context_models import FileRelevance, SemanticSearchResult
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ class RelevanceScorer:
 
             # Score based on file name matching
             file_name = Path(file_path).name.lower()
-            file_stem = Path(file_path).stem.lower()
+            Path(file_path).stem.lower()
 
             # Check if keywords appear in file name
             for keyword in keywords:

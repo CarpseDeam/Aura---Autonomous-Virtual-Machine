@@ -5,7 +5,7 @@ These models represent the data structures used for intelligent context loading,
 file relevance scoring, and context window management.
 """
 
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 

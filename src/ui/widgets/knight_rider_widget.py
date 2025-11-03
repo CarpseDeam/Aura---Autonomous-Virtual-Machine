@@ -1,8 +1,7 @@
 import logging
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel
 from PySide6.QtCore import (
-    QTimer, QPropertyAnimation, QEasingCurve, Qt, Property, QSequentialAnimationGroup,
-    QPauseAnimation
+    QPropertyAnimation, QEasingCurve, Qt, Property, QSequentialAnimationGroup, QPauseAnimation
 )
 from PySide6.QtGui import QPainter, QColor, QLinearGradient
 
@@ -92,7 +91,7 @@ class KnightRiderWidget(QWidget):
 
         # --- Gradient Logic ---
         widget_width = self.width()
-        widget_height = self.height()
+        self.height()
 
         # The current center position of the scanner's head
         current_x = widget_width * self._scan_position

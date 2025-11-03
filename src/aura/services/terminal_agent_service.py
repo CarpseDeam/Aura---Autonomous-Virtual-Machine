@@ -220,15 +220,14 @@ class TerminalAgentService:
         Uses simple cmd.exe to avoid PowerShell PATH issues.
         Reads AGENTS.md and passes content via -p flag for headless execution.
         """
-        # Escape path for cmd.exe (use double quotes, escape internal quotes)
-        agents_md_str = str(agents_md_path).replace('"', '""')
+        # Path escaping not required; CLI reads AGENTS.md directly
 
         # Simple approach: Let claude read AGENTS.md itself, just tell it to in the -p prompt
         cmd_command = (
-            f'claude -p "Read and execute all tasks in the AGENTS.md file in the current directory. '
-            f'Work autonomously without asking for confirmation. When complete, write .aura/{{task_id}}.summary.json '
-            f'and .aura/{{task_id}}.done files as specified in the completion protocol." '
-            f'--dangerously-skip-permissions'
+            'claude -p "Read and execute all tasks in the AGENTS.md file in the current directory. '
+            'Work autonomously without asking for confirmation. When complete, write .aura/{task_id}.summary.json '
+            'and .aura/{task_id}.done files as specified in the completion protocol." '
+            '--dangerously-skip-permissions'
         )
 
         logger.debug("Launching Claude Code with simple cmd.exe command")
@@ -272,13 +271,13 @@ class TerminalAgentService:
         - `.aura/{task_id}.done`: An empty file that acts as a sentinel, signaling
           that the task is complete.
         """
-        agents_md_str = str(agents_md_path).replace('"', '""')
+        # Path escaping not required; CLI reads AGENTS.md directly
 
         cmd_command = (
-            f'gemini -p "Read and execute all tasks in the AGENTS.md file in the current directory. ' 
-            f'Work autonomously without asking for confirmation. When complete, write .aura/{{task_id}}.summary.json ' 
-            f'and .aura/{{task_id}}.done files as specified in the completion protocol." ' 
-            f'--dangerously-skip-permissions'
+            'gemini -p "Read and execute all tasks in the AGENTS.md file in the current directory. '
+            'Work autonomously without asking for confirmation. When complete, write .aura/{task_id}.summary.json '
+            'and .aura/{task_id}.done files as specified in the completion protocol." '
+            '--dangerously-skip-permissions'
         )
 
         logger.debug("Launching Gemini CLI with simple cmd.exe command")

@@ -1,7 +1,7 @@
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QThreadPool
 
@@ -27,6 +27,11 @@ from src.aura.models.event_types import (
 
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    # Imported only for type checking to satisfy static analyzers
+    from src.aura.context.context_manager import ContextManager
+    from src.aura.agent.iteration_controller import IterationController
 
 ADVICE_TRIGGER_PHRASES = [
     "what do you think",

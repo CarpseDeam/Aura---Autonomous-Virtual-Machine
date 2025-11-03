@@ -6,7 +6,7 @@ Tracks progress, reflects on actions, detects loops, and determines when to stop
 
 import logging
 import uuid
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from datetime import datetime
 from ..models.action import Action, ActionType
 from ..models.iteration_models import (

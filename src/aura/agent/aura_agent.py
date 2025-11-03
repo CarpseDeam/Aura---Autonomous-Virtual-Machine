@@ -13,8 +13,8 @@ from src.aura.models.project_context import ProjectContext
 from src.aura.models.agent_task import AgentSpecification
 from src.aura.context import ContextManager
 from src.aura.agent import IterationController
-from src.aura.models.context_models import ContextConfig, ContextMode
-from src.aura.models.iteration_models import IterationConfig, IterationState
+from src.aura.models.context_models import ContextMode
+from src.aura.models.iteration_models import IterationState
 
 
 logger = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ class AuraAgent:
         """
         input_request = state.get("input", "")
         context = state.get("context")
-        messages = state.get("messages", [])
+        state.get("messages", [])
 
         if not input_request or context is None:
             logger.warning("Plan step missing input or context; cannot proceed.")

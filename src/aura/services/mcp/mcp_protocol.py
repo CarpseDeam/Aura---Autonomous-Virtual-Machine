@@ -10,7 +10,7 @@ import logging
 import threading
 from typing import Any, Dict
 
-from aura.models.mcp_models import MCPError, MCPRequest, MCPResponse
+from aura.models.mcp_models import MCPRequest, MCPResponse
 
 logger = logging.getLogger(__name__)
 

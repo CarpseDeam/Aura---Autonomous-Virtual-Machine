@@ -6,12 +6,10 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QThreadPool, QTimer
 from PySide6.QtGui import QFontDatabase
 from src.aura.app.event_bus import EventBus
-from src.aura.services.logging_service import LoggingService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.conversation_persistence_service import ConversationPersistenceService
 from src.aura.services.workspace_service import WorkspaceService
-from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.services.file_registry import FileRegistry
 from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
@@ -87,7 +85,7 @@ class AuraApp:
 
     def __init__(self):
         """Initializes the AuraApp."""
-        LoggingService.setup_logging()
+        # LoggingService removed during dead code cleanup; rely on default logging configuration
 
         logging.info("Initializing AuraApp...")
         project_name = get_project_from_args_or_prompt(sys.argv[1:])
@@ -120,7 +118,7 @@ class AuraApp:
         self.event_bus = EventBus()
         self.token_tracker = TokenTracker(self.event_bus, token_limit=200_000)
         self.prompt_manager = PromptManager()
-        self.image_storage_service = ImageStorageService()
+        self.image_storage_service = None  # Image storage optional; providers optionalized in LLMService
         # Instantiate core services
         self.conversation_persistence_service = ConversationPersistenceService()
         self.conversation_management_service = ConversationManagementService(

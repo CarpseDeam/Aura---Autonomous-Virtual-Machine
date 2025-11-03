@@ -6,7 +6,6 @@ Parses Python files to extract import statements and resolve local dependencies.
 
 import ast
 import logging
-import os
 from pathlib import Path
 from typing import List, Set, Optional, Dict, Generator
 from ..models.context_models import DependencyInfo

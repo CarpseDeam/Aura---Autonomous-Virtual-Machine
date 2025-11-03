@@ -18,14 +18,12 @@ This mirrors the subprocess and background I/O patterns used by terminal agents.
 import json
 import logging
 import threading
-import time
 from dataclasses import dataclass
 import shutil
 import platform
 from pathlib import Path
-from queue import Queue
 from subprocess import PIPE, Popen
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from .mcp_server_registry import MCPServerRegistry, MCPServerStatus, MCPTool
 from .mcp_server_configs import MCPServerConfig
@@ -121,7 +119,7 @@ class MCPClientService:
         try:
             init_result = self._request(server_id, ctx, method="initialize", params={"protocolVersion": "1.0"}, timeout=config.init_timeout_seconds)
             logger.debug("MCP initialize result for %s: %s", server_id, init_result)
-        except TimeoutError as exc:
+        except TimeoutError:
             self._terminate_process(server_id, ctx)
             self.registry.set_status(server_id, MCPServerStatus.ERROR, error_message="Initialization timeout")
             raise

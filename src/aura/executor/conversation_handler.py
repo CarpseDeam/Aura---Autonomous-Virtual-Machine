@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from src.aura.models.action import Action
 from src.aura.models.exceptions import LLMServiceError

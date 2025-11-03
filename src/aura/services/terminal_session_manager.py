@@ -13,14 +13,13 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from collections import deque
 import threading
 from typing import Deque, Optional as _Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 import subprocess
 
 try:
@@ -33,7 +32,6 @@ except ImportError:
 from src.aura.models.agent_task import TerminalSession, TaskSummary
 from src.aura.models.event_types import (
     TERMINAL_SESSION_STARTED,
-    TERMINAL_SESSION_PROGRESS,
     TERMINAL_SESSION_COMPLETED,
     TERMINAL_SESSION_FAILED,
     TERMINAL_SESSION_TIMEOUT,

@@ -6,7 +6,6 @@ Provides read/write access to active terminal sessions via TerminalSessionManage
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from src.aura.models.action import Action
 from src.aura.models.project_context import ProjectContext

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QIcon, QAction, QFont
+from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -347,7 +347,7 @@ class ConversationSidebarWidget(QWidget):
         # Thread items have UserRole data (conversation_id)
         return item.data(0, Qt.ItemDataRole.UserRole) is not None
 
-    def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
         """Handle double-click on thread item."""
         if not self._is_thread_item(item):
             return

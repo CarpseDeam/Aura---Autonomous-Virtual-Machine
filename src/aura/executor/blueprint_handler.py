@@ -16,7 +16,7 @@ from src.aura.prompts.prompt_manager import PromptManager
 from src.aura.services.llm_service import LLMService
 
 from .code_sanitizer import CodeSanitizer
-from .project_resolver import GenerationContext, ProjectResolver
+from .project_resolver import ProjectResolver
 from .prompt_builder import PromptBuilder
 
 

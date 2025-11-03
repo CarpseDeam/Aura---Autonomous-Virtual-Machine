@@ -15,10 +15,21 @@ from src.aura.models.exceptions import (
     LLMTimeoutError,
 )
 from src.aura.models.events import Event
-from src.aura.services.image_storage_service import ImageStorageService
+# Image storage is optional; import only for type checking
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+if _TYPE_CHECKING:  # pragma: no cover
+    from src.aura.services.image_storage_service import ImageStorageService as _ImageStorageService
 from src.aura.services.user_settings_manager import load_user_settings
-from src.providers.gemini_provider import GeminiProvider
-from src.providers.ollama_provider import OllamaProvider
+# Providers are optional. Gracefully degrade if not installed/present.
+try:  # pragma: no cover - optional provider
+    from src.providers.gemini_provider import GeminiProvider  # type: ignore
+except Exception:  # pragma: no cover
+    GeminiProvider = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional provider
+    from src.providers.ollama_provider import OllamaProvider  # type: ignore
+except Exception:  # pragma: no cover
+    OllamaProvider = None  # type: ignore[assignment]
 
 try:
     from requests import exceptions as requests_exceptions
@@ -54,7 +65,7 @@ class LLMService:
         "Ensure your network connection is stable.",
     )
 
-    def __init__(self, event_bus: EventBus, image_storage: ImageStorageService):
+    def __init__(self, event_bus: EventBus, image_storage: Optional["_ImageStorageService"] = None):
         self.event_bus = event_bus
         self.image_storage = image_storage
         self.agent_config: Dict = {}
@@ -68,10 +79,17 @@ class LLMService:
     # ------------------- Boot / Config -------------------
     def _load_providers(self):
         logger.info("Loading LLM providers...")
-        provider_instances = [
-            GeminiProvider(image_storage=self.image_storage),
-            OllamaProvider(),
-        ]
+        provider_instances = []
+        if GeminiProvider is not None:
+            try:
+                provider_instances.append(GeminiProvider(image_storage=self.image_storage))  # type: ignore[misc]
+            except Exception as exc:
+                logger.warning("GeminiProvider unavailable: %s", exc)
+        if OllamaProvider is not None:
+            try:
+                provider_instances.append(OllamaProvider())  # type: ignore[misc]
+            except Exception as exc:
+                logger.warning("OllamaProvider unavailable: %s", exc)
         for provider in provider_instances:
             self.providers[provider.provider_name] = provider
             for model_name in provider.get_available_models():

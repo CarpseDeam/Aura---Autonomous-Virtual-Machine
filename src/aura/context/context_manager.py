@@ -8,7 +8,7 @@ dependency analysis, and token budget management. Supports both BOOTSTRAP and IT
 import logging
 import fnmatch
 from pathlib import Path
-from typing import List, Optional, Dict, Set, Generator
+from typing import List, Optional, Dict, Set, Any
 from ..models.project_context import ProjectContext
 from ..models.context_models import (
     ContextMode,
