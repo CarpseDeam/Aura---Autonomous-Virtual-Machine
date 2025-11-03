@@ -162,11 +162,6 @@ class AuraApp:
 
         logging.info("AuraApp initialized successfully.")
 
-    def _determine_default_agent_command(self) -> List[str]:
-        if sys.platform.startswith("win"):
-            return ["pwsh.exe", "-NoExit"]
-        return ["bash", "-i"]
-
     def _load_fonts(self):
         """Loads custom fonts from the assets directory."""
         font_path = ASSETS_DIR / "JetBrainsMono-Regular.ttf"
