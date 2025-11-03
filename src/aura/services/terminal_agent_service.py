@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -556,6 +558,9 @@ class TerminalAgentService:
         popen_kwargs = {
             "cwd": str(project_root),
             "env": session_env,
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
         }
 
         if sys.platform.startswith("win"):
@@ -593,8 +598,111 @@ class TerminalAgentService:
             command=command,
             spec_path=str(spec_path),
             process_id=process.pid if process else None,
+            process=process,
         )
 
+    def start_output_monitor(self, session: TerminalSession) -> None:
+        """
+        Start a background thread to monitor agent output and detect questions.
+
+        Args:
+            session: TerminalSession containing the process to monitor
+        """
+        if not session.process:
+            logger.warning("Cannot start output monitor: no process object in session")
+            return
+
+        def monitor_output():
+            """Background thread that reads stdout and detects question patterns."""
+            process = session.process
+            if not process or not process.stdout:
+                logger.warning("Cannot monitor output: process or stdout is None")
+                return
+
+            # Common question patterns to detect
+            question_patterns = [
+                r'\(y/n\)',
+                r'\(yes/no\)',
+                r'Continue\?',
+                r'Approve\?',
+                r'Proceed\?',
+                r'\[Y/n\]',
+                r'\[y/N\]',
+            ]
+            combined_pattern = re.compile('|'.join(question_patterns), re.IGNORECASE)
+
+            try:
+                for line in iter(process.stdout.readline, b''):
+                    if not line:
+                        break
+
+                    try:
+                        decoded_line = line.decode('utf-8').strip()
+                    except UnicodeDecodeError:
+                        # Try with alternate encoding
+                        try:
+                            decoded_line = line.decode('latin-1').strip()
+                        except:
+                            continue
+
+                    if not decoded_line:
+                        continue
+
+                    # Log all output
+                    logger.info(f"AGENT OUTPUT [{session.task_id}]: {decoded_line}")
+
+                    # Check for question patterns
+                    if combined_pattern.search(decoded_line):
+                        logger.info(f"🔔 AGENT QUESTION DETECTED [{session.task_id}]: {decoded_line}")
+
+            except Exception as exc:
+                logger.error(f"Error monitoring output for task {session.task_id}: {exc}", exc_info=True)
+            finally:
+                logger.info(f"Output monitor stopped for task {session.task_id}")
+
+        # Start the monitoring thread
+        monitor_thread = threading.Thread(
+            target=monitor_output,
+            name=f"OutputMonitor-{session.task_id}",
+            daemon=True
+        )
+        monitor_thread.start()
+        logger.info(f"Started output monitor thread for task {session.task_id}")
+
+    def send_response(self, session: TerminalSession, response: str) -> bool:
+        """
+        Send a response to the agent's stdin.
+
+        Args:
+            session: TerminalSession containing the process to send to
+            response: The response string to send (will have \\n appended if not present)
+
+        Returns:
+            True if response was sent successfully, False otherwise
+        """
+        if not session.process:
+            logger.warning("Cannot send response: no process object in session")
+            return False
+
+        if not session.process.stdin:
+            logger.warning("Cannot send response: process stdin is None")
+            return False
+
+        try:
+            # Ensure response ends with newline
+            if not response.endswith('\n'):
+                response += '\n'
+
+            # Encode and write to stdin
+            session.process.stdin.write(response.encode('utf-8'))
+            session.process.stdin.flush()
+
+            logger.info(f"✅ Sent response to agent [{session.task_id}]: {response.strip()}")
+            return True
+
+        except Exception as exc:
+            logger.error(f"Failed to send response to agent [{session.task_id}]: {exc}", exc_info=True)
+            return False
 
     def _detect_agent_type(self) -> str:
         """

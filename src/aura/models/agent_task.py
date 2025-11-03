@@ -27,6 +27,7 @@ class TerminalSession(BaseModel):
     spec_path: str
     process_id: Optional[int] = None
     started_at: datetime = Field(default_factory=datetime.utcnow)
+    process: Optional[Any] = Field(default=None, exclude=True)  # subprocess.Popen object, excluded from serialization
 
 
 class TaskSummary(BaseModel):
