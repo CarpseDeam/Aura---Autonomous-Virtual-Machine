@@ -217,27 +217,35 @@ class TerminalAgentService:
         """
         Build a Windows Terminal command that invokes Claude Code with task from AGENTS.md.
 
-        Uses simple cmd.exe to avoid PowerShell PATH issues.
-        Reads AGENTS.md and passes content via -p flag for headless execution.
+        The command shells into PowerShell so we can load AGENTS.md verbatim, append the
+        Aura completion protocol reminder, and pass that combined prompt via the Claude CLI.
+        We rely on the task identifier exposed through the AURA_AGENT_TASK_ID environment
+        variable so the completion file instructions stay accurate.
         """
-        # Path escaping not required; CLI reads AGENTS.md directly
-
-        # Simple approach: Let claude read AGENTS.md itself, just tell it to in the -p prompt
-        cmd_command = (
-            'claude -p "Read and execute all tasks in the AGENTS.md file in the current directory. '
-            'Work autonomously without asking for confirmation. When complete, write .aura/{task_id}.summary.json '
-            'and .aura/{task_id}.done files as specified in the completion protocol." '
-            '--dangerously-skip-permissions'
+        ps_command = (
+            "$ErrorActionPreference='Stop'; "
+            "$taskId=$env:AURA_AGENT_TASK_ID; "
+            "if (-not $taskId) { Write-Warning 'AURA_AGENT_TASK_ID not set; defaulting to unknown'; $taskId='unknown'; } "
+            "$agentsPath=Join-Path (Get-Location) 'AGENTS.md'; "
+            "if (-not (Test-Path -LiteralPath $agentsPath)) { "
+            "    Write-Error ('AGENTS.md not found at ' + $agentsPath); "
+            "} "
+            "$prompt=Get-Content -LiteralPath $agentsPath -Raw; "
+            "$completion=([string]::Format('When you finish, write .aura/{0}.summary.json and .aura/{0}.done per the Aura completion protocol.', $taskId)); "
+            "$fullPrompt=$prompt + \"`n`n\" + $completion; "
+            "Write-Host ('Launching Claude Code for task ' + $taskId); "
+            "claude -p $fullPrompt --dangerously-skip-permissions"
         )
 
-        logger.debug("Launching Claude Code with simple cmd.exe command")
+        logger.debug("Launching Claude Code with PowerShell prompt injection")
         return [
             "wt.exe",
             "-d",
             str(project_root),
-            "cmd",
-            "/c",
-            cmd_command,
+            "powershell.exe",
+            "-NoExit",
+            "-Command",
+            ps_command,
         ]
 
     def _build_windows_gemini_command(self, agents_md_path: Path, project_root: Path) -> List[str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import shutil
 from typing import Dict, List
 from unittest.mock import MagicMock
 
@@ -158,6 +159,37 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
     combined = " ".join(str(p) for p in command)
     assert " -p " in combined or combined.endswith(" -p"), "Claude headless mode should pass prompt with -p"
     assert "cat " in combined and "AGENTS.md" in combined, "Claude headless command should source AGENTS.md content"
+
+
+def test_windows_claude_command_loads_agents_md(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        agent_command_template="claude",
+    )
+
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "claude"} else None,
+    )
+
+    spec_path = service.spec_dir / "task-789.md"
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    command = service._build_terminal_command(spec_path, project_root)
+
+    assert command[:4] == ["wt.exe", "-d", str(project_root), "powershell.exe"]
+    assert command[4:6] == ["-NoExit", "-Command"]
+    script = command[6]
+    assert "Get-Content -LiteralPath" in script
+    assert "claude -p" in script
+    assert "Write-Host ('Launching Claude Code for task '" in script
 
 
 def test_spawn_agent_creates_codex_config_on_windows(
