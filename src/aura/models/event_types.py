@@ -161,6 +161,16 @@ Payload:
     timestamp (str): ISO timestamp when line was captured
 """
 
+AGENT_OUTPUT = "AGENT_OUTPUT"
+"""
+Dispatched when processed agent output is ready for display.
+
+Payload:
+    task_id (str): Unique identifier for the task
+    text (str): Aggregated output text captured since last update
+    timestamp (str): ISO timestamp when the chunk was published
+"""
+
 # Application lifecycle events
 APP_START = "APP_START"
 APP_SHUTDOWN = "APP_SHUTDOWN"

@@ -1,41 +1,29 @@
 import argparse
-import sys
 import logging
+import sys
 from typing import List, Optional
-from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QThreadPool, QTimer
+
 from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import QApplication
+
 from src.aura.app.event_bus import EventBus
-from src.aura.services.llm_service import LLMService
+from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
+from src.aura.project.project_manager import ProjectManager
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.conversation_persistence_service import ConversationPersistenceService
-from src.aura.services.workspace_service import WorkspaceService
 from src.aura.services.file_registry import FileRegistry
+from src.aura.services.image_storage_service import ImageStorageService
+from src.aura.services.llm_service import LLMService
 from src.aura.services.terminal_agent_service import TerminalAgentService
-from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
-from src.aura.services.terminal_session_manager import TerminalSessionManager
-from src.aura.services.memory_manager import MemoryManager
-from src.aura.services.token_tracker import TokenTracker
 from src.aura.services.user_settings_manager import (
     get_terminal_agent_command_template,
     get_terminal_host_preference,
     load_user_settings,
 )
+from src.aura.services.workspace_service import WorkspaceService
 from src.aura.models.events import Event
-from src.aura.models.event_types import TRIGGER_AUTO_INTEGRATE
-from src.aura.prompts.prompt_manager import PromptManager
-from src.aura.brain import AuraBrain
-from src.aura.executor import AuraExecutor
-from src.aura.interface import AuraInterface
-from src.aura.project.project_manager import ProjectManager
-from src.aura.context.context_manager import ContextManager
-from src.aura.models.context_models import ContextConfig
-from src.aura.agent.iteration_controller import IterationController
-from src.aura.models.iteration_models import IterationConfig
-from src.aura.config import ASSETS_DIR, WORKSPACE_DIR, ROOT_DIR
-from src.aura.services.image_storage_service import ImageStorageService
-from src.ui.windows.main_window import MainWindow
 from src.ui.controllers.conversation_sidebar_controller import ConversationSidebarController
+from src.ui.windows.main_window import MainWindow
 
 
 def get_project_from_args_or_prompt(argv: Optional[List[str]] = None) -> str:
@@ -118,15 +106,13 @@ class AuraApp:
         self._load_fonts()
 
         self.event_bus = EventBus()
-        self.token_tracker = TokenTracker(self.event_bus, token_limit=200_000)
-        self.prompt_manager = PromptManager()
         image_cache_dir = ROOT_DIR / "image_cache"
         try:
             self.image_storage_service = ImageStorageService(image_cache_dir, retention_limit=200)
         except Exception:
             logging.warning("Image cache unavailable; continuing without persistent image storage.")
             self.image_storage_service = None
-        # Instantiate core services
+
         self.conversation_persistence_service = ConversationPersistenceService()
         self.conversation_management_service = ConversationManagementService(
             self.event_bus,
@@ -146,15 +132,6 @@ class AuraApp:
             agent_command_template=agent_command_template,
             terminal_shell_preference=terminal_host_preference,
         )
-        self.workspace_monitor = WorkspaceChangeMonitor(WORKSPACE_DIR)
-        self.terminal_session_manager = TerminalSessionManager(
-            workspace_root=WORKSPACE_DIR,
-            workspace_monitor=self.workspace_monitor,
-            event_bus=self.event_bus,
-            stabilization_seconds=90,
-            timeout_seconds=600,
-        )
-
         # Ensure the requested project is active
         try:
             self.workspace_service.set_active_project(project_name)
@@ -163,84 +140,13 @@ class AuraApp:
 
         # Low-level LLM dispatcher
         self.llm_service = LLMService(self.event_bus, self.image_storage_service)
-        # New 3-layer architecture
-        self.brain = AuraBrain(self.llm_service, self.prompt_manager)
-        self.executor = AuraExecutor(
-            event_bus=self.event_bus,
-            llm=self.llm_service,
-            prompts=self.prompt_manager,
-            workspace=self.workspace_service,
-            file_registry=self.file_registry,
-            terminal_service=self.terminal_agent_service,
-            workspace_monitor=self.workspace_monitor,
-            terminal_session_manager=self.terminal_session_manager,
-        )
 
-        # Initialize Memory Manager for project memory persistence (before ContextManager)
-        self.memory_manager = None
-        try:
-            self.memory_manager = MemoryManager(
-                project_manager=self.project_manager,
-                event_bus=self.event_bus
-            )
-            logging.info("MemoryManager initialized successfully")
-        except Exception as e:
-            logging.warning(f"Failed to initialize MemoryManager: {e}. Continuing without memory management.")
-
-        # Initialize Context Manager for intelligent context loading
-        self.context_manager = None
-        try:
-            context_config = ContextConfig(
-                max_tokens=8000,
-                min_relevance_threshold=0.3,
-                max_files=20
-            )
-            self.context_manager = ContextManager(
-                project_root=str(WORKSPACE_DIR),
-                config=context_config,
-                event_bus=self.event_bus,
-                memory_manager=self.memory_manager
-            )
-            logging.info("ContextManager initialized successfully")
-        except Exception as e:
-            logging.warning(f"Failed to initialize ContextManager: {e}. Continuing with fallback behavior.")
-
-        # Initialize Iteration Controller for intelligent iteration control
-        self.iteration_controller = None
-        try:
-            iteration_config = IterationConfig(
-                bootstrap_max_iterations=15,
-                iterate_max_iterations=8,
-                loop_detection_threshold=3,
-                use_llm_reflection=True
-            )
-            self.iteration_controller = IterationController(
-                config=iteration_config,
-                llm_service=self.llm_service,
-                event_bus=self.event_bus
-            )
-            logging.info("IterationController initialized successfully")
-        except Exception as e:
-            logging.warning(f"Failed to initialize IterationController: {e}. Continuing with fallback behavior.")
-
-        # Thread pool for background tasks
-        thread_pool = QThreadPool.globalInstance()
-
-        self.interface = AuraInterface(
-            event_bus=self.event_bus,
-            brain=self.brain,
-            executor=self.executor,
-            conversations=self.conversation_management_service,
-            workspace=self.workspace_service,
-            thread_pool=thread_pool,
-            project_manager=self.project_manager,
-            context_manager=self.context_manager,
-            iteration_controller=self.iteration_controller,
-        )
         self.main_window = MainWindow(
             self.event_bus,
             self.image_storage_service,
-            self.terminal_session_manager,
+            llm_service=self.llm_service,
+            terminal_service=self.terminal_agent_service,
+            workspace_service=self.workspace_service,
             conversations=self.conversation_management_service,
         )
 
@@ -253,9 +159,6 @@ class AuraApp:
 
         self._register_event_handlers()
         self._initialize_workspace()
-
-        # Setup periodic session monitoring
-        self._setup_session_monitor()
 
         logging.info("AuraApp initialized successfully.")
 
@@ -295,50 +198,64 @@ class AuraApp:
     def _register_event_handlers(self):
         """Register all event handlers for the application."""
         self.event_bus.subscribe("APP_START", self.on_app_start)
+        self.event_bus.subscribe("SEND_USER_MESSAGE", self._handle_user_command)
+
+    def _handle_user_command(self, event: Event) -> None:
+        """Handle project-related slash commands dispatched via the event bus."""
+        payload = event.payload or {}
+        text = (payload.get("text") or "").strip()
+        if not text.startswith("/project"):
+            return
+
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3:
+            logging.warning("Ignoring malformed project command: %s", text)
+            return
+
+        action = parts[1].lower()
+        project_name = parts[2].strip()
+        if not project_name:
+            logging.warning("Project command missing name: %s", text)
+            return
+
+        if action == "create":
+            self._handle_project_create(project_name)
+        elif action == "switch":
+            self._handle_project_switch(project_name)
+        else:
+            logging.debug("Unhandled project subcommand '%s' in '%s'", action, text)
+
+    def _handle_project_create(self, project_name: str) -> None:
+        root_path = get_project_root_path(project_name)
+        if self.project_manager.project_exists(project_name):
+            logging.info("Project '%s' already exists; activating workspace.", project_name)
+        else:
+            try:
+                self.project_manager.create_project(project_name, root_path)
+            except Exception as exc:
+                logging.error("Failed to create project '%s': %s", project_name, exc)
+                return
+        try:
+            self.workspace_service.set_active_project(project_name)
+        except Exception as exc:
+            logging.error("Failed to activate project '%s': %s", project_name, exc)
+
+    def _handle_project_switch(self, project_name: str) -> None:
+        if not self.project_manager.project_exists(project_name):
+            logging.warning("Cannot switch: project '%s' does not exist", project_name)
+            return
+        try:
+            self.project_manager.switch_project(project_name)
+            self.workspace_service.set_active_project(project_name)
+        except Exception as exc:
+            logging.error("Failed to switch project '%s': %s", project_name, exc)
 
     def on_app_start(self, event):
         """Example event handler for application start."""
         logging.info(f"AuraApp caught event: {event.event_type}")
 
-    def _setup_session_monitor(self):
-        """Setup periodic monitoring of terminal sessions."""
-        self.session_check_timer = QTimer()
-        self.session_check_timer.timeout.connect(self._check_terminal_sessions)
-        self.session_check_timer.start(5000)  # Check every 5 seconds
-        logging.info("Terminal session monitoring started (checking every 5s)")
-
-    def _check_terminal_sessions(self):
-        """Periodically check terminal sessions for completion."""
-        try:
-            completed_sessions = self.terminal_session_manager.check_all_sessions()
-
-            # Auto-integrate completed sessions if enabled
-            for session_status in completed_sessions:
-                if session_status.status == "completed":
-                    logging.info(
-                        "Session %s completed, dispatching auto-integrate event",
-                        session_status.session.task_id
-                    )
-                    self.event_bus.dispatch(
-                        Event(
-                            event_type=TRIGGER_AUTO_INTEGRATE,
-                            payload={"task_id": session_status.session.task_id}
-                        )
-                    )
-        except Exception as exc:
-            logging.error("Error checking terminal sessions: %s", exc)
-
-    def cleanup(self):
-        """Cleanup resources before application shutdown."""
-        logging.info("Cleaning up Aura application...")
-        # Terminate all active terminal sessions
-        count = self.terminal_session_manager.cleanup_all_sessions()
-        logging.info(f"Cleaned up {count} terminal sessions")
-
     def run(self):
         """Shows the main window and starts the application."""
         logging.info("Starting Aura application...")
-        # Register cleanup to run on application exit
-        self.app.aboutToQuit.connect(self.cleanup)
         self.main_window.show()
         sys.exit(self.app.exec())

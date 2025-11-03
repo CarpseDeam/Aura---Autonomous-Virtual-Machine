@@ -1,10 +1,5 @@
-"""
-Agent module for Aura.
+"""Agent package placeholder after legacy system archival."""
 
-Contains the iteration controller and agent orchestration logic.
-"""
+from __future__ import annotations
 
-from .iteration_controller import IterationController
-from .aura_agent import AuraAgent
-
-__all__ = ["IterationController", "AuraAgent"]
+__all__: list[str] = []

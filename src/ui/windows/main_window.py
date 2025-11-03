@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
@@ -9,11 +9,16 @@ from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QSplitter, QVBo
 
 from src.aura.app.event_bus import EventBus
 from src.aura.config import ASSETS_DIR
+from src.aura.models.event_types import AGENT_OUTPUT, TERMINAL_SESSION_COMPLETED, TERMINAL_SESSION_FAILED
 from src.aura.models.events import Event
-from src.aura.services.image_storage_service import ImageStorageService
+from src.aura.services.agent_supervisor import AgentSupervisor
 from src.aura.services.conversation_management_service import ConversationManagementService
+from src.aura.services.image_storage_service import ImageStorageService
+from src.aura.services.llm_service import LLMService
+from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.terminal_session_manager import TerminalSessionManager
 from src.aura.services.user_settings_manager import get_auto_accept_changes
+from src.aura.services.workspace_service import WorkspaceService
 from src.ui.windows.main_window_constants import (
     AURA_ASCII_BANNER,
     AURA_STYLESHEET,
@@ -41,12 +46,23 @@ class MainWindow(QMainWindow):
         self,
         event_bus: EventBus,
         image_storage: ImageStorageService,
+        *,
+        llm_service: LLMService,
+        terminal_service: TerminalAgentService,
+        workspace_service: WorkspaceService,
+        conversations: ConversationManagementService,
         terminal_session_manager: Optional[TerminalSessionManager] = None,
-        conversations: Optional[ConversationManagementService] = None,
     ) -> None:
         super().__init__()
         self.event_bus = event_bus
         self.settings_window: Optional[SettingsWindow] = None
+        self.workspace_service = workspace_service
+        self.supervisor = AgentSupervisor(
+            llm_service,
+            terminal_service,
+            workspace_service,
+            self.event_bus,
+        )
 
         self._auto_accept_enabled = get_auto_accept_changes()
 
@@ -85,6 +101,7 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._connect_signals()
         self._event_controller.register()
+        self._subscribe_supervisor_events()
 
         self.chat_display.display_boot_sequence(BOOT_SEQUENCE)
 
@@ -141,9 +158,53 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _subscribe_supervisor_events(self) -> None:
+        """Subscribe to supervisor-emitted events for agent output and lifecycle."""
+        self.event_bus.subscribe(AGENT_OUTPUT, self._handle_agent_output)
+        self.event_bus.subscribe(TERMINAL_SESSION_COMPLETED, self._handle_session_completed)
+        self.event_bus.subscribe(TERMINAL_SESSION_FAILED, self._handle_session_failed)
+
     def _start_new_session(self) -> None:
         self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
         self.chat_display.display_boot_sequence(BOOT_SEQUENCE)
+
+    def _handle_agent_output(self, event: Event) -> None:
+        payload = event.payload or {}
+        text = (payload.get("text") or "").strip()
+        if not text:
+            return
+        if self.thinking_indicator.is_animating:
+            self.thinking_indicator.stop_thinking()
+        self.chat_display.display_system_message("AGENT", text)
+
+    def _handle_session_completed(self, event: Event) -> None:
+        payload = event.payload or {}
+        reason = payload.get("completion_reason") or "completed"
+        task_id = payload.get("task_id", "?")
+        self._restore_chat_input()
+        self.chat_display.display_system_message("AGENT", f"Task {task_id} completed: {reason}")
+
+    def _handle_session_failed(self, event: Event) -> None:
+        payload = event.payload or {}
+        reason = payload.get("failure_reason") or payload.get("completion_reason") or "failed"
+        task_id = payload.get("task_id", "?")
+        error_message = payload.get("error_message")
+        self._restore_chat_input()
+        summary = f"Task {task_id} failed: {reason}"
+        if error_message:
+            summary = f"{summary} ({error_message})"
+        self.chat_display.display_system_message("ERROR", summary)
+
+    def _restore_chat_input(self) -> None:
+        self.thinking_indicator.stop_thinking()
+        self.chat_input.setEnabled(True)
+        self.chat_input.focus_input()
+
+    def _resolve_active_project(self) -> str:
+        active = getattr(self.workspace_service, "active_project", None)
+        if active:
+            return active
+        return "default_project"
 
     def _open_settings_dialog(self) -> None:
         if self.settings_window is None:
@@ -161,10 +222,11 @@ class MainWindow(QMainWindow):
         self.chat_display.display_user_message(user_text, normalized_image)
         self.thinking_indicator.start_thinking("Analyzing your request...")
 
-        payload: Dict[str, Any] = {"text": user_text}
-        if normalized_image:
-            payload["image"] = normalized_image
-        self.event_bus.dispatch(Event(event_type="SEND_USER_MESSAGE", payload=payload))
+        project_name = self._resolve_active_project()
+        try:
+            self.supervisor.process_message(user_text, project_name)
+        except Exception as exc:
+            logger.error("Failed to process message with supervisor: %s", exc, exc_info=True)
 
     def closeEvent(self, event) -> None:  # noqa: D401 - QWidget signature
         QApplication.quit()

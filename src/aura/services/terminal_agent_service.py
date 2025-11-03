@@ -333,13 +333,25 @@ class TerminalAgentService:
             sanitized.append(token)
         if not sanitized:
             return sanitized
-        command_name = Path(sanitized[0]).stem.lower()
+        command_path = Path(sanitized[0])
+        command_name = command_path.stem.lower()
+        command_basename = command_path.name.lower()
         if command_name in {"gemini", "gemini-cli"}:
             if not any(token.lower() == "--stream" for token in sanitized[1:]):
                 sanitized.append("--stream")
             sanitized.extend(["-o", "stream-json"])
         else:
             sanitized.extend(["--output-format", "stream-json"])
+
+        is_claude_executable = "claude" in command_basename
+        has_stdin_marker = any(token == "-" for token in sanitized[1:])
+        has_verbose_flag = any(
+            token.lower() == "--verbose" or token.lower().startswith("--verbose=")
+            for token in sanitized[1:]
+        )
+        if is_claude_executable and has_stdin_marker and not has_verbose_flag:
+            sanitized.append("--verbose")
+
         return sanitized
 
     def _deduplicate_variant_commands(

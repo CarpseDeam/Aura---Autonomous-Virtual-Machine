@@ -132,3 +132,4 @@ logs/
 /ARCHITECTURE_UPGRADE.md
 /INTEGRATION_GUIDE.md
 /pyproject.toml
+/old/
