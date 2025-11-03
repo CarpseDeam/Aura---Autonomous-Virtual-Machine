@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -242,7 +243,34 @@ class TerminalAgentService:
 
     def _build_windows_gemini_command(self, agents_md_path: Path, project_root: Path) -> List[str]:
         """
-        Build a Windows Terminal command that invokes Gemini CLI with task from AGENTS.md.
+        Build a Windows Terminal command that invokes Gemini CLI with a task from AGENTS.md.
+
+        This method constructs a command to be run in a new Windows Terminal (`wt.exe`)
+        session. It is carefully designed to ensure reliable, autonomous execution
+        of the Gemini CLI agent on Windows.
+
+        Architecture Flow:
+        1. `wt.exe`: The command starts with Windows Terminal to provide a visible,
+           isolated terminal environment for the agent.
+        2. `-d str(project_root)`: Sets the starting directory of the terminal to the
+           project's root, ensuring the agent runs in the correct context.
+        3. `cmd /c ...`: Inside the terminal, `cmd.exe` is used as the shell to execute
+           the agent command. `cmd.exe` is chosen over PowerShell for simplicity and
+           robustness, as it avoids potential issues with PowerShell's Execution Policy
+           and complex PATH variable resolution that can vary between user setups.
+        4. `gemini -p "..."`: The actual Gemini CLI command. The `-p` flag passes a
+           detailed prompt that instructs the agent to read the `AGENTS.md` file.
+        5. `--dangerously-skip-permissions`: This flag is crucial for autonomous
+           operation. It tells the Gemini CLI to proceed without interactive permission
+           prompts, which would otherwise halt the execution of the agent.
+
+        Completion Protocol:
+        The prompt given to the agent includes instructions for a completion protocol.
+        Upon finishing its tasks, the agent is expected to write two files to the
+        `.aura/` directory:
+        - `.aura/{task_id}.summary.json`: A JSON file summarizing the results.
+        - `.aura/{task_id}.done`: An empty file that acts as a sentinel, signaling
+          that the task is complete.
         """
         agents_md_str = str(agents_md_path).replace('"', '""')
 
@@ -262,6 +290,10 @@ class TerminalAgentService:
             "/c",
             cmd_command,
         ]
+
+    def _check_gemini_cli_installed(self) -> bool:
+        """Check if Gemini CLI (gemini) is available on the system."""
+        return shutil.which("gemini") is not None
 
 
     def _build_windows_codex_command(
@@ -698,10 +730,16 @@ class TerminalAgentService:
 
     def _create_gemini_cli_config(self, project_root: Path) -> None:
         """
-        Create .env file with Gemini API key.
+        Create or update the .env file in the project root with the Gemini API key.
+
+        This function safely reads an existing .env file, preserves its contents,
+        and adds or updates the GEMINI_API_KEY.
 
         Args:
-            project_root: Project root directory
+            project_root: The root directory of the project.
+
+        Raises:
+            ValueError: If the Gemini API key is not configured in user settings.
         """
         from src.aura.services.user_settings_manager import load_user_settings
 
@@ -710,16 +748,36 @@ class TerminalAgentService:
         gemini_api_key = api_keys.get("gemini")
 
         if not gemini_api_key:
-            logger.warning("Gemini API key not found in user settings.")
-            return
+            raise ValueError(
+                "Gemini API key not found in user settings. "
+                "Please add your Gemini API key in the settings to use the Gemini CLI agent. "
+                "You can obtain a key from Google AI Studio."
+            )
 
         env_file = project_root / ".env"
+        env_vars = {}
+        if env_file.exists():
+            try:
+                with open(env_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            key, value = line.split("=", 1)
+                            env_vars[key.strip()] = value.strip()
+            except Exception as exc:
+                logger.warning("Failed to read existing .env file: %s", exc)
+
+        env_vars["GEMINI_API_KEY"] = gemini_api_key
+
         try:
             with open(env_file, "w", encoding="utf-8") as f:
-                f.write(f"GEMINI_API_KEY={gemini_api_key}\n")
-            logger.info("Created Gemini CLI .env file at %s", env_file)
+                for key, value in env_vars.items():
+                    f.write(f"{key}={value}\n")
+            logger.info("Updated Gemini CLI .env file at %s", env_file)
         except Exception as exc:
-            logger.warning("Failed to create Gemini CLI .env file: %s", exc)
+            logger.warning("Failed to create or update Gemini CLI .env file: %s", exc)
 
     def _ensure_agent_config(self, project_root: Path) -> None:
         """
@@ -737,6 +795,11 @@ class TerminalAgentService:
             self._create_claude_code_config(project_root)
             logger.debug("Ensured Claude Code config for auto-approval")
         elif agent_type == "gemini-cli":
+            if not self._check_gemini_cli_installed():
+                raise RuntimeError(
+                    "Gemini CLI not found. Please install it globally using: "
+                    "npm install -g @google/gemini-cli@latest"
+                )
             self._create_gemini_cli_config(project_root)
             logger.debug("Ensured Gemini CLI config for auto-approval")
         else:
