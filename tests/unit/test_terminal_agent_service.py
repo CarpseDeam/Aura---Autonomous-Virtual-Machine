@@ -1,44 +1,66 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from src.aura.models.agent_task import TerminalSession
 from src.aura.services.terminal_agent_service import TerminalAgentService
 
 
-def _make_service(tmp_path, monkeypatch) -> TerminalAgentService:
-    # Ensure the Windows-specific PowerShell detection does not fail under test.
-    monkeypatch.setattr(
-        TerminalAgentService,
-        "_resolve_powershell_executable",
-        lambda self: "pwsh.exe",
-        raising=True,
-    )
-    service = TerminalAgentService(
-        workspace_root=tmp_path,
-        default_command=None,
-        agent_command_template="claude",
-        terminal_shell_preference="auto",
-    )
-    return service
+class DummyExpectModule:
+    TIMEOUT = TimeoutError
+    EOF = EOFError
+
+    @staticmethod
+    def spawn(*args: Any, **kwargs: Any) -> Any:  # pragma: no cover - should not be invoked in unit tests
+        raise AssertionError("spawn should not be called in these unit tests")
 
 
-def _extract_tokens(service: TerminalAgentService, command: str, require_stdin: bool) -> list[str]:
-    return service._apply_autonomy_flags(command, require_stdin=require_stdin)  # noqa: SLF001
+class DummyLLM:
+    def __init__(self, response: str = "Use a function") -> None:
+        self.response = response
+        self.calls: list[str] = []
+
+    def run_for_agent(self, agent_name: str, prompt: str) -> str:
+        self.calls.append(prompt)
+        return self.response
 
 
-def test_claude_stdin_adds_verbose_flag(tmp_path, monkeypatch) -> None:
-    service = _make_service(tmp_path, monkeypatch)
-
-    tokens = _extract_tokens(service, "claude", require_stdin=True)
-
-    assert tokens[0] == "claude"
-    assert "-" in tokens, "stdin marker should be appended for streaming agents"
-    assert tokens.count("--verbose") == 1, "claude stdin streaming must include --verbose once"
-    assert tokens[-1] in {"--verbose", "stream-json"}
+@pytest.fixture()
+def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TerminalAgentService:
+    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda self: DummyExpectModule)
+    return TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
 
 
-def test_existing_verbose_flag_not_duplicated(tmp_path, monkeypatch) -> None:
-    service = _make_service(tmp_path, monkeypatch)
+def test_ensure_claude_flags_appends_skip_permissions(service: TerminalAgentService) -> None:
+    tokens = service._ensure_claude_flags(["claude-code"])  # noqa: SLF001
+    assert "--dangerously-skip-permissions" in tokens
 
-    tokens = _extract_tokens(service, "claude --verbose -", require_stdin=True)
 
-    assert tokens.count("--verbose") == 1, "existing --verbose flag should be preserved without duplication"
-    assert "-" in tokens, "stdin marker should be preserved"
+def test_detect_question_matches_keywords(service: TerminalAgentService) -> None:
+    assert service._detect_question("Should I use a class?")  # noqa: SLF001
+    assert service._detect_question("Which option should I pick: 1 or 2?")  # noqa: SLF001
+    assert service._detect_question("Confirm deployment? [y/N]")  # noqa: SLF001
+    assert service._detect_question("Approve changes (y/n)")  # noqa: SLF001
+    assert service._detect_question("Would you like to continue?")  # noqa: SLF001
+    assert service._detect_question("verify output please")  # noqa: SLF001
+    assert service._detect_question("approve update")  # noqa: SLF001
+    assert service._detect_question("choose between plan A and plan B")  # noqa: SLF001
+    assert service._detect_question("should i refactor?")  # noqa: SLF001
+    assert service._detect_question("Confirm?")  # noqa: SLF001
+    assert not service._detect_question("No question here.")  # noqa: SLF001
+
+
+def test_handle_agent_question_prevents_duplicates(service: TerminalAgentService) -> None:
+    session = TerminalSession(task_id="task123", command=["claude"], spec_path="spec.md")
+
+    sent: list[str] = []
+    service._send_to_agent = lambda s, message: sent.append(message)  # type: ignore[assignment]  # noqa: SLF001
+    service._generate_answer = lambda s, q: "Use a function."  # type: ignore[assignment]  # noqa: SLF001
+
+    service._handle_agent_question(session, "Should I use a function?")  # noqa: SLF001
+    service._handle_agent_question(session, "Should I use a function?")  # noqa: SLF001
+
+    assert sent == ["Use a function."]

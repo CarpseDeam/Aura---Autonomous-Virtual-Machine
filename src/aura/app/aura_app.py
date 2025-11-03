@@ -119,6 +119,9 @@ class AuraApp:
         )
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR)
 
+        # Low-level LLM dispatcher
+        self.llm_service = LLMService(self.event_bus, self.image_storage_service)
+
         # Load terminal agent configuration from user settings
         user_settings = load_user_settings()
         agent_command_template = get_terminal_agent_command_template(user_settings)
@@ -126,6 +129,7 @@ class AuraApp:
 
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
+            llm_service=self.llm_service,
             default_command=None,  # Will use template-based command building
             agent_command_template=agent_command_template,
             terminal_shell_preference=terminal_host_preference,
@@ -135,9 +139,6 @@ class AuraApp:
             self.workspace_service.set_active_project(project_name)
         except Exception as exc:
             logging.warning("Failed to activate workspace project '%s': %s", project_name, exc)
-
-        # Low-level LLM dispatcher
-        self.llm_service = LLMService(self.event_bus, self.image_storage_service)
 
         self.main_window = MainWindow(
             self.event_bus,

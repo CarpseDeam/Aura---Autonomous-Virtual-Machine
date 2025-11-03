@@ -63,8 +63,7 @@ def build_session(task_id: str, spec_path: Path) -> TerminalSession:
         task_id=task_id,
         command=["claude"],
         spec_path=str(spec_path),
-        process_id=None,
-        process=None,
+        process_id=12345,
     )
 
 

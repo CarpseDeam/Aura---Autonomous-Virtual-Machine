@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
 
 
 class AgentSpecification(BaseModel):
@@ -22,12 +24,70 @@ class AgentSpecification(BaseModel):
 class TerminalSession(BaseModel):
     """Represents a spawned terminal agent session."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     task_id: str
     command: List[str]
     spec_path: str
     process_id: Optional[int] = None
     started_at: datetime = Field(default_factory=datetime.utcnow)
-    process: Optional[Any] = Field(default=None, exclude=True)  # subprocess.Popen object, excluded from serialization
+    child: Optional[Any] = Field(default=None, exclude=True)
+    log_path: Optional[str] = None
+    monitor_thread: Optional[threading.Thread] = Field(default=None, exclude=True)
+    write_lock: threading.RLock = Field(default_factory=threading.RLock, exclude=True)
+    answer_lock: threading.Lock = Field(default_factory=threading.Lock, exclude=True)
+    answered_questions: Set[str] = Field(default_factory=set, exclude=True)
+
+    _exit_code: Optional[int] = PrivateAttr(default=None)
+
+    def is_alive(self) -> bool:
+        """Return True if the underlying PTY child process is still running."""
+        child = self.child
+        if child is None:
+            return False
+        try:
+            return bool(child.isalive())
+        except Exception:
+            return False
+
+    def poll(self) -> Optional[int]:
+        """Return the exit code if the child process has terminated."""
+        if self.is_alive():
+            return None
+        return self._capture_exit_code()
+
+    def wait(self, timeout: Optional[float] = None) -> Optional[int]:
+        """Block until the child process exits or timeout expires."""
+        child = self.child
+        if child is None:
+            return self._exit_code
+        if timeout is None:
+            try:
+                child.wait()
+            except Exception:
+                pass
+            return self._capture_exit_code()
+        deadline = time.monotonic() + timeout
+        while self.is_alive():
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.1)
+        return self._capture_exit_code()
+
+    def mark_exit(self, exit_code: Optional[int]) -> None:
+        """Persist the final exit code once the child terminates."""
+        self._exit_code = exit_code
+
+    def _capture_exit_code(self) -> Optional[int]:
+        child = self.child
+        if child is None:
+            return self._exit_code
+        exit_code = getattr(child, "exitstatus", None)
+        if exit_code is None:
+            exit_code = getattr(child, "status", None)
+        if exit_code is not None:
+            self._exit_code = exit_code
+        return self._exit_code
 
 
 class TaskSummary(BaseModel):

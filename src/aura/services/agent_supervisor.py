@@ -5,13 +5,11 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from subprocess import TimeoutExpired
 from uuid import uuid4
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.agent_task import AgentSpecification, TerminalSession
 from src.aura.models.event_types import (
-    AGENT_OUTPUT,
     TERMINAL_SESSION_COMPLETED,
     TERMINAL_SESSION_FAILED,
     TERMINAL_SESSION_STARTED,
@@ -42,6 +40,7 @@ class AgentSupervisor:
         self.workspace = workspace_service
         self.event_bus = event_bus
         self._lock = threading.Lock()
+        self._sessions: dict[str, TerminalSession] = {}
 
     def process_message(self, user_message: str, project_name: str) -> None:
         message = user_message.strip()
@@ -64,6 +63,7 @@ class AgentSupervisor:
                 {"task_id": task_id, "failure_reason": "spawn_failed", "error_message": str(exc)},
             )
             raise
+        self._sessions[session.task_id] = session
         payload = {
             "task_id": session.task_id,
             "command": session.command,
@@ -136,18 +136,10 @@ class AgentSupervisor:
         log_path = project_path / ".aura" / f"{task_id}.output.log"
         parser = OutputParser(project_path, task_id)
         position = 0
-        process = session.process
         try:
             while True:
                 text, position = read_new_text(log_path, position)
-                if text:
-                    payload = {
-                        "task_id": task_id,
-                        "text": text,
-                        "timestamp": datetime.utcnow().isoformat() + "Z",
-                    }
-                    self._dispatch_event(AGENT_OUTPUT, payload)
-                running = process is not None and process.poll() is None
+                running = session.is_alive()
                 result = parser.analyze(text, running)
                 if result.is_complete or not running:
                     self._finalize_session(session, result)
@@ -161,15 +153,9 @@ class AgentSupervisor:
             )
 
     def _finalize_session(self, session: TerminalSession, result: OutputParserResult) -> None:
-        exit_code = None
-        process = session.process
-        if process is not None:
-            exit_code = process.poll()
-            if exit_code is None and result.is_complete:
-                try:
-                    exit_code = process.wait(timeout=1.0)
-                except TimeoutExpired:
-                    exit_code = process.poll()
+        exit_code = session.poll()
+        if exit_code is None and result.is_complete:
+            exit_code = session.wait(timeout=1.0)
         payload = {
             "task_id": session.task_id,
             "completion_reason": result.completion_reason or "process-exit",
@@ -178,6 +164,7 @@ class AgentSupervisor:
             payload["exit_code"] = exit_code
         event_type = TERMINAL_SESSION_COMPLETED if exit_code in (0, None) else TERMINAL_SESSION_FAILED
         self._dispatch_event(event_type, payload)
+        self._sessions.pop(session.task_id, None)
 
     def _dispatch_event(self, event_type: str, payload: dict[str, object]) -> None:
         try:
