@@ -40,6 +40,7 @@ class IterationController:
         ActionType.SIMPLE_REPLY,
         ActionType.RESEARCH,
         ActionType.DISCUSS,
+        ActionType.SPAWN_AGENT,
         ActionType.MCP_START_SERVER,
     }
 

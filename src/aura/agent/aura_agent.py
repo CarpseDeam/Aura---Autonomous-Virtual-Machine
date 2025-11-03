@@ -341,6 +341,11 @@ class AuraAgent:
             logger.info("[Router] DESIGN_BLUEPRINT auto-spawned terminal agent; ending cycle and waiting for completion.")
             return "end"
 
+        # Special case: explicit SPAWN_AGENT should end the cycle as well
+        if action.type == ActionType.SPAWN_AGENT:
+            logger.info("[Router] SPAWN_AGENT executed; ending cycle and waiting for terminal completion.")
+            return "end"
+
         # For tool actions (LIST_FILES, READ_FILE, SPAWN_AGENT, etc.), continue the loop
         logger.info(f"[Router] Tool action {action.type} completed, continuing to next iteration.")
         return "continue"

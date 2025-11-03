@@ -188,16 +188,17 @@ class AuraExecutor:
         # Auto-spawn terminal agent if enabled
         auto_spawn = action.get_param("auto_spawn", True)  # Default to True
         if auto_spawn:
-            logger.info("Auto-spawning terminal agent for task %s", spec.task_id)
-            try:
-                session, process = self.terminal_service.spawn_agent_for_supervision(spec)
-                self.terminal_session_manager.register_session(session, process=process)
-                context.extras["last_terminal_session"] = session.model_dump()
-                logger.info("Auto-spawned terminal session %s", session.task_id)
-            except Exception as exc:
-                logger.error("Failed to auto-spawn terminal agent: %s", exc)
-                # Don't fail the whole operation, just log the error
-
+                    logger.info("Auto-spawning terminal agent (visible window) for task %s", spec.task_id)
+                    try:
+                        # Use spawn_agent for visible terminal windows
+                        # User can watch the agent work in its native styled terminal
+                        session = self.terminal_service.spawn_agent(spec)
+                        self.terminal_session_manager.register_session(session)
+                        context.extras["last_terminal_session"] = session.model_dump()
+                        logger.info("Auto-spawned visible terminal session %s", session.task_id)
+                    except Exception as exc:
+                        logger.error("Failed to auto-spawn terminal agent: %s", exc)
+                        # Don't fail the whole operation, just log the error
         return spec
 
     def _handle_refine_code(self, action: Action, context: ProjectContext) -> AgentSpecification:
