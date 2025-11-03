@@ -406,27 +406,56 @@ class AuraBrain:
         # Option B (preferred fast-path): if a latest specification exists in context, reference it
         if proposed_action.type == ActionType.SPAWN_AGENT:
             extras = context.extras or {}
-            has_latest = isinstance(extras.get("latest_specification"), (dict,))
             params = dict(proposed_action.params or {})
-            has_inline_spec = isinstance(params.get("specification"), (dict, str))
+            spec_payload = params.get("specification")
 
-            if has_inline_spec:
-                logger.debug("SPAWN_AGENT provided with inline specification; proceeding.")
-                return proposed_action
+            if isinstance(spec_payload, dict):
+                required_fields = ("task_id", "request", "prompt")
+                missing_fields = [
+                    field
+                    for field in required_fields
+                    if not isinstance(spec_payload.get(field), str) or not spec_payload.get(field).strip()
+                ]
+                if missing_fields:
+                    logger.warning(
+                        "SPAWN_AGENT inline specification missing required fields: %s. "
+                        "Falling back to guardrail handling.",
+                        ", ".join(missing_fields),
+                    )
+                    params.pop("specification", None)
+                    spec_payload = None
+                else:
+                    logger.debug("SPAWN_AGENT provided with inline specification; proceeding.")
+                    return Action(type=ActionType.SPAWN_AGENT, params=params)
+            elif isinstance(spec_payload, str) and spec_payload.strip():
+                token = spec_payload.strip()
+                if token.lower() == "latest":
+                    params["specification"] = "latest"
+                    logger.debug("SPAWN_AGENT referencing latest specification token.")
+                    return Action(type=ActionType.SPAWN_AGENT, params=params)
 
-            if has_latest:
+                logger.warning(
+                    "SPAWN_AGENT received unsupported specification token '%s'; falling back to guardrail handling.",
+                    token,
+                )
+                params.pop("specification", None)
+            else:
+                params.pop("specification", None)
+
+            if isinstance(extras.get("latest_specification"), dict):
                 logger.info(
-                    "SPAWN_AGENT selected with no inline spec; using cached latest_specification."
+                    "SPAWN_AGENT selected with no usable inline spec; using cached latest_specification."
                 )
                 params["specification"] = "latest"
                 return Action(type=ActionType.SPAWN_AGENT, params=params)
 
-            # Option A: No spec available; design blueprint first and auto-spawn
             logger.info(
                 "SPAWN_AGENT selected but no specification available; switching to DESIGN_BLUEPRINT with auto_spawn."
             )
             request_text = (
-                str(data.get("request")).strip() if isinstance(data.get("request"), str) and str(data.get("request")).strip() else user_text
+                str(data.get("request")).strip()
+                if isinstance(data.get("request"), str) and str(data.get("request")).strip()
+                else user_text
             )
             return Action(
                 type=ActionType.DESIGN_BLUEPRINT,
