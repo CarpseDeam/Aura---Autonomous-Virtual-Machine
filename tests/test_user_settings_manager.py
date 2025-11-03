@@ -527,6 +527,7 @@ def test_save_load_round_trip_preserves_all_fields(temp_settings_file: Path) -> 
             "anthropic": "sk-ant-test",
             "openai": "sk-openai-test",
             "google": "google-key-test",
+            "gemini": "gemini-key-test",
         },
         "auto_accept_changes": False,
     }

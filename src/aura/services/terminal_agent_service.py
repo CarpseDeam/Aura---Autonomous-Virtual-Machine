@@ -100,6 +100,15 @@ class TerminalAgentService:
                 logger.debug("Constructed Windows headless command for Claude Code: %s", windows_command)
                 return windows_command
 
+            # Gemini CLI: Launch in headless mode with -p and AGENTS.md content
+            if agent_tokens and agent_tokens[0].lower() in {"gemini", "gemini-cli"}:
+                windows_command = self._build_windows_gemini_command(
+                    agents_md_path=agents_md_path,
+                    project_root=project_root,
+                )
+                logger.debug("Constructed Windows headless command for Gemini CLI: %s", windows_command)
+                return windows_command
+
             # Default: Try Windows Terminal, fallback to PowerShell
             logger.debug("Unknown agent type on Windows, attempting Windows Terminal")
             return self._build_windows_terminal_command(agent_command, agents_md_path, project_root)
@@ -230,6 +239,30 @@ class TerminalAgentService:
             "/c",
             cmd_command,
         ]
+
+    def _build_windows_gemini_command(self, agents_md_path: Path, project_root: Path) -> List[str]:
+        """
+        Build a Windows Terminal command that invokes Gemini CLI with task from AGENTS.md.
+        """
+        agents_md_str = str(agents_md_path).replace('"', '""')
+
+        cmd_command = (
+            f'gemini -p "Read and execute all tasks in the AGENTS.md file in the current directory. ' 
+            f'Work autonomously without asking for confirmation. When complete, write .aura/{{task_id}}.summary.json ' 
+            f'and .aura/{{task_id}}.done files as specified in the completion protocol." ' 
+            f'--dangerously-skip-permissions'
+        )
+
+        logger.debug("Launching Gemini CLI with simple cmd.exe command")
+        return [
+            "wt.exe",
+            "-d",
+            str(project_root),
+            "cmd",
+            "/c",
+            cmd_command,
+        ]
+
 
     def _build_windows_codex_command(
         self,
@@ -609,6 +642,8 @@ class TerminalAgentService:
             return "codex"
         elif "claude" in template or "claude-code" in template:
             return "claude_code"
+        elif "gemini-cli" in template:
+            return "gemini-cli"
         else:
             return "unknown"
 
@@ -661,6 +696,31 @@ class TerminalAgentService:
         except Exception as exc:
             logger.warning("Failed to create Claude Code config: %s", exc)
 
+    def _create_gemini_cli_config(self, project_root: Path) -> None:
+        """
+        Create .env file with Gemini API key.
+
+        Args:
+            project_root: Project root directory
+        """
+        from src.aura.services.user_settings_manager import load_user_settings
+
+        settings = load_user_settings()
+        api_keys = settings.get("api_keys", {})
+        gemini_api_key = api_keys.get("gemini")
+
+        if not gemini_api_key:
+            logger.warning("Gemini API key not found in user settings.")
+            return
+
+        env_file = project_root / ".env"
+        try:
+            with open(env_file, "w", encoding="utf-8") as f:
+                f.write(f"GEMINI_API_KEY={gemini_api_key}\n")
+            logger.info("Created Gemini CLI .env file at %s", env_file)
+        except Exception as exc:
+            logger.warning("Failed to create Gemini CLI .env file: %s", exc)
+
     def _ensure_agent_config(self, project_root: Path) -> None:
         """
         Create appropriate config file based on which agent is being used.
@@ -676,6 +736,9 @@ class TerminalAgentService:
         elif agent_type == "claude_code":
             self._create_claude_code_config(project_root)
             logger.debug("Ensured Claude Code config for auto-approval")
+        elif agent_type == "gemini-cli":
+            self._create_gemini_cli_config(project_root)
+            logger.debug("Ensured Gemini CLI config for auto-approval")
         else:
             logger.warning("Unknown agent type '%s', skipping auto-config creation", agent_type)
 

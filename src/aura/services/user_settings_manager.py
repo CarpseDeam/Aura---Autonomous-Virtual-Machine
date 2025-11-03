@@ -26,6 +26,10 @@ TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
         "label": "Claude Code",
         "command_template": "claude"  # Correct executable name
     },
+    "gemini-cli": {
+        "label": "Gemini CLI",
+        "command_template": "gemini -p \"{prompt}\" --output-format json"
+    },
 }
 
 # Default command template used when the selection cannot be resolved.
@@ -36,6 +40,7 @@ DEFAULT_API_KEYS = {
     "anthropic": "",
     "openai": "",
     "google": "",
+    "gemini": "",
 }
 
 
