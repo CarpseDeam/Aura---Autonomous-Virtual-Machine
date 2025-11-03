@@ -143,7 +143,7 @@ class BlueprintHandler:
             if isinstance(spec.get("file_path"), str)
         ]
 
-        return AgentSpecification(
+        specification = AgentSpecification(
             task_id=task_id,
             request=user_text,
             project_name=project_name,
@@ -155,6 +155,13 @@ class BlueprintHandler:
                 "generated_at": datetime.utcnow().isoformat(),
             },
         )
+        logger.info(
+            "BlueprintHandler: generated specification %s for project %s (%d planned files)",
+            specification.task_id,
+            specification.project_name,
+            len(planned_files),
+        )
+        return specification
 
     def build_manual_specification(
         self,
@@ -192,7 +199,7 @@ class BlueprintHandler:
             project_files=generation_context.existing_files,
         )
 
-        return AgentSpecification(
+        specification = AgentSpecification(
             task_id=task_id,
             request=request,
             project_name=generation_context.project_name,
@@ -207,6 +214,12 @@ class BlueprintHandler:
                 "type": "refine",
             },
         )
+        logger.info(
+            "BlueprintHandler: built manual specification %s targeting %d file(s)",
+            specification.task_id,
+            len(planned_files),
+        )
+        return specification
 
     def _render_terminal_prompt(
         self,

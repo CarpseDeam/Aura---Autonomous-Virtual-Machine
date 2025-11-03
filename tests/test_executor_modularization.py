@@ -178,17 +178,14 @@ def test_design_blueprint_auto_spawn_registers_session() -> None:
     )
     executor.blueprint_handler.execute_design_blueprint = MagicMock(return_value=spec)
     session = TerminalSession(task_id="auto-001", command=["bash"], spec_path="spec.json")
-    # Supervised spawn returns (session, process)
-    process = MagicMock()
-    executor.terminal_service.spawn_agent_for_supervision.return_value = (session, process)  # type: ignore[assignment]
+    executor.terminal_service.spawn_agent.return_value = session  # type: ignore[assignment]
 
     action = Action(type=ActionType.DESIGN_BLUEPRINT, params={"request": "build service"})
     result = executor.execute(action, ctx)
 
     assert result is spec
-    executor.terminal_service.spawn_agent_for_supervision.assert_called_once_with(spec)
-    # Should register with process handle for I/O capture
-    executor.terminal_session_manager.register_session.assert_called_once()
+    executor.terminal_service.spawn_agent.assert_called_once_with(spec)
+    executor.terminal_session_manager.register_session.assert_called_once_with(session)
     assert ctx.extras["latest_specification"]["task_id"] == "auto-001"
     assert ctx.extras["last_terminal_session"] == session.model_dump()
     assert ctx.active_files == ["src/main.py"]

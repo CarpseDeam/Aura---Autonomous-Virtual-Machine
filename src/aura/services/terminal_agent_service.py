@@ -494,6 +494,12 @@ class TerminalAgentService:
             command = self._build_terminal_command(spec_path, project_root)
 
         self._ensure_agent_config(project_root)
+        agent_type = self._detect_agent_type()
+        logger.info(
+            "TerminalAgentService: launching %s agent for task %s",
+            agent_type,
+            spec.task_id,
+        )
 
         session_env = os.environ.copy()
         session_env.update(env or {})
@@ -670,10 +676,10 @@ class TerminalAgentService:
 
         if agent_type == "codex":
             self._create_codex_config()
-            logger.debug("Ensured Codex config for auto-approval")
+            logger.info("TerminalAgentService: ensured Codex auto-approval config")
         elif agent_type == "claude_code":
             self._create_claude_code_config(project_root)
-            logger.debug("Ensured Claude Code config for auto-approval")
+            logger.info("TerminalAgentService: ensured Claude Code permissions config")
         elif agent_type == "gemini-cli":
             if not self._check_gemini_cli_installed():
                 raise RuntimeError(
@@ -681,7 +687,7 @@ class TerminalAgentService:
                     "npm install -g @google/gemini-cli@latest"
                 )
             self._create_gemini_cli_config(project_root)
-            logger.debug("Ensured Gemini CLI config for auto-approval")
+            logger.info("TerminalAgentService: ensured Gemini CLI environment configuration")
         else:
             logger.warning("Unknown agent type '%s', skipping auto-config creation", agent_type)
 

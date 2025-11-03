@@ -13,14 +13,10 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from collections import deque
-import threading
-from typing import Deque, Optional as _Optional
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-import subprocess
 
 try:
     import psutil
@@ -36,7 +32,6 @@ from src.aura.models.event_types import (
     TERMINAL_SESSION_FAILED,
     TERMINAL_SESSION_TIMEOUT,
     TERMINAL_SESSION_ABORTED,
-    TERMINAL_OUTPUT_RECEIVED,
 )
 from src.aura.models.events import Event
 from src.aura.services.workspace_monitor import WorkspaceChangeMonitor
@@ -101,13 +96,12 @@ class TerminalSessionManager:
             timeout_seconds,
         )
 
-    def register_session(self, session: TerminalSession, process: _Optional[subprocess.Popen] = None) -> None:
+    def register_session(self, session: TerminalSession) -> None:
         """
         Register a new terminal session for tracking.
 
         Args:
             session: The TerminalSession to track
-            process: Optional subprocess handle when spawned with pipes for I/O capture
         """
         status = SessionStatus(
             session=session,
@@ -120,13 +114,6 @@ class TerminalSessionManager:
             session.task_id,
             session.process_id,
         )
-
-        # Attach I/O capture if a piped process is provided
-        if process is not None:
-            try:
-                self._attach_io_capture(session.task_id, process)
-            except Exception as exc:
-                logger.warning("Failed to attach I/O capture for task %s: %s", session.task_id, exc, exc_info=True)
 
         # Dispatch session started event
         if self.event_bus:
@@ -234,169 +221,43 @@ class TerminalSessionManager:
 
         return newly_completed
 
-    # ----------------------------- I/O capture support ------------------------------
-
-    @dataclass
-    class _ProcessIO:
-        process: subprocess.Popen
-        stdout_buffer: Deque[str] = field(default_factory=lambda: deque(maxlen=100))
-        stderr_buffer: Deque[str] = field(default_factory=lambda: deque(maxlen=100))
-        lock: threading.Lock = field(default_factory=threading.Lock)
-        stdin_closed: bool = False
-
-    _io_registry: Dict[str, "TerminalSessionManager._ProcessIO"] = {}
-
-    def _attach_io_capture(self, task_id: str, process: subprocess.Popen) -> None:
-        """
-        Start background readers to buffer last N lines of stdout/stderr.
-
-        Args:
-            task_id: The task identifier.
-            process: subprocess with pipes open.
-        """
-        if not hasattr(process, "stdout") or not hasattr(process, "stderr"):
-            logger.debug("Process for task %s has no pipes; skipping I/O capture", task_id)
-            return
-
-        pid = getattr(process, "pid", None)
-        logger.debug("Starting I/O capture for task %s (pid=%s)", task_id, pid)
-        logger.debug(
-            "Process has stdout/stderr pipes: %s/%s",
-            process.stdout is not None,
-            process.stderr is not None,
-        )
-
-        io_state = TerminalSessionManager._ProcessIO(process=process)
-        self._io_registry[task_id] = io_state
-        logger.debug("Created I/O state for task %s", task_id)
-
-        def _reader(stream, target: Deque[str], channel: str) -> None:
-            logger.debug("I/O reader thread started for task %s (channel=%s)", task_id, channel)
-            try:
-                # Read line by line to avoid blocking on partial buffers
-                while True:
-                    line = stream.readline()
-                    if not line:
-                        logger.debug("EOF reached for task %s (%s)", task_id, channel)
-                        break
-                    try:
-                        text = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
-                    except Exception:
-                        text = str(line)
-                    preview = text[:100].rstrip("\n")
-                    logger.debug("Read from %s (task=%s): %s", channel, task_id, preview)
-                    # Strip trailing newline and buffer + notify
-                    self._buffer_and_dispatch(task_id, io_state, target, text.rstrip("\n"), channel)
-            except Exception as exc:
-                logger.error("I/O reader for task %s (%s) failed: %s", task_id, channel, exc, exc_info=True)
-
-        # Launch daemon threads
-        if process.stdout is not None:
-            logger.debug("Launching stdout reader thread for task %s", task_id)
-            t_out = threading.Thread(target=_reader, args=(process.stdout, io_state.stdout_buffer, "stdout"), daemon=True)
-            t_out.start()
-        if process.stderr is not None:
-            logger.debug("Launching stderr reader thread for task %s", task_id)
-            t_err = threading.Thread(target=_reader, args=(process.stderr, io_state.stderr_buffer, "stderr"), daemon=True)
-            t_err.start()
+    # ----------------------------- Visible terminal behavior ------------------------------
 
     def read_terminal_output(self, task_id: str, max_lines: int = 100, include_stderr: bool = True) -> str:
         """
-        Return recent terminal output for the given session as a single text block.
+        Visible terminals do not expose stdout/stderr pipes for programmatic capture.
 
         Args:
-            task_id: The task/session identifier.
-            max_lines: Maximum total lines to return across channels.
-            include_stderr: Whether to include stderr buffer.
+            task_id: The active session identifier.
+            max_lines: Unused; maintained for interface compatibility.
+            include_stderr: Unused; maintained for interface compatibility.
 
         Returns:
-            Concatenated recent output (stdout first, then stderr section if requested).
+            Advisory string explaining capture limitations.
         """
-        io_state = self._io_registry.get(task_id)
-        if not io_state:
-            logger.debug("No I/O state found for task %s", task_id)
-            return ""
-
-        with io_state.lock:
-            stdout_lines = list(io_state.stdout_buffer)[-max_lines:]
-            stderr_lines = list(io_state.stderr_buffer)[-max_lines:] if include_stderr else []
-
-        output = "\n".join(stdout_lines)
-        if include_stderr and stderr_lines:
-            output = f"{output}\n[stderr]\n" + "\n".join(stderr_lines) if output else "[stderr]\n" + "\n".join(stderr_lines)
-        return output
+        logger.info(
+            "Terminal output capture requested for task %s, but visible sessions stream output directly to the user",
+            task_id,
+        )
+        return "Terminal output capture is not available for visible terminal sessions."
 
     def send_to_terminal(self, task_id: str, message: str, append_newline: bool = True) -> None:
         """
-        Send a message to the process stdin for the given task.
+        Visible terminals require direct human interaction rather than stdin piping.
 
         Args:
-            task_id: The task/session identifier.
-            message: The text to write to stdin.
-            append_newline: Append a trailing newline to the message.
+            task_id: The active session identifier.
+            message: Text that would be written to stdin (unused).
+            append_newline: Whether a newline would have been appended (unused).
 
         Raises:
-            RuntimeError: If stdin is unavailable or the process has terminated.
+            RuntimeError: Always, indicating programmatic input is not supported.
         """
-        io_state = self._io_registry.get(task_id)
-        if not io_state:
-            raise RuntimeError(f"No active I/O for task {task_id}")
-
-        proc = io_state.process
-        if proc.poll() is not None:
-            raise RuntimeError(f"Process for task {task_id} is not running (exit={proc.returncode})")
-
-        stdin = getattr(proc, "stdin", None)
-        if stdin is None:
-            raise RuntimeError(f"Process for task {task_id} has no stdin pipe")
-
-        try:
-            data = message + ("\n" if append_newline else "")
-            stdin.write(data)
-            stdin.flush()
-        except Exception as exc:
-            logger.error("Failed to write to stdin for task %s: %s", task_id, exc, exc_info=True)
-            raise RuntimeError(f"Failed to send input to task {task_id}") from exc
-
-    def _buffer_and_dispatch(
-        self,
-        task_id: str,
-        io_state: "TerminalSessionManager._ProcessIO",
-        target: Deque[str],
-        text: str,
-        channel: str,
-    ) -> None:
-        """
-        Append text to the appropriate buffer and dispatch an output event.
-
-        Args:
-            task_id: Session identifier
-            io_state: Shared I/O state containing the buffers and lock
-            target: The buffer to append to
-            text: Line text without trailing newline
-            channel: 'stdout' or 'stderr'
-        """
-        with io_state.lock:
-            target.append(text)
-
-        if self.event_bus:
-            try:
-                payload = {
-                    "task_id": task_id,
-                    "text": text,
-                    "stream_type": channel,
-                    "timestamp": datetime.now().isoformat(timespec="seconds"),
-                }
-                logger.debug(
-                    "About to dispatch TERMINAL_OUTPUT_RECEIVED (task=%s, stream=%s, text_length=%d)",
-                    task_id,
-                    channel,
-                    len(text),
-                )
-                self.event_bus.dispatch(Event(event_type=TERMINAL_OUTPUT_RECEIVED, payload=payload))
-                logger.debug("Event dispatched successfully (task=%s, stream=%s)", task_id, channel)
-            except Exception as exc:
-                logger.error("Failed dispatching terminal output event for %s: %s", task_id, exc, exc_info=True)
+        logger.warning(
+            "Attempted to send input to task %s, but visible sessions cannot receive programmatic stdin",
+            task_id,
+        )
+        raise RuntimeError("Sending input programmatically is not supported for visible terminal sessions")
 
     def _check_completion_signals(self, status: SessionStatus) -> Optional[Dict]:
         """

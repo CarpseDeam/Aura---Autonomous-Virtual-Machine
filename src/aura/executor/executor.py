@@ -101,6 +101,8 @@ class AuraExecutor:
         if not tool:
             logger.warning("Unsupported action type requested: %s", action.type)
             raise RuntimeError(f"Unsupported action type: {action.type}")
+        handler_name = getattr(tool, "__name__", tool.__class__.__name__)
+        logger.info("Executor: routing action %s to handler %s", action.type.value, handler_name)
         return tool(action, project_context)
 
     # -- MCP handlers ---------------------------------------------------------------
@@ -188,16 +190,19 @@ class AuraExecutor:
         # Auto-spawn terminal agent if enabled
         auto_spawn = action.get_param("auto_spawn", True)  # Default to True
         if auto_spawn:
-            logger.info("Auto-spawning terminal agent (supervised) for task %s", spec.task_id)
+            logger.info("Auto-spawning visible terminal agent for task %s", spec.task_id)
             try:
-                # Supervised spawn returns (session, process) enabling I/O capture
-                session, process = self.terminal_service.spawn_agent_for_supervision(spec)
-                self.terminal_session_manager.register_session(session, process=process)
+                session = self.terminal_service.spawn_agent(
+                    spec,
+                )
+                self.terminal_session_manager.register_session(session)
                 context.extras["last_terminal_session"] = session.model_dump()
-                logger.info("Auto-spawned supervised terminal session %s", session.task_id)
+                logger.info("Auto-spawned visible terminal session %s", session.task_id)
             except Exception as exc:
                 logger.error("Failed to auto-spawn terminal agent for task %s: %s", spec.task_id, exc, exc_info=True)
                 # Don't fail the whole operation, just log the error
+        else:
+            logger.info("Auto-spawn disabled for task %s; returning specification only", spec.task_id)
         return spec
 
     def _handle_refine_code(self, action: Action, context: ProjectContext) -> AgentSpecification:

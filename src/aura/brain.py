@@ -436,6 +436,12 @@ class AuraBrain:
                 },
             )
 
+        params_preview = ", ".join(sorted((proposed_action.params or {}).keys())) or "<no-params>"
+        logger.info(
+            "Brain: selected action %s (params=%s)",
+            proposed_action.type.value,
+            params_preview,
+        )
         return proposed_action
 
     def _build_clarification_context(self, history: List[Dict[str, Any]], _latest_user_text: str) -> str:

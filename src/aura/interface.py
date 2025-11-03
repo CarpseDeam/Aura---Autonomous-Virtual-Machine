@@ -423,6 +423,9 @@ class AuraInterface:
         user_text_raw = payload.get("text") or ""
         image_attachment = payload.get("image")
         user_text = user_text_raw.strip()
+        session_id = payload.get("session_id") or payload.get("conversation_id") or "<unknown>"
+        preview = (user_text[:60] + "…") if len(user_text) > 60 else (user_text or "<image-only>")
+        logger.info("Interface: received user message (session=%s, preview=%s)", session_id, preview)
 
         if not user_text and not image_attachment:
             self.event_bus.dispatch(Event(event_type="MODEL_ERROR", payload={"message": "Empty user request received."}))
