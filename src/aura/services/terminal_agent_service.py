@@ -123,6 +123,7 @@ class TerminalAgentService:
                     agent_tokens,
                     project_root,
                     use_windows_terminal=not prefer_powershell,
+                    task_id=spec.task_id,
                 )
                 logger.debug("Constructed Windows Codex command: %s", windows_command)
                 return windows_command
@@ -133,6 +134,7 @@ class TerminalAgentService:
                     tokens=agent_tokens,
                     project_root=project_root,
                     use_windows_terminal=not prefer_powershell,
+                    task_id=spec.task_id,
                 )
                 logger.debug("Constructed Windows streaming command for Claude Code: %s", windows_command)
                 return windows_command
@@ -143,6 +145,7 @@ class TerminalAgentService:
                     tokens=agent_tokens,
                     project_root=project_root,
                     use_windows_terminal=not prefer_powershell,
+                    task_id=spec.task_id,
                 )
                 logger.debug("Constructed Windows streaming command for Gemini CLI: %s", windows_command)
                 return windows_command
@@ -190,6 +193,7 @@ class TerminalAgentService:
         project_root: Path,
         *,
         use_windows_terminal: bool = True,
+        task_id: Optional[str] = None,
     ) -> List[str]:
         """Launch Claude Code with AGENTS.md streamed over stdin."""
         logger.info("Building Claude command with use_windows_terminal=%s", use_windows_terminal)
@@ -204,7 +208,7 @@ class TerminalAgentService:
             use_windows_terminal = False
 
         logger.debug("Claude Code streaming variants: %s", variants)
-        script = self._render_streaming_script("Claude Code", variants)
+        script = self._render_streaming_script("Claude Code", variants, task_id=task_id)
         return self._wrap_windows_shell_command(
             script,
             project_root,
@@ -217,6 +221,7 @@ class TerminalAgentService:
         project_root: Path,
         *,
         use_windows_terminal: bool = True,
+        task_id: Optional[str] = None,
     ) -> List[str]:
         """Launch Gemini CLI with AGENTS.md streamed over stdin."""
         logger.info("Building Gemini command with use_windows_terminal=%s", use_windows_terminal)
@@ -236,7 +241,7 @@ class TerminalAgentService:
             use_windows_terminal = False
 
         logger.debug("Gemini CLI streaming variants: %s", variants)
-        script = self._render_streaming_script("Gemini CLI", variants)
+        script = self._render_streaming_script("Gemini CLI", variants, task_id=task_id)
         return self._wrap_windows_shell_command(
             script,
             project_root,
@@ -253,6 +258,7 @@ class TerminalAgentService:
         project_root: Path,
         *,
         use_windows_terminal: bool = True,
+        task_id: Optional[str] = None,
     ) -> List[str]:
         """Launch Codex with AGENTS.md streamed over stdin."""
         logger.info("Building Codex command with use_windows_terminal=%s", use_windows_terminal)
@@ -267,7 +273,7 @@ class TerminalAgentService:
         ]
         variants = self._deduplicate_variant_commands(variants)
         logger.debug("Codex streaming variants: %s", variants)
-        script = self._render_streaming_script("Codex", variants)
+        script = self._render_streaming_script("Codex", variants, task_id=task_id)
         if use_windows_terminal and not self._has_windows_terminal():
             logger.warning(
                 "Windows Terminal (wt.exe) not found; falling back to PowerShell for Codex.",
@@ -348,8 +354,15 @@ class TerminalAgentService:
         self,
         agent_label: str,
         variants: Sequence[Sequence[str]],
+        task_id: Optional[str] = None,
     ) -> str:
-        """Render a PowerShell script that pipes AGENTS.md into each command variant."""
+        """Render a PowerShell script that pipes AGENTS.md into each command variant.
+
+        Args:
+            agent_label: Display name for the agent
+            variants: Command variants to try
+            task_id: Optional task ID for output logging
+        """
         if not variants:
             raise ValueError("At least one command variant is required")
         label = agent_label.replace("'", "''")
@@ -360,6 +373,13 @@ class TerminalAgentService:
                 variant_tokens = self._ensure_streaming_output_flag(variant_tokens)
             normalized_variants.append(variant_tokens)
         command_arrays = ", ".join(self._format_powershell_array(cmd) for cmd in normalized_variants)
+
+        # Build the output redirection part if task_id is provided
+        tee_redirect = ""
+        if task_id:
+            log_file = f".aura/{task_id}.output.log"
+            tee_redirect = f" | Tee-Object -FilePath '{log_file}' -Append"
+
         script_lines = [
             "$ErrorActionPreference='Stop';",
             "$agentsPath=Join-Path (Get-Location) 'AGENTS.md';",
@@ -372,9 +392,9 @@ class TerminalAgentService:
             "  try {",
             f"    Write-Host 'Launching {label}: ' -NoNewline; Write-Host ($args -join ' ');",
             "    if ($args.Length -gt 1) {",
-            "      Get-Content -LiteralPath $agentsPath -Raw | & $args[0] @($args[1..($args.Length - 1)])",
+            f"      Get-Content -LiteralPath $agentsPath -Raw | & $args[0] @($args[1..($args.Length - 1)]){tee_redirect}",
             "    } else {",
-            "      Get-Content -LiteralPath $agentsPath -Raw | & $args[0]",
+            f"      Get-Content -LiteralPath $agentsPath -Raw | & $args[0]{tee_redirect}",
             "    }",
             "    $launched=$true",
             "  } catch {",
@@ -555,12 +575,12 @@ class TerminalAgentService:
         session_env["AURA_AGENT_TASK_ID"] = spec.task_id
 
         # Prepare subprocess creation flags for visible terminal windows
+        # Note: Only stdin is piped - stdout/stderr go to terminal so it stays visible
+        # Output is captured via file redirection (see _render_streaming_script)
         popen_kwargs = {
             "cwd": str(project_root),
             "env": session_env,
             "stdin": subprocess.PIPE,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
         }
 
         if sys.platform.startswith("win"):
@@ -601,24 +621,26 @@ class TerminalAgentService:
             process=process,
         )
 
-    def start_output_monitor(self, session: TerminalSession) -> None:
+    def start_output_monitor(self, session: TerminalSession, project_root: Optional[Path] = None) -> None:
         """
-        Start a background thread to monitor agent output and detect questions.
+        Start a background thread to monitor agent output file and detect questions.
 
         Args:
             session: TerminalSession containing the process to monitor
+            project_root: Optional project root path. If not provided, uses workspace_root
         """
         if not session.process:
             logger.warning("Cannot start output monitor: no process object in session")
             return
 
-        def monitor_output():
-            """Background thread that reads stdout and detects question patterns."""
-            process = session.process
-            if not process or not process.stdout:
-                logger.warning("Cannot monitor output: process or stdout is None")
-                return
+        # Determine the log file path
+        if project_root is None:
+            project_root = self.workspace_root
 
+        log_file_path = project_root / ".aura" / f"{session.task_id}.output.log"
+
+        def monitor_output():
+            """Background thread that watches the output file and detects question patterns."""
             # Common question patterns to detect
             question_patterns = [
                 r'\(y/n\)',
@@ -631,29 +653,60 @@ class TerminalAgentService:
             ]
             combined_pattern = re.compile('|'.join(question_patterns), re.IGNORECASE)
 
-            try:
-                for line in iter(process.stdout.readline, b''):
-                    if not line:
-                        break
+            logger.info(f"Output monitor waiting for log file: {log_file_path}")
 
-                    try:
-                        decoded_line = line.decode('utf-8').strip()
-                    except UnicodeDecodeError:
-                        # Try with alternate encoding
-                        try:
-                            decoded_line = line.decode('latin-1').strip()
-                        except:
+            # Wait for the log file to be created (up to 10 seconds)
+            max_wait = 10
+            waited = 0
+            while not log_file_path.exists() and waited < max_wait:
+                import time
+                time.sleep(0.5)
+                waited += 0.5
+
+            if not log_file_path.exists():
+                logger.warning(f"Log file not created after {max_wait}s: {log_file_path}")
+                return
+
+            logger.info(f"Output monitor found log file: {log_file_path}")
+
+            try:
+                # Open the file and start reading from the beginning
+                with open(log_file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    # Start from the beginning to catch all output
+                    # Don't seek - just start reading
+
+                    # Tail the file for content (including existing lines)
+                    while True:
+                        line = f.readline()
+                        if not line:
+                            # No new data, sleep briefly and check again
+                            import time
+                            time.sleep(0.1)
+
+                            # Check if process is still alive
+                            if session.process and session.process.poll() is not None:
+                                # Process ended, read any remaining lines and exit
+                                remaining = f.read()
+                                if remaining:
+                                    for final_line in remaining.split('\n'):
+                                        if final_line.strip():
+                                            logger.info(f"AGENT OUTPUT [{session.task_id}]: {final_line.strip()}")
+                                            if combined_pattern.search(final_line):
+                                                logger.info(f"🔔 AGENT QUESTION DETECTED [{session.task_id}]: {final_line.strip()}")
+                                logger.info(f"Agent process ended, stopping output monitor for task {session.task_id}")
+                                break
                             continue
 
-                    if not decoded_line:
-                        continue
+                        decoded_line = line.strip()
+                        if not decoded_line:
+                            continue
 
-                    # Log all output
-                    logger.info(f"AGENT OUTPUT [{session.task_id}]: {decoded_line}")
+                        # Log all output
+                        logger.info(f"AGENT OUTPUT [{session.task_id}]: {decoded_line}")
 
-                    # Check for question patterns
-                    if combined_pattern.search(decoded_line):
-                        logger.info(f"🔔 AGENT QUESTION DETECTED [{session.task_id}]: {decoded_line}")
+                        # Check for question patterns
+                        if combined_pattern.search(decoded_line):
+                            logger.info(f"🔔 AGENT QUESTION DETECTED [{session.task_id}]: {decoded_line}")
 
             except Exception as exc:
                 logger.error(f"Error monitoring output for task {session.task_id}: {exc}", exc_info=True)
