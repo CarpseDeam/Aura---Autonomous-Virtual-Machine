@@ -61,17 +61,6 @@ class TerminalAgentService:
                    self.spec_dir, self.agent_command_template)
         logger.debug("Terminal shell preference set to: %s", self.terminal_shell_preference)
 
-    def _has_windows_terminal(self) -> bool:
-        """
-        Check if Windows Terminal (wt.exe) is available on the system.
-
-        Returns:
-            True if Windows Terminal is found, False otherwise.
-        """
-        import shutil
-        wt_path = shutil.which("wt") or shutil.which("wt.exe")
-        return wt_path is not None
-
     def _build_terminal_command(self, spec_path: Path, project_root: Path, spec: AgentSpecification) -> List[str]:
         """
         Build a platform-specific command that opens a visible terminal and runs the agent.
@@ -122,7 +111,6 @@ class TerminalAgentService:
                 windows_command = self._build_windows_codex_command(
                     agent_tokens,
                     project_root,
-                    use_windows_terminal=not prefer_powershell,
                     task_id=spec.task_id,
                 )
                 logger.debug("Constructed Windows Codex command: %s", windows_command)
@@ -133,7 +121,6 @@ class TerminalAgentService:
                 windows_command = self._build_windows_claude_command(
                     tokens=agent_tokens,
                     project_root=project_root,
-                    use_windows_terminal=not prefer_powershell,
                     task_id=spec.task_id,
                 )
                 logger.debug("Constructed Windows streaming command for Claude Code: %s", windows_command)
@@ -144,7 +131,6 @@ class TerminalAgentService:
                 windows_command = self._build_windows_gemini_command(
                     tokens=agent_tokens,
                     project_root=project_root,
-                    use_windows_terminal=not prefer_powershell,
                     task_id=spec.task_id,
                 )
                 logger.debug("Constructed Windows streaming command for Gemini CLI: %s", windows_command)
@@ -192,39 +178,28 @@ class TerminalAgentService:
         tokens: Sequence[str],
         project_root: Path,
         *,
-        use_windows_terminal: bool = True,
         task_id: Optional[str] = None,
     ) -> List[str]:
         """Launch Claude Code with AGENTS.md streamed over stdin."""
-        logger.info("Building Claude command with use_windows_terminal=%s", use_windows_terminal)
+        logger.info("Building Claude command with forced PowerShell shell")
         if not tokens:
             raise ValueError("Claude command tokens must not be empty")
 
         variants = self._deduplicate_variant_commands([list(tokens)])
-        if use_windows_terminal and not self._has_windows_terminal():
-            logger.warning(
-                "Windows Terminal (wt.exe) not found; falling back to PowerShell for Claude Code.",
-            )
-            use_windows_terminal = False
 
         logger.debug("Claude Code streaming variants: %s", variants)
         script = self._render_streaming_script("Claude Code", variants, task_id=task_id)
-        return self._wrap_windows_shell_command(
-            script,
-            project_root,
-            use_windows_terminal=use_windows_terminal,
-        )
+        return self._wrap_windows_shell_command(script, project_root)
 
     def _build_windows_gemini_command(
         self,
         tokens: Sequence[str],
         project_root: Path,
         *,
-        use_windows_terminal: bool = True,
         task_id: Optional[str] = None,
     ) -> List[str]:
         """Launch Gemini CLI with AGENTS.md streamed over stdin."""
-        logger.info("Building Gemini command with use_windows_terminal=%s", use_windows_terminal)
+        logger.info("Building Gemini command with forced PowerShell shell")
         if not tokens:
             raise ValueError("Gemini command tokens must not be empty")
 
@@ -234,19 +209,10 @@ class TerminalAgentService:
             list(base_tokens),
         ]
         variants = self._deduplicate_variant_commands(variants)
-        if use_windows_terminal and not self._has_windows_terminal():
-            logger.warning(
-                "Windows Terminal (wt.exe) not found; falling back to PowerShell for Gemini CLI.",
-            )
-            use_windows_terminal = False
 
         logger.debug("Gemini CLI streaming variants: %s", variants)
         script = self._render_streaming_script("Gemini CLI", variants, task_id=task_id)
-        return self._wrap_windows_shell_command(
-            script,
-            project_root,
-            use_windows_terminal=use_windows_terminal,
-        )
+        return self._wrap_windows_shell_command(script, project_root)
 
     def _check_gemini_cli_installed(self) -> bool:
         """Check if Gemini CLI (gemini) is available on the system."""
@@ -257,11 +223,10 @@ class TerminalAgentService:
         tokens: Sequence[str],
         project_root: Path,
         *,
-        use_windows_terminal: bool = True,
         task_id: Optional[str] = None,
     ) -> List[str]:
         """Launch Codex with AGENTS.md streamed over stdin."""
-        logger.info("Building Codex command with use_windows_terminal=%s", use_windows_terminal)
+        logger.info("Building Codex command with forced PowerShell shell")
         if not tokens:
             raise ValueError("Codex command tokens must not be empty")
 
@@ -274,16 +239,7 @@ class TerminalAgentService:
         variants = self._deduplicate_variant_commands(variants)
         logger.debug("Codex streaming variants: %s", variants)
         script = self._render_streaming_script("Codex", variants, task_id=task_id)
-        if use_windows_terminal and not self._has_windows_terminal():
-            logger.warning(
-                "Windows Terminal (wt.exe) not found; falling back to PowerShell for Codex.",
-            )
-            use_windows_terminal = False
-        return self._wrap_windows_shell_command(
-            script,
-            project_root,
-            use_windows_terminal=use_windows_terminal,
-        )
+        return self._wrap_windows_shell_command(script, project_root)
 
     def _ensure_working_directory_flag(self, tokens: Sequence[str], project_root: Path) -> List[str]:
         """
@@ -410,29 +366,9 @@ class TerminalAgentService:
         self,
         script: str,
         project_root: Path,
-        *,
-        use_windows_terminal: bool,
     ) -> List[str]:
-        """Wrap a PowerShell script for execution in Windows Terminal or PowerShell."""
-        logger.info(
-            "Wrapping shell command: use_windows_terminal=%s, has_wt=%s",
-            use_windows_terminal,
-            self._has_windows_terminal(),
-        )
-        if use_windows_terminal:
-            if self._has_windows_terminal():
-                cmd = [
-                    "wt.exe",
-                    "-d",
-                    str(project_root),
-                    "powershell.exe",
-                    "-NoExit",
-                    "-Command",
-                    script,
-                ]
-                logger.info("Final command will be: %s", " ".join(cmd[:3]))
-                return cmd
-            logger.warning("Windows Terminal (wt.exe) not found; using PowerShell fallback.")
+        """Wrap a PowerShell script for execution in PowerShell."""
+        logger.info("Windows Terminal disabled; launching PowerShell in %s", project_root)
         cmd = [
             "pwsh.exe",
             "-NoExit",
