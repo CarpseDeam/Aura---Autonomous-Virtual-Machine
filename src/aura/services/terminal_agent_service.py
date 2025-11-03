@@ -520,16 +520,9 @@ class TerminalAgentService:
         }
 
         if sys.platform.startswith("win"):
-            # Check if using Windows Terminal (wt.exe)
-            # Windows Terminal creates its own window, so CREATE_NEW_CONSOLE is not needed
-            uses_windows_terminal = command and len(command) > 0 and command[0].lower() in {"wt.exe", "wt"}
-
-            if uses_windows_terminal:
-                logger.debug("Using Windows Terminal - CREATE_NEW_CONSOLE not required")
-            else:
-                # For PowerShell/cmd without wt.exe, create a new visible console window
-                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
-                logger.debug("Using CREATE_NEW_CONSOLE flag for Windows terminal visibility")
+            # For PowerShell, create a new visible console window
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+            logger.debug("Using CREATE_NEW_CONSOLE flag for Windows PowerShell visibility")
         else:
             # On Unix-like systems, the terminal emulator command itself creates a visible window
             logger.debug("Using native terminal emulator for Unix terminal visibility")
