@@ -121,12 +121,13 @@ def test_build_terminal_command_injects_codex_autonomy_flag(
         agent_command_template="codex",
     )
 
-    spec_path = service.spec_dir / "task-123.md"
+    spec = _sample_specification()
+    spec_path = service.spec_dir / f"{spec.task_id}.md"
 
     monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.setattr("shutil.which", lambda _: None)
 
-    command = service._build_terminal_command(spec_path, project_root)
+    command = service._build_terminal_command(spec_path, project_root, spec)
 
     assert isinstance(command, list)
     assert any("--full-auto" in part for part in command), "Codex command should include --full-auto flag"
@@ -145,12 +146,13 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
         agent_command_template="claude-code",
     )
 
-    spec_path = service.spec_dir / "task-456.md"
+    spec = _sample_specification(task_id="task-456")
+    spec_path = service.spec_dir / f"{spec.task_id}.md"
 
     monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.setattr("shutil.which", lambda _: None)
 
-    command = service._build_terminal_command(spec_path, project_root)
+    command = service._build_terminal_command(spec_path, project_root, spec)
 
     assert isinstance(command, list)
     # On Unix with no emulator, we run: ["bash", "-c", launch_cmd]
@@ -163,6 +165,31 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
         "Interactive Claude launch should not request print-only mode"
     )
     assert "AGENTS.md" in combined, "Claude command should source AGENTS.md content"
+
+
+def test_build_terminal_command_supports_prompt_placeholder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        agent_command_template="echo {prompt}",
+    )
+
+    spec = _sample_specification(
+        prompt="Render {escaped} braces and describe {weather} data.",
+        task_id="prompt-001",
+    )
+    spec_path = service.spec_dir / f"{spec.task_id}.md"
+
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda _: None)
+
+    command = service._build_terminal_command(spec_path, project_root, spec)
+
+    rendered = " ".join(command)
+    assert "Render {escaped} braces" in rendered
+    assert "{weather}" in rendered
 
 
 def test_windows_claude_command_loads_agents_md(
@@ -182,11 +209,12 @@ def test_windows_claude_command_loads_agents_md(
         lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "claude"} else None,
     )
 
-    spec_path = service.spec_dir / "task-789.md"
+    spec = _sample_specification(task_id="task-789")
+    spec_path = service.spec_dir / f"{spec.task_id}.md"
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
-    command = service._build_terminal_command(spec_path, project_root)
+    command = service._build_terminal_command(spec_path, project_root, spec)
 
     assert command[:4] == ["wt.exe", "-d", str(project_root), "powershell.exe"]
     assert command[4:6] == ["-NoExit", "-Command"]
@@ -215,11 +243,12 @@ def test_windows_claude_prefers_powershell_terminal_when_requested(
         lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "claude"} else None,
     )
 
-    spec_path = service.spec_dir / "task-preference.md"
+    spec = _sample_specification(task_id="task-preference")
+    spec_path = service.spec_dir / f"{spec.task_id}.md"
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
-    command = service._build_terminal_command(spec_path, project_root)
+    command = service._build_terminal_command(spec_path, project_root, spec)
 
     assert command[0].lower() == "pwsh.exe"
     assert "-NoExit" in command, "PowerShell launch should keep the shell open"

@@ -58,13 +58,14 @@ class TerminalAgentService:
         wt_path = shutil.which("wt") or shutil.which("wt.exe")
         return wt_path is not None
 
-    def _build_terminal_command(self, spec_path: Path, project_root: Path) -> List[str]:
+    def _build_terminal_command(self, spec_path: Path, project_root: Path, spec: AgentSpecification) -> List[str]:
         """
         Build a platform-specific command that opens a visible terminal and runs the agent.
 
         Args:
             spec_path: Path to the persisted specification file
             project_root: Path to the project root directory
+            spec: Full agent specification used to hydrate command templates
 
         Returns:
             Command list ready for subprocess.Popen
@@ -72,12 +73,25 @@ class TerminalAgentService:
         # Construct AGENTS.md path in project root
         agents_md_path = project_root / "AGENTS.md"
 
-        # Format the agent command with the spec path
-        agent_command_template = self.agent_command_template.format(
-            spec_path=str(spec_path),
-            task_id=spec_path.stem,
-        ).strip()
+        def _coerce(value: Optional[str]) -> str:
+            return value or ""
 
+        template_args = {
+            "spec_path": str(spec_path),
+            "task_id": spec.task_id,
+            "prompt": _coerce(spec.prompt),
+            "project_name": _coerce(spec.project_name),
+            "request": _coerce(spec.request),
+        }
+
+        try:
+            agent_command_template = self.agent_command_template.format(**template_args).strip()
+        except KeyError as exc:
+            raise RuntimeError(
+                f"Agent command template references unknown placeholder '{exc.args[0]}'"
+            ) from exc
+
+        # Format the agent command with the spec path
         is_windows = sys.platform.startswith("win")
         first_token = agent_command_template.split(maxsplit=1)[0].lower() if agent_command_template else ""
         runs_codex = first_token in {"codex", "codex.exe"}
@@ -559,7 +573,7 @@ class TerminalAgentService:
             command = list(self.default_command)
         else:
             # Build command using template and spec path
-            command = self._build_terminal_command(spec_path, project_root)
+            command = self._build_terminal_command(spec_path, project_root, spec)
 
         self._ensure_agent_config(project_root)
         agent_type = self._detect_agent_type()
