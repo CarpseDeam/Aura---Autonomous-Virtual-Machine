@@ -547,7 +547,7 @@ class AuraInterface:
         )
 
         try:
-            reply_text = self.executor.execute_simple_reply(action, context)
+            reply_text = self.executor.execute(action, context)
         except Exception as exc:
             logger.error("Companion agent failed to provide advice reply: %s", exc, exc_info=True)
             self.event_bus.dispatch(Event(

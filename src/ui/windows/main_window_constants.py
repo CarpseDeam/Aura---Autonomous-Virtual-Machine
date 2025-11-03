@@ -2,16 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Sequence
 
-AURA_ASCII_BANNER = """
-        ����ۻ �ۻ   �ۻ�����ۻ  ����ۻ
-       ������ۻ�ۺ   �ۺ������ۻ������ۻ
-       ������ۺ�ۺ   �ۺ������ɼ������ۺ
-       ������ۺ�ۺ   �ۺ������ۻ������ۺ
-       �ۺ  �ۺ�������ɼ�ۺ  �ۺ�ۺ  �ۺ
-       �ͼ  �ͼ �����ͼ �ͼ  �ͼ�ͼ  �ͼ
-      A U T O N O M O U S  V I R T U A L  M A C H I N E
-    """
-
+# Full banner (Unicode block art). Keep lines tight for consistent spacing.
 AURA_ASCII_BANNER = """
         █████╗ ██╗   ██╗██████╗  █████╗
        ██╔══██╗██║   ██║██╔══██╗██╔══██╗
@@ -82,9 +73,10 @@ BOOT_SEQUENCE: Sequence[Dict[str, Any]] = (
     {"text": "Enter your commands..."},
 )
 
-# Compact banner variant to reduce vertical space while keeping the retro feel
+# Compact banner variant (ASCII-friendly)
 AURA_ASCII_BANNER_COMPACT = """
    ▄▀█ █ █ █▀█ ▄▀█
    █▀█ ▀▄▀ █▀▄ █▀█
   AUTONOMOUS VIRTUAL MACHINE
 """
+

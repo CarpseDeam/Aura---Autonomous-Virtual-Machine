@@ -103,23 +103,16 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-        # Compact banner to preserve vertical space
-        try:
-            from src.ui.windows.main_window_constants import AURA_ASCII_BANNER_COMPACT  # type: ignore
-            banner_text = AURA_ASCII_BANNER_COMPACT
-        except Exception:
-            banner_text = AURA_ASCII_BANNER
+        # Use full banner artwork
+        banner_text = AURA_ASCII_BANNER
 
         banner_label = QLabel(banner_text)
         banner_label.setObjectName("aura_banner")
         banner_label.setFont(QFont("JetBrains Mono", 9))
         banner_label.setAlignment(Qt.AlignCenter)
         banner_label.setContentsMargins(0, 0, 0, 0)
-        banner_label.setMaximumHeight(60)
-        # Local style accent to ensure compact red divider regardless of global stylesheet
-        banner_label.setStyleSheet(
-            "QLabel#aura_banner { border-top: 1px solid #C62828; border-bottom: 1px solid #C62828; padding: 4px 0 4px 0; }"
-        )
+        # Allow enough height for full banner; no decorative borders
+        banner_label.setMaximumHeight(120)
 
         layout.addWidget(self.toolbar)
         layout.addWidget(banner_label)
