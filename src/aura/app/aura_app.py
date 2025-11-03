@@ -31,7 +31,8 @@ from src.aura.context.context_manager import ContextManager
 from src.aura.models.context_models import ContextConfig
 from src.aura.agent.iteration_controller import IterationController
 from src.aura.models.iteration_models import IterationConfig
-from src.aura.config import ASSETS_DIR, WORKSPACE_DIR
+from src.aura.config import ASSETS_DIR, WORKSPACE_DIR, ROOT_DIR
+from src.aura.services.image_storage_service import ImageStorageService
 from src.ui.windows.main_window import MainWindow
 from src.ui.controllers.conversation_sidebar_controller import ConversationSidebarController
 
@@ -118,7 +119,12 @@ class AuraApp:
         self.event_bus = EventBus()
         self.token_tracker = TokenTracker(self.event_bus, token_limit=200_000)
         self.prompt_manager = PromptManager()
-        self.image_storage_service = None  # Image storage optional; providers optionalized in LLMService
+        image_cache_dir = ROOT_DIR / "image_cache"
+        try:
+            self.image_storage_service = ImageStorageService(image_cache_dir, retention_limit=200)
+        except Exception:
+            logging.warning("Image cache unavailable; continuing without persistent image storage.")
+            self.image_storage_service = None
         # Instantiate core services
         self.conversation_persistence_service = ConversationPersistenceService()
         self.conversation_management_service = ConversationManagementService(
