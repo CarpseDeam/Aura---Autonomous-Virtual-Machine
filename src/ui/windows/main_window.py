@@ -25,7 +25,6 @@ from src.ui.windows.settings_window import SettingsWindow
 from src.ui.widgets.chat_display_widget import ChatDisplayWidget
 from src.ui.widgets.chat_input_widget import ChatInputWidget
 from src.ui.widgets.terminal_monitor_widget import TerminalMonitorWidget
-from src.ui.widgets.agent_console_widget import AgentConsoleWidget
 from src.ui.widgets.thinking_indicator_widget import ThinkingIndicatorWidget
 from src.ui.widgets.toolbar_widget import ToolbarWidget
 from src.ui.widgets.conversation_sidebar_widget import ConversationSidebarWidget
@@ -73,8 +72,6 @@ class MainWindow(QMainWindow):
                 terminal_session_manager,
                 parent=self,
             )
-        self.agent_console = AgentConsoleWidget(self.event_bus, parent=self)
-
         self._event_controller = MainWindowEventController(
             event_bus=self.event_bus,
             chat_display=self.chat_display,
@@ -120,12 +117,10 @@ class MainWindow(QMainWindow):
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.conversation_sidebar)
         self.splitter.addWidget(self.chat_display)
-        self.splitter.addWidget(self.agent_console)
         self.splitter.setChildrenCollapsible(True)
         self.splitter.setCollapsible(0, True)
         self.splitter.setStretchFactor(0, 0)  # Sidebar has fixed width
-        self.splitter.setStretchFactor(1, 3)  # Chat display gets most space
-        self.splitter.setStretchFactor(2, 2)  # Agent console gets less space
+        self.splitter.setStretchFactor(1, 1)  # Chat display takes remaining space
         layout.addWidget(self.splitter, 1)
 
         layout.addWidget(self.thinking_indicator)
@@ -137,7 +132,6 @@ class MainWindow(QMainWindow):
         self.toolbar.switch_project_requested.connect(self.project_actions.open_project_switcher)
         self.toolbar.import_project_requested.connect(self.project_actions.import_project)
         self.toolbar.configure_requested.connect(self._open_settings_dialog)
-        self.toolbar.console_toggle_requested.connect(self._toggle_agent_console)
 
         self.chat_input.message_requested.connect(self._handle_message_requested)
         self.chat_display.anchor_requested.connect(self._event_controller.handle_anchor_clicked)
@@ -155,10 +149,6 @@ class MainWindow(QMainWindow):
         if self.settings_window is None:
             self.settings_window = SettingsWindow(self.event_bus)
         self.settings_window.show()
-
-    def _toggle_agent_console(self) -> None:
-        is_visible = self.agent_console.isVisible()
-        self.agent_console.setVisible(not is_visible)
 
     def _handle_message_requested(self) -> None:
         result = self.chat_input.take_message()
@@ -187,19 +177,17 @@ class MainWindow(QMainWindow):
         try:
             total = max(self.width() - 20, 400)
             if collapsed:
-                # Allocate almost all space to chat + console when collapsed
+                # Allocate almost all space to the chat display when collapsed
                 sidebar = 40
                 rest = max(total - sidebar, 400)
-                chat = int(rest * 0.6)
-                console = max(200, rest - chat)
-                self.splitter.setSizes([sidebar, chat, console])
+                chat = rest
+                self.splitter.setSizes([sidebar, chat])
             else:
                 # Restore reasonable widths with visible sidebar
                 sidebar = 250
                 rest = max(total - sidebar, 400)
-                chat = int(rest * 0.6)
-                console = max(200, rest - chat)
-                self.splitter.setSizes([sidebar, chat, console])
+                chat = rest
+                self.splitter.setSizes([sidebar, chat])
         except Exception:
             # Non-fatal UI concerns should never break the app
             pass
