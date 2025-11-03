@@ -109,6 +109,11 @@ class TerminalAgentService:
 
         if is_windows:
             prefer_powershell = self.terminal_shell_preference == "powershell"
+            logger.info(
+                "Terminal preference check: self.terminal_shell_preference=%s, prefer_powershell=%s",
+                self.terminal_shell_preference,
+                prefer_powershell,
+            )
 
             # Codex: Use special Windows command with auto-approval bypass
             if agent_tokens and agent_tokens[0].lower() in {"codex", "codex.exe"}:
@@ -185,6 +190,7 @@ class TerminalAgentService:
         use_windows_terminal: bool = True,
     ) -> List[str]:
         """Launch Claude Code with AGENTS.md streamed over stdin."""
+        logger.info("Building Claude command with use_windows_terminal=%s", use_windows_terminal)
         if not tokens:
             raise ValueError("Claude command tokens must not be empty")
 
@@ -211,6 +217,7 @@ class TerminalAgentService:
         use_windows_terminal: bool = True,
     ) -> List[str]:
         """Launch Gemini CLI with AGENTS.md streamed over stdin."""
+        logger.info("Building Gemini command with use_windows_terminal=%s", use_windows_terminal)
         if not tokens:
             raise ValueError("Gemini command tokens must not be empty")
 
@@ -246,6 +253,7 @@ class TerminalAgentService:
         use_windows_terminal: bool = True,
     ) -> List[str]:
         """Launch Codex with AGENTS.md streamed over stdin."""
+        logger.info("Building Codex command with use_windows_terminal=%s", use_windows_terminal)
         if not tokens:
             raise ValueError("Codex command tokens must not be empty")
 
@@ -384,9 +392,14 @@ class TerminalAgentService:
         use_windows_terminal: bool,
     ) -> List[str]:
         """Wrap a PowerShell script for execution in Windows Terminal or PowerShell."""
+        logger.info(
+            "Wrapping shell command: use_windows_terminal=%s, has_wt=%s",
+            use_windows_terminal,
+            self._has_windows_terminal(),
+        )
         if use_windows_terminal:
             if self._has_windows_terminal():
-                return [
+                cmd = [
                     "wt.exe",
                     "-d",
                     str(project_root),
@@ -395,13 +408,17 @@ class TerminalAgentService:
                     "-Command",
                     script,
                 ]
+                logger.info("Final command will be: %s", " ".join(cmd[:3]))
+                return cmd
             logger.warning("Windows Terminal (wt.exe) not found; using PowerShell fallback.")
-        return [
+        cmd = [
             "pwsh.exe",
             "-NoExit",
             "-Command",
             script,
         ]
+        logger.info("Final command will be: %s", " ".join(cmd[:3]))
+        return cmd
 
     def _format_powershell_array(self, tokens: Sequence[str]) -> str:
         """
@@ -504,11 +521,22 @@ class TerminalAgentService:
 
         # Use command override if provided, otherwise build from template
         if command_override:
+            logger.warning(
+                "⚠️  COMMAND OVERRIDE DETECTED! Using command_override instead of preference-based command. "
+                "This bypasses terminal_shell_preference. command_override=%s",
+                command_override,
+            )
             command = list(command_override)
         elif self.default_command:
+            logger.warning(
+                "⚠️  DEFAULT COMMAND DETECTED! Using default_command instead of preference-based command. "
+                "This bypasses terminal_shell_preference. default_command=%s",
+                self.default_command,
+            )
             command = list(self.default_command)
         else:
             # Build command using template and spec path
+            logger.info("Building command from template (respects terminal_shell_preference)")
             command = self._build_terminal_command(spec_path, project_root, spec)
 
         self._ensure_agent_config(project_root)
@@ -544,6 +572,9 @@ class TerminalAgentService:
         else:
             # On Unix-like systems, the terminal emulator command itself creates a visible window
             logger.debug("Using native terminal emulator for Unix terminal visibility")
+
+        logger.info("FINAL COMMAND TO EXECUTE: %s", command)
+        logger.info("Command starts with: %s", command[0] if command else "EMPTY")
 
         try:
             process = subprocess.Popen(command, **popen_kwargs)
