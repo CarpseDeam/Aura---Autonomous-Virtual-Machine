@@ -150,6 +150,16 @@ class IterationController:
             logger.info(f"Final action type: {last_action.type}")
             return self._stop_iteration(state, StoppingCondition.FINAL_ACTION)
 
+        # Treat DESIGN_BLUEPRINT with auto_spawn=True as a final action.
+        # Once a terminal agent is spawned, we should stop iterating and wait.
+        try:
+            if last_action.type == ActionType.DESIGN_BLUEPRINT and last_action.get_param("auto_spawn", True):
+                logger.info("Design blueprint completed with auto-spawn; stopping iteration to wait for terminal agent.")
+                return self._stop_iteration(state, StoppingCondition.FINAL_ACTION)
+        except Exception:
+            # Be conservative on errors and fall through to normal reflection
+            logger.debug("Failed to inspect auto_spawn parameter for DESIGN_BLUEPRINT.", exc_info=True)
+
         # Reflect on the action
         reflection = self._reflect_on_action(state, last_action, tool_output)
         state.reflections.append(reflection)
