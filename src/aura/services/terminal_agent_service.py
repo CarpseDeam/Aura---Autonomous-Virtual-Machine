@@ -334,7 +334,11 @@ class TerminalAgentService:
             sanitized.append(token)
         if not sanitized:
             return sanitized
-        sanitized.extend(["--output-format", "stream-json"])
+        command_name = Path(sanitized[0]).stem.lower()
+        if command_name in {"gemini", "gemini-cli"}:
+            sanitized.extend(["-o", "stream-json"])
+        else:
+            sanitized.extend(["--output-format", "stream-json"])
         return sanitized
 
     def _deduplicate_variant_commands(
@@ -513,12 +517,15 @@ class TerminalAgentService:
                     continue
                 if lowered.startswith("--output-format=") or lowered.startswith("-o="):
                     continue
+                if lowered == "--dangerously-skip-permissions":
+                    continue
+                if token == "-":
+                    continue
                 cleaned.append(token)
             tokens = cleaned
-            if "--dangerously-skip-permissions" not in tokens:
-                tokens.append("--dangerously-skip-permissions")
-            if require_stdin and "-" not in tokens:
-                tokens.append("-")
+            lowered_flags = {token.lower() for token in tokens[1:]}
+            if "--yolo" not in lowered_flags and "-y" not in lowered_flags:
+                tokens.append("--yolo")
 
         if tokens and tokens[0].lower() in self.STREAMING_EXECUTABLES:
             tokens = self._ensure_streaming_output_flag(tokens)
