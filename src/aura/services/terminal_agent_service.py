@@ -27,6 +27,15 @@ class TerminalAgentService:
     """
 
     SPEC_DIR_NAME = ".aura"
+    STREAMING_EXECUTABLES = {
+        "codex",
+        "codex.exe",
+        "claude",
+        "claude-code",
+        "claude.exe",
+        "gemini",
+        "gemini-cli",
+    }
 
     def __init__(
         self,
@@ -93,16 +102,7 @@ class TerminalAgentService:
         # Format the agent command with the spec path
         is_windows = sys.platform.startswith("win")
         first_token = agent_command_template.split(maxsplit=1)[0].lower() if agent_command_template else ""
-        streaming_agents = {
-            "codex",
-            "codex.exe",
-            "claude",
-            "claude-code",
-            "claude.exe",
-            "gemini",
-            "gemini-cli",
-        }
-        require_stdin = first_token in streaming_agents
+        require_stdin = first_token in self.STREAMING_EXECUTABLES
         agent_tokens = self._apply_autonomy_flags(agent_command_template, require_stdin=require_stdin)
         agent_command = " ".join(agent_tokens) if agent_tokens else agent_command_template
 
@@ -290,6 +290,28 @@ class TerminalAgentService:
                 updated.append(extra)
         return updated
 
+    def _ensure_streaming_output_flag(self, tokens: Sequence[str]) -> List[str]:
+        """
+        Ensure the command emits streaming JSON output.
+        """
+        sanitized: List[str] = []
+        skip_next = False
+        for token in tokens:
+            if skip_next:
+                skip_next = False
+                continue
+            lowered = token.lower()
+            if lowered in {"--output-format", "-o"}:
+                skip_next = True
+                continue
+            if lowered.startswith("--output-format=") or lowered.startswith("-o="):
+                continue
+            sanitized.append(token)
+        if not sanitized:
+            return sanitized
+        sanitized.extend(["--output-format", "stream-json"])
+        return sanitized
+
     def _deduplicate_variant_commands(
         self,
         variants: Sequence[Sequence[str]],
@@ -314,7 +336,13 @@ class TerminalAgentService:
         if not variants:
             raise ValueError("At least one command variant is required")
         label = agent_label.replace("'", "''")
-        command_arrays = ", ".join(self._format_powershell_array(cmd) for cmd in variants)
+        normalized_variants: List[List[str]] = []
+        for variant in variants:
+            variant_tokens = list(variant)
+            if variant_tokens and variant_tokens[0].lower() in self.STREAMING_EXECUTABLES:
+                variant_tokens = self._ensure_streaming_output_flag(variant_tokens)
+            normalized_variants.append(variant_tokens)
+        command_arrays = ", ".join(self._format_powershell_array(cmd) for cmd in normalized_variants)
         script_lines = [
             "$ErrorActionPreference='Stop';",
             "$agentsPath=Join-Path (Get-Location) 'AGENTS.md';",
@@ -432,7 +460,7 @@ class TerminalAgentService:
                 if lowered in {"--output-format", "-o"}:
                     skip_next = True
                     continue
-                if lowered.startswith("--output-format="):
+                if lowered.startswith("--output-format=") or lowered.startswith("-o="):
                     continue
                 cleaned.append(token)
             tokens = cleaned
@@ -440,6 +468,9 @@ class TerminalAgentService:
                 tokens.append("--dangerously-skip-permissions")
             if require_stdin and "-" not in tokens:
                 tokens.append("-")
+
+        if tokens and tokens[0].lower() in self.STREAMING_EXECUTABLES:
+            tokens = self._ensure_streaming_output_flag(tokens)
 
         return tokens
 
