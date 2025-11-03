@@ -11,7 +11,6 @@ from src.aura.config import ASSETS_DIR, ROOT_DIR, WORKSPACE_DIR
 from src.aura.project.project_manager import ProjectManager
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.conversation_persistence_service import ConversationPersistenceService
-from src.aura.services.file_registry import FileRegistry
 from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.terminal_agent_service import TerminalAgentService
@@ -119,7 +118,6 @@ class AuraApp:
             self.conversation_persistence_service,
         )
         self.workspace_service = WorkspaceService(self.event_bus, WORKSPACE_DIR)
-        self.file_registry = FileRegistry(WORKSPACE_DIR)
 
         # Load terminal agent configuration from user settings
         user_settings = load_user_settings()
@@ -180,12 +178,12 @@ class AuraApp:
         project_name = getattr(self, "_active_project_name", "default_project")
         try:
             logging.info(f"Initializing workspace with project '{project_name}'...")
-            self.file_registry.refresh()
-            logging.info("Workspace file index refreshed.")
+            project_files = self.workspace_service.get_project_files()
+            logging.info("Workspace file index refreshed (%d files).", len(project_files))
             if hasattr(self.project_manager, "current_project") and self.project_manager.current_project:
                 current = self.project_manager.current_project
                 current.root_path = getattr(self, "_active_project_root", current.root_path)
-                current.active_files = self.file_registry.list_files()
+                current.active_files = project_files
                 self.project_manager.save_project(current)
         except Exception as e:
             logging.error(f"Failed to initialize workspace: {e}")

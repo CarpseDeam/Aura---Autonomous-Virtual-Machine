@@ -133,3 +133,4 @@ logs/
 /INTEGRATION_GUIDE.md
 /pyproject.toml
 /old/
+/.aura/
