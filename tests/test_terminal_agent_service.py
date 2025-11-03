@@ -216,9 +216,12 @@ def test_windows_claude_command_loads_agents_md(
     assert command[4:6] == ["-NoExit", "-Command"]
     script = command[6]
     assert "Get-Content -LiteralPath" in script
-    assert "claude --dangerously-skip-permissions" in script
+    assert "'claude'" in script
+    assert "'--dangerously-skip-permissions'" in script
+    assert "'--output-format'" in script
+    assert "'stream-json'" in script
     assert " -p " not in script and not script.rstrip().endswith(" -p")
-    assert "Write-Host ('Launching Claude Code for task '" in script
+    assert "Write-Host 'Launching Claude Code: '" in script
 
 def test_windows_claude_prefers_powershell_terminal_when_requested(
     tmp_path: Path,
@@ -249,7 +252,10 @@ def test_windows_claude_prefers_powershell_terminal_when_requested(
     assert "-NoExit" in command, "PowerShell launch should keep the shell open"
     assert "-Command" in command, "PowerShell launch should execute the bootstrap script"
     script = command[-1]
-    assert "claude --dangerously-skip-permissions" in script
+    assert "'claude'" in script
+    assert "'--dangerously-skip-permissions'" in script
+    assert "'--output-format'" in script
+    assert "'stream-json'" in script
     assert " -p " not in script and not script.rstrip().endswith(" -p")
 
 def test_spawn_agent_creates_codex_config_on_windows(
@@ -324,8 +330,10 @@ def test_windows_gemini_command_uses_double_quotes(
 
     command = service._build_terminal_command(spec_path, project_root, spec)
 
-    assert command[:4] == ["wt.exe", "-d", str(project_root), "cmd"]
-    assert command[4] == "/c"
-    script = command[5]
-    assert script.startswith('gemini -p "')
-    assert script.endswith('" --dangerously-skip-permissions')
+    assert command[:4] == ["wt.exe", "-d", str(project_root), "powershell.exe"]
+    assert command[4:6] == ["-NoExit", "-Command"]
+    script = command[6]
+    assert "'gemini-cli'" in script
+    assert script.count("'--output-format'") >= 1
+    assert "'stream-json'" in script
+    assert "'--stream'" in script
