@@ -325,10 +325,12 @@ class AuraAgent:
             return "end"
 
         # Final actions that complete the user's turn
+        # NOTE: This set should match iteration_controller.py for consistency
         FINAL_ACTIONS = {
             ActionType.SIMPLE_REPLY,
             ActionType.RESEARCH,
             ActionType.DISCUSS,
+            ActionType.SPAWN_AGENT,  # Explicit spawning ends the cycle
         }
 
         if action.type in FINAL_ACTIONS:
@@ -339,11 +341,6 @@ class AuraAgent:
         # Once a terminal agent is spawned, we must wait for it to complete.
         if action.type == ActionType.DESIGN_BLUEPRINT and action.get_param("auto_spawn", True):
             logger.info("[Router] DESIGN_BLUEPRINT auto-spawned terminal agent; ending cycle and waiting for completion.")
-            return "end"
-
-        # Special case: explicit SPAWN_AGENT should end the cycle as well
-        if action.type == ActionType.SPAWN_AGENT:
-            logger.info("[Router] SPAWN_AGENT executed; ending cycle and waiting for terminal completion.")
             return "end"
 
         # For tool actions (LIST_FILES, READ_FILE, SPAWN_AGENT, etc.), continue the loop

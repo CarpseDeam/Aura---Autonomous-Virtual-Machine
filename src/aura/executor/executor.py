@@ -243,20 +243,15 @@ class AuraExecutor:
             raise ValueError("SPAWN_AGENT requires an AgentSpecification payload or a cached latest specification")
 
         command = command_override if isinstance(command_override, list) else None
-        if command is not None:
-            # If an explicit command is provided, use the legacy spawn (may open external terminal)
-            session = self.terminal_service.spawn_agent(
-                specification,
-                command_override=command,
-            )
-            self.terminal_session_manager.register_session(session)
-        else:
-            # Default to supervised spawn with I/O capture
-            session, process = self.terminal_service.spawn_agent_for_supervision(
-                specification,
-            )
-            self.terminal_session_manager.register_session(session, process=process)
-        logger.info("Registered terminal session %s for monitoring", session.task_id)
+        # ALWAYS use visible terminal windows for consistency
+        # User wants to see their AI agents work in styled terminals
+        logger.info("Spawning visible terminal for explicit SPAWN_AGENT action (task=%s)", specification.task_id)
+        session = self.terminal_service.spawn_agent(
+            specification,
+            command_override=command if command is not None else None,
+        )
+        self.terminal_session_manager.register_session(session)
+        logger.info("Registered visible terminal session %s for monitoring", session.task_id)
 
         context.extras["last_terminal_session"] = session.model_dump()
         return session
