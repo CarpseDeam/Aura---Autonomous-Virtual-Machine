@@ -402,6 +402,40 @@ class AuraBrain:
                 params={"request": fallback_message},
             )
 
+        # Guardrail for build transition: ensure SPAWN_AGENT has a specification
+        # Option B (preferred fast-path): if a latest specification exists in context, reference it
+        if proposed_action.type == ActionType.SPAWN_AGENT:
+            extras = context.extras or {}
+            has_latest = isinstance(extras.get("latest_specification"), (dict,))
+            params = dict(proposed_action.params or {})
+            has_inline_spec = isinstance(params.get("specification"), (dict, str))
+
+            if has_inline_spec:
+                logger.debug("SPAWN_AGENT provided with inline specification; proceeding.")
+                return proposed_action
+
+            if has_latest:
+                logger.info(
+                    "SPAWN_AGENT selected with no inline spec; using cached latest_specification."
+                )
+                params["specification"] = "latest"
+                return Action(type=ActionType.SPAWN_AGENT, params=params)
+
+            # Option A: No spec available; design blueprint first and auto-spawn
+            logger.info(
+                "SPAWN_AGENT selected but no specification available; switching to DESIGN_BLUEPRINT with auto_spawn."
+            )
+            request_text = (
+                str(data.get("request")).strip() if isinstance(data.get("request"), str) and str(data.get("request")).strip() else user_text
+            )
+            return Action(
+                type=ActionType.DESIGN_BLUEPRINT,
+                params={
+                    "request": request_text,
+                    "auto_spawn": True,
+                },
+            )
+
         return proposed_action
 
     def _build_clarification_context(self, history: List[Dict[str, Any]], _latest_user_text: str) -> str:
