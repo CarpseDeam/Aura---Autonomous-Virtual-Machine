@@ -192,6 +192,38 @@ def test_windows_claude_command_loads_agents_md(
     assert "Write-Host ('Launching Claude Code for task '" in script
 
 
+def test_windows_powershell_command_opens_manual_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        agent_command_template="pwsh.exe",
+    )
+
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe"} else None,
+    )
+
+    spec_path = service.spec_dir / "task-manual.md"
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    command = service._build_terminal_command(spec_path, project_root)
+
+    assert command[:4] == ["wt.exe", "-d", str(project_root), "pwsh.exe"]
+    assert "-NoExit" in command, "PowerShell launch should keep the shell open"
+    assert "-Command" in command, "PowerShell launch should execute the bootstrap script"
+    script = command[-1]
+    assert "AURA_AGENT_TASK_ID" in script
+    assert "AGENTS.md" in script
+    assert "PowerShell session ready" in script
+
+
 def test_spawn_agent_creates_codex_config_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

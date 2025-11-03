@@ -30,6 +30,10 @@ TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
         "label": "Gemini CLI",
         "command_template": "gemini -p \"{prompt}\" --output-format json"
     },
+    "powershell": {
+        "label": "PowerShell (manual)",
+        "command_template": "pwsh.exe"
+    },
 }
 
 # Default command template used when the selection cannot be resolved.

@@ -54,6 +54,19 @@ class TerminalAgentService:
         wt_path = shutil.which("wt") or shutil.which("wt.exe")
         return wt_path is not None
 
+    @staticmethod
+    def _is_powershell_executable(executable: str) -> bool:
+        """
+        Determine whether the provided executable token refers to PowerShell.
+
+        Args:
+            executable: Lowercase representation of the command's first token.
+
+        Returns:
+            True when the executable denotes any PowerShell variant.
+        """
+        return executable in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+
     def _build_terminal_command(self, spec_path: Path, project_root: Path) -> List[str]:
         """
         Build a platform-specific command that opens a visible terminal and runs the agent.
@@ -108,6 +121,16 @@ class TerminalAgentService:
                     project_root=project_root,
                 )
                 logger.debug("Constructed Windows headless command for Gemini CLI: %s", windows_command)
+                return windows_command
+
+            # Manual PowerShell session for users who prefer direct terminals
+            if agent_tokens and self._is_powershell_executable(agent_tokens[0].lower()):
+                windows_command = self._build_windows_powershell_command(
+                    agent_tokens,
+                    agents_md_path=agents_md_path,
+                    project_root=project_root,
+                )
+                logger.debug("Constructed Windows PowerShell command: %s", windows_command)
                 return windows_command
 
             # Default: Try Windows Terminal, fallback to PowerShell
@@ -302,6 +325,41 @@ class TerminalAgentService:
         """Check if Gemini CLI (gemini) is available on the system."""
         return shutil.which("gemini") is not None
 
+    def _build_windows_powershell_command(
+        self,
+        tokens: Sequence[str],
+        agents_md_path: Path,
+        project_root: Path,
+    ) -> List[str]:
+        """
+        Build a Windows command that opens an interactive PowerShell session primed with task context.
+
+        Args:
+            tokens: Command tokens derived from the agent template.
+            agents_md_path: Path to the generated AGENTS.md handoff file.
+            project_root: Project root directory that should become the session working directory.
+
+        Returns:
+            Command list suitable for subprocess.Popen to display a PowerShell console.
+        """
+        if not tokens:
+            raise ValueError("PowerShell command tokens must not be empty")
+
+        final_tokens = list(tokens)
+        lower_tokens = [token.lower() for token in tokens]
+
+        if "-noexit" not in lower_tokens:
+            final_tokens.insert(1, "-NoExit")
+
+        has_command_argument = any(token in {"-command", "-c", "/command"} for token in lower_tokens)
+        if not has_command_argument:
+            final_tokens.extend(["-Command", self._render_powershell_launch_script(agents_md_path)])
+
+        if self._has_windows_terminal():
+            return ["wt.exe", "-d", str(project_root), *final_tokens]
+
+        return final_tokens
+
 
     def _build_windows_codex_command(
         self,
@@ -432,6 +490,40 @@ class TerminalAgentService:
             "}\n"
         )
 
+    def _render_powershell_launch_script(self, agents_md_path: Path) -> str:
+        """
+        Create the PowerShell bootstrap script that surfaces task context before yielding the prompt.
+
+        Args:
+            agents_md_path: Path to the AGENTS.md handoff file for the active task.
+
+        Returns:
+            PowerShell command string executed prior to entering interactive mode.
+        """
+        agents_literal = str(agents_md_path).replace("'", "''")
+
+        header_lines = [
+            "$ErrorActionPreference='Stop'",
+            "$taskId = $env:AURA_AGENT_TASK_ID",
+            "if ([string]::IsNullOrWhiteSpace($taskId)) { $taskId = 'unknown' }",
+            "$specPath = $env:AURA_AGENT_SPEC_PATH",
+            f"$agentsPath = '{agents_literal}'",
+            "Write-Host ('Aura manual session for task ' + $taskId) -ForegroundColor Cyan",
+            "if ($specPath -and (Test-Path -LiteralPath $specPath)) {",
+            "    Write-Host \"`nLoaded specification from: $specPath\" -ForegroundColor DarkGray",
+            "}",
+            "if (Test-Path -LiteralPath $agentsPath) {",
+            "    Write-Host \"`n===== AGENTS.md =====\" -ForegroundColor Yellow",
+            "    Get-Content -LiteralPath $agentsPath",
+            "    Write-Host \"`n=====================\" -ForegroundColor Yellow",
+            "} else {",
+            "    Write-Warning ('AGENTS.md not found at ' + $agentsPath)",
+            "}",
+            "Write-Host \"`nPowerShell session ready. Use the instructions above.\" -ForegroundColor Cyan",
+        ]
+
+        return "\n".join(header_lines)
+
     def _apply_autonomy_flags(self, agent_command: str, *, require_stdin: bool) -> List[str]:
         """
         Ensure Codex and Claude Code run in autonomous mode and handle specification input correctly.
@@ -560,7 +652,7 @@ class TerminalAgentService:
         Detect which terminal agent is being used based on command template.
 
         Returns:
-            "codex", "claude_code", or "unknown"
+            "codex", "claude_code", "gemini-cli", "powershell", or "unknown"
         """
         template = (self.agent_command_template or "").lower()
 
@@ -570,6 +662,8 @@ class TerminalAgentService:
             return "claude_code"
         elif "gemini-cli" in template:
             return "gemini-cli"
+        elif "powershell" in template or "pwsh" in template:
+            return "powershell"
         else:
             return "unknown"
 
@@ -696,6 +790,8 @@ class TerminalAgentService:
                 )
             self._create_gemini_cli_config(project_root)
             logger.info("TerminalAgentService: ensured Gemini CLI environment configuration")
+        elif agent_type == "powershell":
+            logger.info("TerminalAgentService: PowerShell agent selected; no auto-configuration required")
         else:
             logger.warning("Unknown agent type '%s', skipping auto-config creation", agent_type)
 
