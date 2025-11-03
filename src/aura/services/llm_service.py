@@ -82,19 +82,36 @@ class LLMService:
         provider_instances = []
         if GeminiProvider is not None:
             try:
+                logger.debug("Initializing GeminiProvider...")
                 provider_instances.append(GeminiProvider(image_storage=self.image_storage))  # type: ignore[misc]
             except Exception as exc:
                 logger.warning("GeminiProvider unavailable: %s", exc)
+        else:
+            logger.debug("GeminiProvider not imported (missing dependency or import error)")
+
         if OllamaProvider is not None:
             try:
+                logger.debug("Initializing OllamaProvider...")
                 provider_instances.append(OllamaProvider())  # type: ignore[misc]
             except Exception as exc:
                 logger.warning("OllamaProvider unavailable: %s", exc)
+        else:
+            logger.debug("OllamaProvider not imported (missing dependency or import error)")
+
         for provider in provider_instances:
             self.providers[provider.provider_name] = provider
-            for model_name in provider.get_available_models():
+            models = provider.get_available_models()
+            for model_name in models:
                 self.model_to_provider_map[model_name] = provider.provider_name
+            logger.info("Provider '%s' loaded with %d models", provider.provider_name, len(models))
+
         logger.info(f"Loaded {len(self.providers)} providers managing {len(self.model_to_provider_map)} models.")
+
+        if not self.providers:
+            logger.error(
+                "No LLM providers loaded! Check API key configuration. "
+                "Set GEMINI_API_KEY environment variable or configure api_keys in user_settings.json"
+            )
 
     def _load_agent_configurations(self):
         config = copy.deepcopy(AGENT_CONFIG)
@@ -105,9 +122,11 @@ class LLMService:
             # New simplified structure centers configuration around a single Aura brain model.
             aura_brain_model = user_settings.get("aura_brain_model")
             if isinstance(aura_brain_model, str) and aura_brain_model.strip():
+                logger.info("Configuring all agents with Aura brain model: %s", aura_brain_model.strip())
                 for agent_name in config.keys():
                     agent_config = config.setdefault(agent_name, {})
                     agent_config["model"] = aura_brain_model.strip()
+                    logger.debug("Configured agent '%s' with model: %s", agent_name, aura_brain_model.strip())
 
             # Legacy compatibility: allow per-agent overrides if still present.
             legacy_agents = user_settings.get("agents", {})
@@ -119,11 +138,17 @@ class LLMService:
                     base_config = config.setdefault(agent_name, {})
                     if user_agent_config.get("model"):
                         base_config.update(user_agent_config)
+                        logger.info("Agent '%s' overridden with model: %s", agent_name, user_agent_config.get("model"))
         except Exception as e:
             logger.error(f"Failed to load or merge user agent settings: {e}. Using defaults.")
 
         self.agent_config = config
         logger.info("Final agent configurations loaded.")
+
+        # Log final configuration for each agent
+        for agent_name, agent_cfg in self.agent_config.items():
+            model = agent_cfg.get("model", "NOT CONFIGURED")
+            logger.info("Agent '%s' configured with model: %s", agent_name, model)
 
     def _register_event_handlers(self):
         self.event_bus.subscribe("RELOAD_LLM_CONFIG", lambda event: self._load_agent_configurations())
