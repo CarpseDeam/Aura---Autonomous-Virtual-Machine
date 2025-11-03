@@ -138,14 +138,17 @@ class TerminalAgentService:
                 logger.debug("Constructed Windows streaming command for Gemini CLI: %s", windows_command)
                 return windows_command
 
-            # Default: Try Windows Terminal, fallback to PowerShell
-            logger.debug("Unknown agent type on Windows, attempting Windows Terminal")
-            return self._build_windows_terminal_command(
-                agent_command,
-                agents_md_path,
-                project_root,
-                force_powershell=prefer_powershell,
-            )
+            # Default: Use simple PowerShell passthrough for unknown agents
+            logger.debug("Unknown agent type on Windows, using PowerShell passthrough")
+            agents_md_literal = str(agents_md_path).replace("'", "''")
+            reader_command = f"Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'"
+            delayed_command = f"Start-Sleep -Seconds 2; {reader_command} | {agent_command}"
+            return [
+                "pwsh.exe",
+                "-NoExit",
+                "-Command",
+                delayed_command,
+            ]
         else:
             # Unix: Launch Claude in interactive mode while injecting AGENTS.md content
             first_token = agent_tokens[0].lower() if agent_tokens else ""
@@ -177,84 +180,6 @@ class TerminalAgentService:
             logger.warning("No terminal emulator found, falling back to direct bash execution")
             return ["bash", "-c", launch_cmd]
 
-    def _build_windows_passthrough_command(self, agent_command: str, agents_md_path: Path) -> List[str]:
-        """
-        Build the legacy Windows command that streams AGENTS.md into the agent process.
-        """
-        agents_md_literal = str(agents_md_path).replace("'", "''")
-        reader_command = f"Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'"
-        delayed_command = f"Start-Sleep -Seconds 2; {reader_command} | {agent_command}"
-        return [
-            "pwsh.exe",
-            "-NoExit",
-            "-Command",
-            delayed_command,
-        ]
-
-    def _build_windows_terminal_command(
-        self,
-        agent_command: str,
-        agents_md_path: Path,
-        project_root: Path,
-        *,
-        force_powershell: bool = False,
-    ) -> List[str]:
-        """
-        Build command using Windows Terminal for interactive TUI apps.
-
-        For Claude Code, DO NOT pipe AGENTS.md into stdin because piping breaks
-        raw mode and causes "Raw mode not supported". Instead, launch the agent
-        directly in the project root and let it read AGENTS.md itself.
-
-        Args:
-            agent_command: The full command to execute (e.g., "claude")
-            agents_md_path: Path to AGENTS.md (used only for non-TUI agents)
-            project_root: Project root directory (working directory for the session)
-
-        Returns:
-            Command list for Windows Terminal execution
-        """
-        if force_powershell:
-            logger.debug("Forcing PowerShell terminal per user preference")
-            return self._build_windows_passthrough_command(agent_command, agents_md_path)
-
-        if not self._has_windows_terminal():
-            logger.warning(
-                "Windows Terminal (wt.exe) not found. Install from: https://aka.ms/terminal"
-            )
-            logger.info(
-                "Falling back to PowerShell passthrough; interactive TUIs may fail. "
-                "Consider running in WSL2 for better terminal support."
-            )
-            return self._build_windows_passthrough_command(agent_command, agents_md_path)
-
-        # Detect Claude Code to preserve stdin for raw mode TUI
-        agent_tokens = agent_command.split()
-        first_token = agent_tokens[0].lower() if agent_tokens else ""
-        is_claude_code = first_token in {"claude", "claude-code", "claude.exe"}
-
-        if is_claude_code:
-            # Launch Claude interactively so terminal output remains visible
-            return self._build_windows_claude_command(
-                agents_md_path=agents_md_path,
-                project_root=project_root,
-                use_windows_terminal=True,
-            )
-
-        # For other agents that don't require raw mode, keep the pipe behavior
-        agents_md_literal = str(agents_md_path).replace('"', '""')
-        delayed_command = (
-            f'timeout /t 2 /nobreak > nul && type "{agents_md_literal}" | {agent_command}'
-        )
-        logger.debug("Launching non-TUI agent with piped AGENTS.md via Windows Terminal")
-        return [
-            "wt.exe",
-            "-d",
-            str(project_root),
-            "cmd",
-            "/c",
-            delayed_command,
-        ]
 
     def _build_windows_claude_command(
         self,
