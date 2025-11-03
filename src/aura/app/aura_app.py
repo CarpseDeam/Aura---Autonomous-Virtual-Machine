@@ -16,7 +16,6 @@ from src.aura.services.llm_service import LLMService
 from src.aura.services.terminal_agent_service import TerminalAgentService
 from src.aura.services.user_settings_manager import (
     get_terminal_agent_command_template,
-    get_terminal_host_preference,
     load_user_settings,
 )
 from src.aura.services.workspace_service import WorkspaceService
@@ -125,14 +124,12 @@ class AuraApp:
         # Load terminal agent configuration from user settings
         user_settings = load_user_settings()
         agent_command_template = get_terminal_agent_command_template(user_settings)
-        terminal_host_preference = get_terminal_host_preference(user_settings)
 
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
             llm_service=self.llm_service,
             default_command=None,  # Will use template-based command building
             agent_command_template=agent_command_template,
-            terminal_shell_preference=terminal_host_preference,
         )
         # Ensure the requested project is active
         try:

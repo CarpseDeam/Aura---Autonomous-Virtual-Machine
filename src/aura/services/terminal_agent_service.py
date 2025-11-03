@@ -60,7 +60,6 @@ class TerminalAgentService:
         *,
         default_command: Optional[Sequence[str]] = None,
         agent_command_template: Optional[str] = None,
-        terminal_shell_preference: str = "auto",
         question_agent_name: str = _DEFAULT_LLM_AGENT,
     ) -> None:
         self.workspace_root = Path(workspace_root)
@@ -73,8 +72,6 @@ class TerminalAgentService:
 
         self.default_command = list(default_command) if default_command else None
         self.agent_command_template = agent_command_template or "claude-code --dangerously-skip-permissions"
-        self.terminal_shell_preference = terminal_shell_preference
-
         self._expect = self._load_expect_module()
         self._stdout_relay = _StdoutRelay()
         self._question_patterns = self._compile_question_patterns()
@@ -186,9 +183,10 @@ class TerminalAgentService:
             return
 
         logger.info("Sending AGENTS.md prompt to Claude Code for task %s", session.task_id)
+        # Allow the Claude Code TUI to finish bootstrapping before injecting the initial prompt.
+        time.sleep(0.5)
         with session.write_lock:
             child.send(prompt + "\n\n")
-        time.sleep(0.1)
 
     def _start_monitor_thread(self, session: TerminalSession, log_path: Path) -> None:
         thread = threading.Thread(
