@@ -27,7 +27,6 @@ class TerminalAgentService:
     """
 
     SPEC_DIR_NAME = ".aura"
-    _TASK_SENTINEL = "__AURA_CODEX_TASK__"
 
     def __init__(
         self,
@@ -94,8 +93,16 @@ class TerminalAgentService:
         # Format the agent command with the spec path
         is_windows = sys.platform.startswith("win")
         first_token = agent_command_template.split(maxsplit=1)[0].lower() if agent_command_template else ""
-        runs_codex = first_token in {"codex", "codex.exe"}
-        require_stdin = not (is_windows and runs_codex)
+        streaming_agents = {
+            "codex",
+            "codex.exe",
+            "claude",
+            "claude-code",
+            "claude.exe",
+            "gemini",
+            "gemini-cli",
+        }
+        require_stdin = first_token in streaming_agents
         agent_tokens = self._apply_autonomy_flags(agent_command_template, require_stdin=require_stdin)
         agent_command = " ".join(agent_tokens) if agent_tokens else agent_command_template
 
@@ -106,7 +113,6 @@ class TerminalAgentService:
             if agent_tokens and agent_tokens[0].lower() in {"codex", "codex.exe"}:
                 windows_command = self._build_windows_codex_command(
                     agent_tokens,
-                    agents_md_path,
                     project_root,
                 )
                 logger.debug("Constructed Windows Codex command: %s", windows_command)
@@ -115,21 +121,21 @@ class TerminalAgentService:
             # Claude Code: Launch interactive session with AGENTS.md context
             if agent_tokens and agent_tokens[0].lower() in {"claude", "claude-code", "claude.exe"}:
                 windows_command = self._build_windows_claude_command(
-                    agents_md_path=agents_md_path,
+                    tokens=agent_tokens,
                     project_root=project_root,
                     use_windows_terminal=not prefer_powershell,
                 )
-                logger.debug("Constructed Windows interactive command for Claude Code: %s", windows_command)
+                logger.debug("Constructed Windows streaming command for Claude Code: %s", windows_command)
                 return windows_command
 
             # Gemini CLI: Launch in headless mode with -p and AGENTS.md content
             if agent_tokens and agent_tokens[0].lower() in {"gemini", "gemini-cli"}:
                 windows_command = self._build_windows_gemini_command(
-                    agents_md_path=agents_md_path,
+                    tokens=agent_tokens,
                     project_root=project_root,
                     use_windows_terminal=not prefer_powershell,
                 )
-                logger.debug("Constructed Windows headless command for Gemini CLI: %s", windows_command)
+                logger.debug("Constructed Windows streaming command for Gemini CLI: %s", windows_command)
                 return windows_command
 
             # Default: Try Windows Terminal, fallback to PowerShell
@@ -252,126 +258,60 @@ class TerminalAgentService:
 
     def _build_windows_claude_command(
         self,
-        agents_md_path: Path,
+        tokens: Sequence[str],
         project_root: Path,
         *,
         use_windows_terminal: bool = True,
     ) -> List[str]:
-        """
-        Build a Windows command that invokes Claude Code with the task from AGENTS.md.
+        """Launch Claude Code with AGENTS.md streamed over stdin."""
+        if not tokens:
+            raise ValueError("Claude command tokens must not be empty")
 
-        The command shells into PowerShell so we can load AGENTS.md verbatim, append the
-        Aura completion protocol reminder, and pass that combined prompt as the initial
-        interactive message to the Claude CLI. Running in interactive mode keeps the agent's
-        live command output visible in the spawned terminal window.
+        variants = self._deduplicate_variant_commands([list(tokens)])
+        if use_windows_terminal and not self._has_windows_terminal():
+            logger.warning(
+                "Windows Terminal (wt.exe) not found; falling back to PowerShell for Claude Code.",
+            )
+            use_windows_terminal = False
 
-        We rely on the task identifier exposed through the AURA_AGENT_TASK_ID environment
-        variable so the completion file instructions stay accurate.
-        """
-        ps_command = (
-            "$ErrorActionPreference='Stop'; "
-            "$taskId=$env:AURA_AGENT_TASK_ID; "
-            "if (-not $taskId) { Write-Warning 'AURA_AGENT_TASK_ID not set; defaulting to unknown'; $taskId='unknown'; } "
-            "$agentsPath=Join-Path (Get-Location) 'AGENTS.md'; "
-            "if (-not (Test-Path -LiteralPath $agentsPath)) { "
-            "    Write-Error ('AGENTS.md not found at ' + $agentsPath); "
-            "} "
-            "$prompt=Get-Content -LiteralPath $agentsPath -Raw; "
-            "$completion=([string]::Format('When you finish, write .aura/{0}.summary.json and .aura/{0}.done per the Aura completion protocol.', $taskId)); "
-            "$fullPrompt=$prompt + \"`n`n\" + $completion; "
-            "Write-Host ('Launching Claude Code for task ' + $taskId); "
-            "claude --dangerously-skip-permissions $fullPrompt"
+        logger.debug("Claude Code streaming variants: %s", variants)
+        script = self._render_streaming_script("Claude Code", variants)
+        return self._wrap_windows_shell_command(
+            script,
+            project_root,
+            use_windows_terminal=use_windows_terminal,
         )
-
-        logger.debug("Launching Claude Code with PowerShell prompt injection (terminal=%s)",
-                     "wt.exe" if use_windows_terminal else "pwsh.exe")
-        if not use_windows_terminal:
-            return [
-                "pwsh.exe",
-                "-NoExit",
-                "-Command",
-                ps_command,
-            ]
-
-        return [
-            "wt.exe",
-            "-d",
-            str(project_root),
-            "powershell.exe",
-            "-NoExit",
-            "-Command",
-            ps_command,
-        ]
 
     def _build_windows_gemini_command(
         self,
-        agents_md_path: Path,
+        tokens: Sequence[str],
         project_root: Path,
         *,
         use_windows_terminal: bool = True,
     ) -> List[str]:
-        """
-        Build a Windows command that invokes Gemini CLI with a task from AGENTS.md.
+        """Launch Gemini CLI with AGENTS.md streamed over stdin."""
+        if not tokens:
+            raise ValueError("Gemini command tokens must not be empty")
 
-        This method constructs a command to be run in a new Windows Terminal (`wt.exe`)
-        session. It is carefully designed to ensure reliable, autonomous execution
-        of the Gemini CLI agent on Windows.
-
-        Architecture Flow:
-        1. `wt.exe`: The command starts with Windows Terminal to provide a visible,
-           isolated terminal environment for the agent.
-        2. `-d str(project_root)`: Sets the starting directory of the terminal to the
-           project's root, ensuring the agent runs in the correct context.
-        3. `cmd /c ...`: Inside the terminal, `cmd.exe` is used as the shell to execute
-           the agent command. `cmd.exe` is chosen over PowerShell for simplicity and
-           robustness, as it avoids potential issues with PowerShell's Execution Policy
-           and complex PATH variable resolution that can vary between user setups.
-        4. `gemini -p "..."`: The actual Gemini CLI command. The `-p` flag passes a
-           detailed prompt that instructs the agent to read the `AGENTS.md` file.
-        5. `--dangerously-skip-permissions`: This flag is crucial for autonomous
-           operation. It tells the Gemini CLI to proceed without interactive permission
-           prompts, which would otherwise halt the execution of the agent.
-
-        Completion Protocol:
-        The prompt given to the agent includes instructions for a completion protocol.
-        Upon finishing its tasks, the agent is expected to write two files to the
-        `.aura/` directory:
-        - `.aura/{task_id}.summary.json`: A JSON file summarizing the results.
-        - `.aura/{task_id}.done`: An empty file that acts as a sentinel, signaling
-          that the task is complete.
-        """
-        # Path escaping not required; CLI reads AGENTS.md directly
-
-        cmd_command = (
-            'gemini -p "Read and execute all tasks in the AGENTS.md file in the current directory. '
-            'Work autonomously without asking for confirmation. When complete, write .aura/{task_id}.summary.json '
-            'and .aura/{task_id}.done files as specified in the completion protocol." '
-            '--dangerously-skip-permissions'
-        )
-
-        if not use_windows_terminal:
-            ps_command = (
-                "$ErrorActionPreference='Stop'; "
-                "Write-Host \"Launching Gemini CLI with PowerShell terminal\"; "
-                f"{cmd_command}"
-            )
-            logger.debug("Launching Gemini CLI with PowerShell host command")
-            return [
-                "pwsh.exe",
-                "-NoExit",
-                "-Command",
-                ps_command,
-            ]
-
-        logger.debug("Launching Gemini CLI with simple cmd.exe command via Windows Terminal")
-        return [
-            "wt.exe",
-            "-d",
-            str(project_root),
-            "cmd",
-            "/c",
-            cmd_command,
+        base_tokens = list(tokens)
+        variants = [
+            self._append_unique_tokens(base_tokens, ["--stream"]),
+            list(base_tokens),
         ]
+        variants = self._deduplicate_variant_commands(variants)
+        if use_windows_terminal and not self._has_windows_terminal():
+            logger.warning(
+                "Windows Terminal (wt.exe) not found; falling back to PowerShell for Gemini CLI.",
+            )
+            use_windows_terminal = False
+
+        logger.debug("Gemini CLI streaming variants: %s", variants)
+        script = self._render_streaming_script("Gemini CLI", variants)
+        return self._wrap_windows_shell_command(
+            script,
+            project_root,
+            use_windows_terminal=use_windows_terminal,
+        )
 
     def _check_gemini_cli_installed(self) -> bool:
         """Check if Gemini CLI (gemini) is available on the system."""
@@ -380,46 +320,22 @@ class TerminalAgentService:
     def _build_windows_codex_command(
         self,
         tokens: Sequence[str],
-        agents_md_path: Path,
         project_root: Path,
     ) -> List[str]:
-        """
-        Build a Windows command that bypasses the Codex approval menu by passing the task directly.
-        """
+        """Launch Codex with AGENTS.md streamed over stdin."""
         if not tokens:
             raise ValueError("Codex command tokens must not be empty")
 
-        task_description = self._build_codex_task_description(agents_md_path)
         base_tokens = self._ensure_working_directory_flag(tokens, project_root)
-
-        variants: List[List[str]] = [
+        variants = [
             list(base_tokens),
-            self._append_unique_tokens(base_tokens, ["-a", "never", "-s", "danger-full-access"]),
             self._append_unique_tokens(base_tokens, ["--dangerously-bypass-approvals-and-sandbox"]),
+            self._append_unique_tokens(base_tokens, ["-a", "never", "-s", "danger-full-access"]),
         ]
-
-        script_variants = [
-            self._format_powershell_array([*variant, self._TASK_SENTINEL]) for variant in variants
-        ]
-        script = self._render_codex_launch_script(script_variants, task_description)
-
-        readable_variants = [[*variant, task_description] for variant in variants]
-        logger.debug("Codex command variants for Windows: %s", readable_variants)
-
-        return [
-            "pwsh.exe",
-            "-NoExit",
-            "-Command",
-            script,
-        ]
-
-    def _build_codex_task_description(self, agents_md_path: Path) -> str:
-        """
-        Build the Codex task description passed as a direct CLI argument.
-        """
-        return (
-            f"Open the AGENTS.md file located at {agents_md_path} and execute the instructions it contains."
-        )
+        variants = self._deduplicate_variant_commands(variants)
+        logger.debug("Codex streaming variants: %s", variants)
+        script = self._render_streaming_script("Codex", variants)
+        return self._wrap_windows_shell_command(script, project_root, use_windows_terminal=True)
 
     def _ensure_working_directory_flag(self, tokens: Sequence[str], project_root: Path) -> List[str]:
         """
@@ -449,6 +365,84 @@ class TerminalAgentService:
                 updated.append(extra)
         return updated
 
+    def _deduplicate_variant_commands(
+        self,
+        variants: Sequence[Sequence[str]],
+    ) -> List[List[str]]:
+        """Collapse duplicate command variants while preserving order."""
+        unique: List[List[str]] = []
+        seen: set[tuple[str, ...]] = set()
+        for variant in variants:
+            key = tuple(variant)
+            if not variant or key in seen:
+                continue
+            seen.add(key)
+            unique.append(list(variant))
+        return unique
+
+    def _render_streaming_script(
+        self,
+        agent_label: str,
+        variants: Sequence[Sequence[str]],
+    ) -> str:
+        """Render a PowerShell script that pipes AGENTS.md into each command variant."""
+        if not variants:
+            raise ValueError("At least one command variant is required")
+        label = agent_label.replace("'", "''")
+        command_arrays = ", ".join(self._format_powershell_array(cmd) for cmd in variants)
+        script_lines = [
+            "$ErrorActionPreference='Stop';",
+            "$agentsPath=Join-Path (Get-Location) 'AGENTS.md';",
+            "if (-not (Test-Path -LiteralPath $agentsPath)) { throw \"AGENTS.md not found\" }",
+            f"$commands=@({command_arrays});",
+            "$lastError=$null;",
+            "$launched=$false;",
+            "foreach ($args in $commands) {",
+            "  if ($launched) { break }",
+            "  try {",
+            f"    Write-Host 'Launching {label}: ' -NoNewline; Write-Host ($args -join ' ');",
+            "    if ($args.Length -gt 1) {",
+            "      Get-Content -LiteralPath $agentsPath -Raw | & $args[0] @($args[1..($args.Length - 1)])",
+            "    } else {",
+            "      Get-Content -LiteralPath $agentsPath -Raw | & $args[0]",
+            "    }",
+            "    $launched=$true",
+            "  } catch {",
+            "    $lastError=$_;",
+            "    Write-Warning ('Launch failed: ' + ($args -join ' '))",
+            "  }",
+            "}",
+            "if (-not $launched -and $lastError) { throw $lastError }",
+        ]
+        return "\n".join(script_lines)
+
+    def _wrap_windows_shell_command(
+        self,
+        script: str,
+        project_root: Path,
+        *,
+        use_windows_terminal: bool,
+    ) -> List[str]:
+        """Wrap a PowerShell script for execution in Windows Terminal or PowerShell."""
+        if use_windows_terminal:
+            if self._has_windows_terminal():
+                return [
+                    "wt.exe",
+                    "-d",
+                    str(project_root),
+                    "powershell.exe",
+                    "-NoExit",
+                    "-Command",
+                    script,
+                ]
+            logger.warning("Windows Terminal (wt.exe) not found; using PowerShell fallback.")
+        return [
+            "pwsh.exe",
+            "-NoExit",
+            "-Command",
+            script,
+        ]
+
     def _format_powershell_array(self, tokens: Sequence[str]) -> str:
         """
         Format a sequence of tokens into a PowerShell array literal.
@@ -460,55 +454,12 @@ class TerminalAgentService:
         """
         Quote tokens for safe PowerShell consumption.
         """
-        if token == self._TASK_SENTINEL:
-            return "$task"
         escaped = token.replace("'", "''")
         return f"'{escaped}'"
 
-    def _render_codex_launch_script(self, script_variants: Sequence[str], task_description: str) -> str:
-        """
-        Render the PowerShell command that attempts multiple Codex launch strategies.
-        """
-        commands_block = ",\n    ".join(script_variants)
-        fallback_message = (
-            "Codex approval bypass failed on Windows. Known issue: https://github.com/openai/codex/issues/2828 "
-            "Recommended: Install WSL2 and run Codex from Linux environment"
-        )
-        return (
-            "$task = @'\n"
-            f"{task_description}\n"
-            "'@\n"
-            "$commands = @(\n"
-            f"    {commands_block}\n"
-            ")\n"
-            "$launched = $false\n"
-            "$lastError = $null\n"
-            "foreach ($args in $commands) {\n"
-            "    if ($launched) { break }\n"
-            "    try {\n"
-            "        Write-Host ('Launching Codex: ' + ($args -join ' '))\n"
-            "        if ($args.Length -gt 1) {\n"
-            "            & $args[0] @($args[1..($args.Length - 1)])\n"
-            "        } else {\n"
-            "            & $args[0]\n"
-            "        }\n"
-            "        $launched = $true\n"
-            "    } catch {\n"
-            "        $lastError = $_\n"
-            "        Write-Warning ('Codex launch failed with configuration: ' + ($args -join ' '))\n"
-            "    }\n"
-            "}\n"
-            "if (-not $launched) {\n"
-            f"    Write-Error \"{fallback_message}\"\n"
-            "    if ($lastError) {\n"
-            "        Write-Error $lastError\n"
-            "    }\n"
-            "}\n"
-        )
-
     def _apply_autonomy_flags(self, agent_command: str, *, require_stdin: bool) -> List[str]:
         """
-        Ensure Codex and Claude Code run in autonomous mode and handle specification input correctly.
+        Ensure Codex, Claude Code, and Gemini CLI run autonomously with streamed input.
         """
         normalized = agent_command.strip()
         if not normalized:
@@ -542,6 +493,28 @@ class TerminalAgentService:
             _ensure_flag("--dangerously-skip-permissions")
             if require_stdin:
                 _ensure_stdin_marker()
+        elif executable in {"gemini", "gemini-cli"}:
+            cleaned: List[str] = [tokens[0]]
+            skip_next = False
+            for token in tokens[1:]:
+                if skip_next:
+                    skip_next = False
+                    continue
+                lowered = token.lower()
+                if lowered in {"-p", "--prompt"}:
+                    skip_next = True
+                    continue
+                if lowered in {"--output-format", "-o"}:
+                    skip_next = True
+                    continue
+                if lowered.startswith("--output-format="):
+                    continue
+                cleaned.append(token)
+            tokens = cleaned
+            if "--dangerously-skip-permissions" not in tokens:
+                tokens.append("--dangerously-skip-permissions")
+            if require_stdin and "-" not in tokens:
+                tokens.append("-")
 
         return tokens
 
