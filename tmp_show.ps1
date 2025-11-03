@@ -1,1 +1,0 @@
- = Get-Content 'src/ui/windows/main_window_events.py' -Encoding UTF8; for (=0;  -lt .Length; ++) { if ([] -match '^\s*def _handle_iteration_stopped') { =; break } }; ; [([Math]::Max(0,-5))..([Math]::Min(.Length-1,+15))]

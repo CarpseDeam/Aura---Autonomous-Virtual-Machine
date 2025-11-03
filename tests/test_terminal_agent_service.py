@@ -131,8 +131,7 @@ def test_build_terminal_command_injects_codex_autonomy_flag(
 
     assert isinstance(command, list)
     assert any("--full-auto" in part for part in command), "Codex command should include --full-auto flag"
-    assert any("codex --full-auto -".strip() in part for part in command), "Codex command should read from stdin via '-'"
-
+    assert any("codex --full-auto -" in part for part in command), "Codex command should read from stdin via '- '"
 
 def test_build_terminal_command_injects_claude_autonomy_flag(
     tmp_path: Path,
@@ -161,11 +160,9 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
     combined = " ".join(str(p) for p in command)
     assert "CLAUDE_PROMPT=$(cat" in combined, "Claude command should load AGENTS.md into CLAUDE_PROMPT"
     assert "--dangerously-skip-permissions" in combined, "Claude command should include the skip permissions flag"
-    assert " -p " not in combined and not combined.rstrip().endswith(" -p"), (
-        "Interactive Claude launch should not request print-only mode"
-    )
+    assert " -p " not in combined and not combined.rstrip().endswith(" -p"), \
+        ("Interactive Claude launch should not request print-only mode")
     assert "AGENTS.md" in combined, "Claude command should source AGENTS.md content"
-
 
 def test_build_terminal_command_supports_prompt_placeholder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project_root = tmp_path / "demo"
@@ -190,7 +187,6 @@ def test_build_terminal_command_supports_prompt_placeholder(tmp_path: Path, monk
     rendered = " ".join(command)
     assert "Render {escaped} braces" in rendered
     assert "{weather}" in rendered
-
 
 def test_windows_claude_command_loads_agents_md(
     tmp_path: Path,
@@ -224,7 +220,6 @@ def test_windows_claude_command_loads_agents_md(
     assert " -p " not in script and not script.rstrip().endswith(" -p")
     assert "Write-Host ('Launching Claude Code for task '" in script
 
-
 def test_windows_claude_prefers_powershell_terminal_when_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -256,7 +251,6 @@ def test_windows_claude_prefers_powershell_terminal_when_requested(
     script = command[-1]
     assert "claude --dangerously-skip-permissions" in script
     assert " -p " not in script and not script.rstrip().endswith(" -p")
-
 
 def test_spawn_agent_creates_codex_config_on_windows(
     tmp_path: Path,
@@ -305,3 +299,33 @@ def test_spawn_agent_creates_codex_config_on_windows(
     assert "danger-full-access" in script_argument, "Windows Codex fallback should request full access"
     assert "dangerously-bypass-approvals-and-sandbox" in script_argument, "Windows Codex script should include nuclear bypass"
     assert "AGENTS.md" in script_argument, "Windows Codex task should instruct Codex to read AGENTS.md"
+
+def test_windows_gemini_command_uses_double_quotes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        agent_command_template="gemini-cli",
+    )
+
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "gemini-cli"} else None,
+    )
+
+    spec = _sample_specification(task_id="task-gemini")
+    spec_path = service.spec_dir / f"{spec.task_id}.md"
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    command = service._build_terminal_command(spec_path, project_root, spec)
+
+    assert command[:4] == ["wt.exe", "-d", str(project_root), "cmd"]
+    assert command[4] == "/c"
+    script = command[5]
+    assert script.startswith('gemini -p "')
+    assert script.endswith('" --dangerously-skip-permissions')
