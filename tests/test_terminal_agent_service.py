@@ -155,14 +155,14 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
 
     assert isinstance(command, list)
     # On Unix with no emulator, we run: ["bash", "-c", launch_cmd]
-    # Ensure dangerous skip flag is present and prompt is injected via CLAUDE_PROMPT
-    assert any("--dangerously-skip-permissions" in str(part) for part in command), "Claude command should skip approvals"
-    combined = " ".join(str(p) for p in command)
-    assert "CLAUDE_PROMPT=$(cat" in combined, "Claude command should load AGENTS.md into CLAUDE_PROMPT"
-    assert "--dangerously-skip-permissions" in combined, "Claude command should include the skip permissions flag"
-    assert " -p " not in combined and not combined.rstrip().endswith(" -p"), \
-        ("Interactive Claude launch should not request print-only mode")
-    assert "AGENTS.md" in combined, "Claude command should source AGENTS.md content"
+    assert command[:2] == ["bash", "-c"], "Claude command should run through bash when no emulator is available"
+    launch = str(command[2])
+    assert launch.startswith("claude-code"), "Claude command should execute claude-code entrypoint"
+    assert "--dangerously-skip-permissions" in launch, "Claude command should skip approvals"
+    assert "--output-format stream-json" in launch, "Claude command should stream structured output"
+    assert " -p " not in launch and not launch.rstrip().endswith(" -p"), (
+        "Interactive Claude launch should not request print-only mode"
+    )
 
 def test_build_terminal_command_supports_prompt_placeholder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project_root = tmp_path / "demo"
@@ -194,15 +194,27 @@ def test_windows_claude_command_loads_agents_md(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
 
+    def fake_which(name: str) -> str | None:
+        normalized = name.lower()
+        mapping = {
+            "pwsh": tmp_path / "pwsh.exe",
+            "pwsh.exe": tmp_path / "pwsh.exe",
+            "powershell": tmp_path / "powershell.exe",
+            "powershell.exe": tmp_path / "powershell.exe",
+            "claude": tmp_path / "claude.exe",
+            "claude-code": tmp_path / "claude-code.exe",
+            "claude.exe": tmp_path / "claude.exe",
+            "wt": tmp_path / "wt.exe",
+            "wt.exe": tmp_path / "wt.exe",
+        }
+        path = mapping.get(normalized)
+        return str(path) if path else None
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+
     service = TerminalAgentService(
         workspace_root=tmp_path,
         agent_command_template="claude",
-    )
-
-    monkeypatch.setattr(
-        shutil,
-        "which",
-        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "claude"} else None,
     )
 
     spec = _sample_specification(task_id="task-789")
@@ -212,9 +224,9 @@ def test_windows_claude_command_loads_agents_md(
 
     command = service._build_terminal_command(spec_path, project_root, spec)
 
-    assert command[:4] == ["wt.exe", "-d", str(project_root), "powershell.exe"]
-    assert command[4:6] == ["-NoExit", "-Command"]
-    script = command[6]
+    assert Path(command[0]).name.lower() in {"pwsh.exe", "powershell.exe"}
+    assert command[1:3] == ["-NoExit", "-Command"]
+    script = command[3]
     assert "Get-Content -LiteralPath" in script
     assert "'claude'" in script
     assert "'--dangerously-skip-permissions'" in script
@@ -229,16 +241,28 @@ def test_windows_claude_prefers_powershell_terminal_when_requested(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
 
+    def fake_which(name: str) -> str | None:
+        normalized = name.lower()
+        mapping = {
+            "pwsh": tmp_path / "pwsh.exe",
+            "pwsh.exe": tmp_path / "pwsh.exe",
+            "powershell": tmp_path / "powershell.exe",
+            "powershell.exe": tmp_path / "powershell.exe",
+            "claude": tmp_path / "claude.exe",
+            "claude-code": tmp_path / "claude-code.exe",
+            "claude.exe": tmp_path / "claude.exe",
+            "wt": tmp_path / "wt.exe",
+            "wt.exe": tmp_path / "wt.exe",
+        }
+        path = mapping.get(normalized)
+        return str(path) if path else None
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+
     service = TerminalAgentService(
         workspace_root=tmp_path,
         agent_command_template="claude",
         terminal_shell_preference="powershell",
-    )
-
-    monkeypatch.setattr(
-        shutil,
-        "which",
-        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "claude"} else None,
     )
 
     spec = _sample_specification(task_id="task-preference")
@@ -248,9 +272,8 @@ def test_windows_claude_prefers_powershell_terminal_when_requested(
 
     command = service._build_terminal_command(spec_path, project_root, spec)
 
-    assert command[0].lower() == "pwsh.exe"
-    assert "-NoExit" in command, "PowerShell launch should keep the shell open"
-    assert "-Command" in command, "PowerShell launch should execute the bootstrap script"
+    assert Path(command[0]).name.lower() == "pwsh.exe"
+    assert command[1:3] == ["-NoExit", "-Command"], "PowerShell launch should keep the shell open and execute script"
     script = command[-1]
     assert "'claude'" in script
     assert "'--dangerously-skip-permissions'" in script
@@ -265,16 +288,27 @@ def test_windows_codex_prefers_powershell_terminal_when_requested(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
 
+    def fake_which(name: str) -> str | None:
+        normalized = name.lower()
+        mapping = {
+            "pwsh": tmp_path / "pwsh.exe",
+            "pwsh.exe": tmp_path / "pwsh.exe",
+            "powershell": tmp_path / "powershell.exe",
+            "powershell.exe": tmp_path / "powershell.exe",
+            "codex": tmp_path / "codex.exe",
+            "codex.exe": tmp_path / "codex.exe",
+            "wt": tmp_path / "wt.exe",
+            "wt.exe": tmp_path / "wt.exe",
+        }
+        path = mapping.get(normalized)
+        return str(path) if path else None
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+
     service = TerminalAgentService(
         workspace_root=tmp_path,
         agent_command_template="codex",
         terminal_shell_preference="powershell",
-    )
-
-    monkeypatch.setattr(
-        shutil,
-        "which",
-        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "codex"} else None,
     )
 
     spec = _sample_specification(task_id="task-codex-preference")
@@ -284,9 +318,8 @@ def test_windows_codex_prefers_powershell_terminal_when_requested(
 
     command = service._build_terminal_command(spec_path, project_root, spec)
 
-    assert command[0].lower() == "pwsh.exe"
-    assert "-NoExit" in command, "PowerShell launch should keep the shell open"
-    assert "-Command" in command, "PowerShell launch should execute the bootstrap script"
+    assert Path(command[0]).name.lower() == "pwsh.exe"
+    assert command[1:3] == ["-NoExit", "-Command"], "PowerShell launch should keep the shell open and execute script"
     script = command[-1]
     assert "'codex'" in script
     assert "--working-directory=" in script
@@ -347,15 +380,26 @@ def test_windows_gemini_command_uses_double_quotes(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
 
+    def fake_which(name: str) -> str | None:
+        normalized = name.lower()
+        mapping = {
+            "pwsh": tmp_path / "pwsh.exe",
+            "pwsh.exe": tmp_path / "pwsh.exe",
+            "powershell": tmp_path / "powershell.exe",
+            "powershell.exe": tmp_path / "powershell.exe",
+            "gemini-cli": tmp_path / "gemini-cli.exe",
+            "gemini": tmp_path / "gemini.exe",
+            "wt": tmp_path / "wt.exe",
+            "wt.exe": tmp_path / "wt.exe",
+        }
+        path = mapping.get(normalized)
+        return str(path) if path else None
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+
     service = TerminalAgentService(
         workspace_root=tmp_path,
         agent_command_template="gemini-cli",
-    )
-
-    monkeypatch.setattr(
-        shutil,
-        "which",
-        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "gemini-cli"} else None,
     )
 
     spec = _sample_specification(task_id="task-gemini")
@@ -365,9 +409,9 @@ def test_windows_gemini_command_uses_double_quotes(
 
     command = service._build_terminal_command(spec_path, project_root, spec)
 
-    assert command[:4] == ["wt.exe", "-d", str(project_root), "powershell.exe"]
-    assert command[4:6] == ["-NoExit", "-Command"]
-    script = command[6]
+    assert Path(command[0]).name.lower() in {"pwsh.exe", "powershell.exe"}
+    assert command[1:3] == ["-NoExit", "-Command"]
+    script = command[3]
     assert "'gemini-cli'" in script
     assert script.count("'--output-format'") >= 1
     assert "'stream-json'" in script

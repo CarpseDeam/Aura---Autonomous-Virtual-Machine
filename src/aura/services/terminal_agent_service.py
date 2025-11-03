@@ -57,9 +57,60 @@ class TerminalAgentService:
         self.spec_dir.mkdir(parents=True, exist_ok=True)
         preference = (terminal_shell_preference or "auto").strip().lower()
         self.terminal_shell_preference = "powershell" if preference == "powershell" else "auto"
-        logger.info("TerminalAgentService ready (spec dir: %s, template: %s)",
-                   self.spec_dir, self.agent_command_template)
-        logger.debug("Terminal shell preference set to: %s", self.terminal_shell_preference)
+        self._powershell_executable: Optional[str] = None
+        self._windows_terminal_path: Optional[str] = None
+        self._windows_terminal_ignored_logged = False
+
+        if sys.platform.startswith("win"):
+            self._powershell_executable = self._resolve_powershell_executable()
+            self._windows_terminal_path = self._detect_windows_terminal()
+            if (
+                self.terminal_shell_preference == "powershell"
+                and self._windows_terminal_path
+            ):
+                logger.info(
+                    "Windows Terminal detected at %s but PowerShell preference is active; will ignore Windows Terminal wrapping",
+                    self._windows_terminal_path,
+                )
+        logger.info(
+            "TerminalAgentService ready (spec dir: %s, template: %s)",
+            self.spec_dir,
+            self.agent_command_template,
+        )
+        logger.debug(
+            "Terminal shell preference set to: %s (powershell_executable=%s, windows_terminal=%s)",
+            self.terminal_shell_preference,
+            self._powershell_executable,
+            self._windows_terminal_path or "not-found",
+        )
+
+    def _resolve_powershell_executable(self) -> str:
+        """Detect the preferred PowerShell executable on Windows systems."""
+        candidates = [
+            "pwsh.exe",
+            "pwsh",
+            "powershell.exe",
+            "powershell",
+        ]
+        for candidate in candidates:
+            resolved = shutil.which(candidate)
+            if resolved:
+                logger.info("Detected PowerShell executable: %s", resolved)
+                return resolved
+        raise RuntimeError(
+            "PowerShell executable not found in PATH; cannot honor terminal_shell_preference='powershell'."
+        )
+
+    def _detect_windows_terminal(self) -> Optional[str]:
+        """Detect Windows Terminal (wt.exe) for diagnostic logging."""
+        if not sys.platform.startswith("win"):
+            return None
+        for candidate in ("wt.exe", "wt"):
+            resolved = shutil.which(candidate)
+            if resolved:
+                logger.debug("Detected Windows Terminal executable: %s", resolved)
+                return resolved
+        return None
 
     def _build_terminal_command(self, spec_path: Path, project_root: Path, spec: AgentSpecification) -> List[str]:
         """
@@ -139,12 +190,7 @@ class TerminalAgentService:
             # Default: Use simple PowerShell passthrough for unknown agents
             logger.debug("Unknown agent type on Windows, using PowerShell passthrough")
             delayed_command = f"Start-Sleep -Seconds 2; {agent_command}"
-            return [
-                "pwsh.exe",
-                "-NoExit",
-                "-Command",
-                delayed_command,
-            ]
+            return self._build_windows_powershell_command(delayed_command)
         else:
             # Unix: Run agents while allowing non-Claude commands a short startup delay
             first_token = agent_tokens[0].lower() if agent_tokens else ""
@@ -369,14 +415,37 @@ class TerminalAgentService:
     ) -> List[str]:
         """Wrap a PowerShell script for execution in PowerShell."""
         logger.info("Windows Terminal disabled; launching PowerShell in %s", project_root)
-        cmd = [
-            "pwsh.exe",
+        command = self._build_windows_powershell_command(script)
+        logger.info("Final command will be: %s", " ".join(command[:3]))
+        return command
+
+    def _build_windows_powershell_command(self, powershell_command: str) -> List[str]:
+        """Return a native PowerShell invocation that keeps the window open."""
+        if not powershell_command.strip():
+            raise ValueError("PowerShell command must not be empty")
+        if not self._powershell_executable:
+            raise RuntimeError("PowerShell executable not resolved; cannot build command")
+        if (
+            self.terminal_shell_preference == "powershell"
+            and self._windows_terminal_path
+            and not self._windows_terminal_ignored_logged
+        ):
+            logger.info(
+                "Ignoring Windows Terminal at %s in favor of native PowerShell as requested",
+                self._windows_terminal_path,
+            )
+            self._windows_terminal_ignored_logged = True
+        logger.debug(
+            "Building native PowerShell invocation: executable=%s command=%s",
+            self._powershell_executable,
+            powershell_command,
+        )
+        return [
+            self._powershell_executable,
             "-NoExit",
             "-Command",
-            script,
+            powershell_command,
         ]
-        logger.info("Final command will be: %s", " ".join(cmd[:3]))
-        return cmd
 
     def _format_powershell_array(self, tokens: Sequence[str]) -> str:
         """
@@ -456,6 +525,32 @@ class TerminalAgentService:
 
         return tokens
 
+    def _validate_preference_or_raise(self, command: Sequence[str], source: str) -> None:
+        """Validate that the constructed command honors the terminal shell preference."""
+        if not command:
+            raise ValueError(f"{source} produced an empty terminal command")
+        if self.terminal_shell_preference != "powershell" or not sys.platform.startswith("win"):
+            return
+
+        executable_name = Path(command[0]).name.lower()
+        if executable_name in {"wt", "wt.exe"}:
+            message = (
+                f"PowerShell preference enforced, but {source} attempted to launch Windows Terminal ({command[0]})."
+            )
+            logger.error("✗ ERROR: %s", message)
+            raise RuntimeError(message)
+        if executable_name not in {"pwsh", "pwsh.exe", "powershell", "powershell.exe"}:
+            message = (
+                f"PowerShell preference enforced, but {source} requested non-PowerShell executable '{command[0]}'."
+            )
+            logger.error("✗ ERROR: %s", message)
+            raise RuntimeError(message)
+        logger.info(
+            "✓ Native PowerShell command validated via %s (executable=%s)",
+            source,
+            command[0],
+        )
+
     def spawn_agent(
         self,
         spec: AgentSpecification,
@@ -477,25 +572,27 @@ class TerminalAgentService:
 
         self._write_agents_md(project_root, spec)
 
+        command_source = "template_command"
         # Use command override if provided, otherwise build from template
         if command_override:
-            logger.warning(
-                "⚠️  COMMAND OVERRIDE DETECTED! Using command_override instead of preference-based command. "
-                "This bypasses terminal_shell_preference. command_override=%s",
+            command_source = "command_override"
+            logger.info(
+                "command_override provided; validating against terminal_shell_preference. command_override=%s",
                 command_override,
             )
             command = list(command_override)
         elif self.default_command:
-            logger.warning(
-                "⚠️  DEFAULT COMMAND DETECTED! Using default_command instead of preference-based command. "
-                "This bypasses terminal_shell_preference. default_command=%s",
+            command_source = "default_command"
+            logger.info(
+                "default_command configured; validating against terminal_shell_preference. default_command=%s",
                 self.default_command,
             )
             command = list(self.default_command)
         else:
             # Build command using template and spec path
-            logger.info("Building command from template (respects terminal_shell_preference)")
+            logger.info("Building command from template (honors terminal_shell_preference)")
             command = self._build_terminal_command(spec_path, project_root, spec)
+        self._validate_preference_or_raise(command, command_source)
 
         self._ensure_agent_config(project_root)
         agent_type = self._detect_agent_type()
@@ -527,19 +624,42 @@ class TerminalAgentService:
             # On Unix-like systems, the terminal emulator command itself creates a visible window
             logger.debug("Using native terminal emulator for Unix terminal visibility")
 
+        creationflags = popen_kwargs.get("creationflags", 0)
+        create_new_console = bool(creationflags & subprocess.CREATE_NEW_CONSOLE) if creationflags else False
+        executable_name = command[0] if command else "EMPTY"
+        logger.info(
+            "Prepared spawn (source=%s, preference=%s, executable=%s, CREATE_NEW_CONSOLE=%s)",
+            command_source,
+            self.terminal_shell_preference,
+            executable_name,
+            create_new_console,
+        )
         logger.info("FINAL COMMAND TO EXECUTE: %s", command)
-        logger.info("Command starts with: %s", command[0] if command else "EMPTY")
 
         try:
             process = subprocess.Popen(command, **popen_kwargs)
-            logger.info(
-                "Spawned terminal agent (task=%s, pid=%s, command=%s)",
-                spec.task_id,
-                process.pid if process else None,
-                command,
-            )
+            if sys.platform.startswith("win") and self.terminal_shell_preference == "powershell":
+                logger.info(
+                    "✓ Native PowerShell spawned (task=%s, pid=%s, executable=%s, window_visible=%s)",
+                    spec.task_id,
+                    process.pid if process else None,
+                    Path(executable_name).name,
+                    create_new_console,
+                )
+            else:
+                logger.info(
+                    "Spawned terminal agent (task=%s, pid=%s, command=%s)",
+                    spec.task_id,
+                    process.pid if process else None,
+                    command,
+                )
         except Exception as exc:
-            logger.error("Failed to spawn terminal agent for task %s: %s", spec.task_id, exc, exc_info=True)
+            logger.error(
+                "✗ ERROR: Failed to spawn terminal agent for task %s: %s",
+                spec.task_id,
+                exc,
+                exc_info=True,
+            )
             raise
 
         return TerminalSession(
