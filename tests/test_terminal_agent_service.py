@@ -153,12 +153,16 @@ def test_build_terminal_command_injects_claude_autonomy_flag(
     command = service._build_terminal_command(spec_path, project_root)
 
     assert isinstance(command, list)
-    # On Unix with no emulator, we run: ["bash", "-c", headless_cmd]
-    # Ensure headless flags are included and prompt passed via -p
+    # On Unix with no emulator, we run: ["bash", "-c", launch_cmd]
+    # Ensure dangerous skip flag is present and prompt is injected via CLAUDE_PROMPT
     assert any("--dangerously-skip-permissions" in str(part) for part in command), "Claude command should skip approvals"
     combined = " ".join(str(p) for p in command)
-    assert " -p " in combined or combined.endswith(" -p"), "Claude headless mode should pass prompt with -p"
-    assert "cat " in combined and "AGENTS.md" in combined, "Claude headless command should source AGENTS.md content"
+    assert "CLAUDE_PROMPT=$(cat" in combined, "Claude command should load AGENTS.md into CLAUDE_PROMPT"
+    assert "--dangerously-skip-permissions" in combined, "Claude command should include the skip permissions flag"
+    assert " -p " not in combined and not combined.rstrip().endswith(" -p"), (
+        "Interactive Claude launch should not request print-only mode"
+    )
+    assert "AGENTS.md" in combined, "Claude command should source AGENTS.md content"
 
 
 def test_windows_claude_command_loads_agents_md(
@@ -188,11 +192,12 @@ def test_windows_claude_command_loads_agents_md(
     assert command[4:6] == ["-NoExit", "-Command"]
     script = command[6]
     assert "Get-Content -LiteralPath" in script
-    assert "claude -p" in script
+    assert "claude --dangerously-skip-permissions" in script
+    assert " -p " not in script and not script.rstrip().endswith(" -p")
     assert "Write-Host ('Launching Claude Code for task '" in script
 
 
-def test_windows_powershell_command_opens_manual_session(
+def test_windows_claude_prefers_powershell_terminal_when_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,28 +205,28 @@ def test_windows_powershell_command_opens_manual_session(
 
     service = TerminalAgentService(
         workspace_root=tmp_path,
-        agent_command_template="pwsh.exe",
+        agent_command_template="claude",
+        terminal_shell_preference="powershell",
     )
 
     monkeypatch.setattr(
         shutil,
         "which",
-        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe"} else None,
+        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "claude"} else None,
     )
 
-    spec_path = service.spec_dir / "task-manual.md"
+    spec_path = service.spec_dir / "task-preference.md"
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
     command = service._build_terminal_command(spec_path, project_root)
 
-    assert command[:4] == ["wt.exe", "-d", str(project_root), "pwsh.exe"]
+    assert command[0].lower() == "pwsh.exe"
     assert "-NoExit" in command, "PowerShell launch should keep the shell open"
     assert "-Command" in command, "PowerShell launch should execute the bootstrap script"
     script = command[-1]
-    assert "AURA_AGENT_TASK_ID" in script
-    assert "AGENTS.md" in script
-    assert "PowerShell session ready" in script
+    assert "claude --dangerously-skip-permissions" in script
+    assert " -p " not in script and not script.rstrip().endswith(" -p")
 
 
 def test_spawn_agent_creates_codex_config_on_windows(

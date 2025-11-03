@@ -34,14 +34,18 @@ class TerminalAgentService:
         workspace_root: Path,
         default_command: Optional[Sequence[str]] = None,
         agent_command_template: Optional[str] = None,
+        terminal_shell_preference: str = "auto",
     ) -> None:
         self.workspace_root = Path(workspace_root)
         self.default_command = list(default_command) if default_command else None
         self.agent_command_template = agent_command_template or "cat {spec_path}"
         self.spec_dir = self.workspace_root / self.SPEC_DIR_NAME
         self.spec_dir.mkdir(parents=True, exist_ok=True)
+        preference = (terminal_shell_preference or "auto").strip().lower()
+        self.terminal_shell_preference = "powershell" if preference == "powershell" else "auto"
         logger.info("TerminalAgentService ready (spec dir: %s, template: %s)",
                    self.spec_dir, self.agent_command_template)
+        logger.debug("Terminal shell preference set to: %s", self.terminal_shell_preference)
 
     def _has_windows_terminal(self) -> bool:
         """
@@ -53,19 +57,6 @@ class TerminalAgentService:
         import shutil
         wt_path = shutil.which("wt") or shutil.which("wt.exe")
         return wt_path is not None
-
-    @staticmethod
-    def _is_powershell_executable(executable: str) -> bool:
-        """
-        Determine whether the provided executable token refers to PowerShell.
-
-        Args:
-            executable: Lowercase representation of the command's first token.
-
-        Returns:
-            True when the executable denotes any PowerShell variant.
-        """
-        return executable in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
 
     def _build_terminal_command(self, spec_path: Path, project_root: Path) -> List[str]:
         """
@@ -95,6 +86,8 @@ class TerminalAgentService:
         agent_command = " ".join(agent_tokens) if agent_tokens else agent_command_template
 
         if is_windows:
+            prefer_powershell = self.terminal_shell_preference == "powershell"
+
             # Codex: Use special Windows command with auto-approval bypass
             if agent_tokens and agent_tokens[0].lower() in {"codex", "codex.exe"}:
                 windows_command = self._build_windows_codex_command(
@@ -105,13 +98,14 @@ class TerminalAgentService:
                 logger.debug("Constructed Windows Codex command: %s", windows_command)
                 return windows_command
 
-            # Claude Code: Launch in headless mode with -p and AGENTS.md content
+            # Claude Code: Launch interactive session with AGENTS.md context
             if agent_tokens and agent_tokens[0].lower() in {"claude", "claude-code", "claude.exe"}:
-                windows_command = self._build_windows_claude_headless_command(
+                windows_command = self._build_windows_claude_command(
                     agents_md_path=agents_md_path,
                     project_root=project_root,
+                    use_windows_terminal=not prefer_powershell,
                 )
-                logger.debug("Constructed Windows headless command for Claude Code: %s", windows_command)
+                logger.debug("Constructed Windows interactive command for Claude Code: %s", windows_command)
                 return windows_command
 
             # Gemini CLI: Launch in headless mode with -p and AGENTS.md content
@@ -119,38 +113,37 @@ class TerminalAgentService:
                 windows_command = self._build_windows_gemini_command(
                     agents_md_path=agents_md_path,
                     project_root=project_root,
+                    use_windows_terminal=not prefer_powershell,
                 )
                 logger.debug("Constructed Windows headless command for Gemini CLI: %s", windows_command)
                 return windows_command
 
-            # Manual PowerShell session for users who prefer direct terminals
-            if agent_tokens and self._is_powershell_executable(agent_tokens[0].lower()):
-                windows_command = self._build_windows_powershell_command(
-                    agent_tokens,
-                    agents_md_path=agents_md_path,
-                    project_root=project_root,
-                )
-                logger.debug("Constructed Windows PowerShell command: %s", windows_command)
-                return windows_command
-
             # Default: Try Windows Terminal, fallback to PowerShell
             logger.debug("Unknown agent type on Windows, attempting Windows Terminal")
-            return self._build_windows_terminal_command(agent_command, agents_md_path, project_root)
+            return self._build_windows_terminal_command(
+                agent_command,
+                agents_md_path,
+                project_root,
+                force_powershell=prefer_powershell,
+            )
         else:
-            # Unix: Launch Claude in headless mode with -p and AGENTS.md content when applicable
+            # Unix: Launch Claude in interactive mode while injecting AGENTS.md content
             first_token = agent_tokens[0].lower() if agent_tokens else ""
             agents_md_quoted = shlex.quote(str(agents_md_path))
             if first_token in {"claude", "claude-code"}:
-                headless_cmd = f"CLAUDE_PROMPT=$(cat {agents_md_quoted}) && claude -p \"$CLAUDE_PROMPT\" --dangerously-skip-permissions"
+                launch_cmd = (
+                    f"CLAUDE_PROMPT=$(cat {agents_md_quoted}) && "
+                    f"claude --dangerously-skip-permissions \"$CLAUDE_PROMPT\""
+                )
             else:
                 # Default behaviour for non-Claude agents: keep previous pipe with slight delay
-                headless_cmd = f"sleep 2 && cat {agents_md_quoted} | {agent_command}"
+                launch_cmd = f"sleep 2 && cat {agents_md_quoted} | {agent_command}"
 
             # Unix: Try to find an available terminal emulator
             terminal_emulators = [
-                ("gnome-terminal", ["--", "bash", "-c", f"{headless_cmd}; exec bash"]),
-                ("konsole", ["-e", "bash", "-c", f"{headless_cmd}; exec bash"]),
-                ("xterm", ["-hold", "-e", "bash", "-c", headless_cmd]),
+                ("gnome-terminal", ["--", "bash", "-c", f"{launch_cmd}; exec bash"]),
+                ("konsole", ["-e", "bash", "-c", f"{launch_cmd}; exec bash"]),
+                ("xterm", ["-hold", "-e", "bash", "-c", launch_cmd]),
             ]
 
             # Try each terminal emulator until we find one that exists
@@ -162,7 +155,7 @@ class TerminalAgentService:
 
             # Fallback: just run bash directly (won't be visible on Unix without terminal)
             logger.warning("No terminal emulator found, falling back to direct bash execution")
-            return ["bash", "-c", headless_cmd]
+            return ["bash", "-c", launch_cmd]
 
     def _build_windows_passthrough_command(self, agent_command: str, agents_md_path: Path) -> List[str]:
         """
@@ -183,6 +176,8 @@ class TerminalAgentService:
         agent_command: str,
         agents_md_path: Path,
         project_root: Path,
+        *,
+        force_powershell: bool = False,
     ) -> List[str]:
         """
         Build command using Windows Terminal for interactive TUI apps.
@@ -199,6 +194,10 @@ class TerminalAgentService:
         Returns:
             Command list for Windows Terminal execution
         """
+        if force_powershell:
+            logger.debug("Forcing PowerShell terminal per user preference")
+            return self._build_windows_passthrough_command(agent_command, agents_md_path)
+
         if not self._has_windows_terminal():
             logger.warning(
                 "Windows Terminal (wt.exe) not found. Install from: https://aka.ms/terminal"
@@ -215,10 +214,11 @@ class TerminalAgentService:
         is_claude_code = first_token in {"claude", "claude-code", "claude.exe"}
 
         if is_claude_code:
-            # Prefer headless mode for Claude: pass AGENTS.md content via -p
-            return self._build_windows_claude_headless_command(
+            # Launch Claude interactively so terminal output remains visible
+            return self._build_windows_claude_command(
                 agents_md_path=agents_md_path,
                 project_root=project_root,
+                use_windows_terminal=True,
             )
 
         # For other agents that don't require raw mode, keep the pipe behavior
@@ -236,12 +236,21 @@ class TerminalAgentService:
             delayed_command,
         ]
 
-    def _build_windows_claude_headless_command(self, agents_md_path: Path, project_root: Path) -> List[str]:
+    def _build_windows_claude_command(
+        self,
+        agents_md_path: Path,
+        project_root: Path,
+        *,
+        use_windows_terminal: bool = True,
+    ) -> List[str]:
         """
-        Build a Windows Terminal command that invokes Claude Code with task from AGENTS.md.
+        Build a Windows command that invokes Claude Code with the task from AGENTS.md.
 
         The command shells into PowerShell so we can load AGENTS.md verbatim, append the
-        Aura completion protocol reminder, and pass that combined prompt via the Claude CLI.
+        Aura completion protocol reminder, and pass that combined prompt as the initial
+        interactive message to the Claude CLI. Running in interactive mode keeps the agent's
+        live command output visible in the spawned terminal window.
+
         We rely on the task identifier exposed through the AURA_AGENT_TASK_ID environment
         variable so the completion file instructions stay accurate.
         """
@@ -257,10 +266,19 @@ class TerminalAgentService:
             "$completion=([string]::Format('When you finish, write .aura/{0}.summary.json and .aura/{0}.done per the Aura completion protocol.', $taskId)); "
             "$fullPrompt=$prompt + \"`n`n\" + $completion; "
             "Write-Host ('Launching Claude Code for task ' + $taskId); "
-            "claude -p $fullPrompt --dangerously-skip-permissions"
+            "claude --dangerously-skip-permissions $fullPrompt"
         )
 
-        logger.debug("Launching Claude Code with PowerShell prompt injection")
+        logger.debug("Launching Claude Code with PowerShell prompt injection (terminal=%s)",
+                     "wt.exe" if use_windows_terminal else "pwsh.exe")
+        if not use_windows_terminal:
+            return [
+                "pwsh.exe",
+                "-NoExit",
+                "-Command",
+                ps_command,
+            ]
+
         return [
             "wt.exe",
             "-d",
@@ -271,9 +289,15 @@ class TerminalAgentService:
             ps_command,
         ]
 
-    def _build_windows_gemini_command(self, agents_md_path: Path, project_root: Path) -> List[str]:
+    def _build_windows_gemini_command(
+        self,
+        agents_md_path: Path,
+        project_root: Path,
+        *,
+        use_windows_terminal: bool = True,
+    ) -> List[str]:
         """
-        Build a Windows Terminal command that invokes Gemini CLI with a task from AGENTS.md.
+        Build a Windows command that invokes Gemini CLI with a task from AGENTS.md.
 
         This method constructs a command to be run in a new Windows Terminal (`wt.exe`)
         session. It is carefully designed to ensure reliable, autonomous execution
@@ -311,7 +335,21 @@ class TerminalAgentService:
             '--dangerously-skip-permissions'
         )
 
-        logger.debug("Launching Gemini CLI with simple cmd.exe command")
+        if not use_windows_terminal:
+            ps_command = (
+                "$ErrorActionPreference='Stop'; "
+                "Write-Host \"Launching Gemini CLI with PowerShell terminal\"; "
+                f"{cmd_command}"
+            )
+            logger.debug("Launching Gemini CLI with PowerShell host command")
+            return [
+                "pwsh.exe",
+                "-NoExit",
+                "-Command",
+                ps_command,
+            ]
+
+        logger.debug("Launching Gemini CLI with simple cmd.exe command via Windows Terminal")
         return [
             "wt.exe",
             "-d",
@@ -324,42 +362,6 @@ class TerminalAgentService:
     def _check_gemini_cli_installed(self) -> bool:
         """Check if Gemini CLI (gemini) is available on the system."""
         return shutil.which("gemini") is not None
-
-    def _build_windows_powershell_command(
-        self,
-        tokens: Sequence[str],
-        agents_md_path: Path,
-        project_root: Path,
-    ) -> List[str]:
-        """
-        Build a Windows command that opens an interactive PowerShell session primed with task context.
-
-        Args:
-            tokens: Command tokens derived from the agent template.
-            agents_md_path: Path to the generated AGENTS.md handoff file.
-            project_root: Project root directory that should become the session working directory.
-
-        Returns:
-            Command list suitable for subprocess.Popen to display a PowerShell console.
-        """
-        if not tokens:
-            raise ValueError("PowerShell command tokens must not be empty")
-
-        final_tokens = list(tokens)
-        lower_tokens = [token.lower() for token in tokens]
-
-        if "-noexit" not in lower_tokens:
-            final_tokens.insert(1, "-NoExit")
-
-        has_command_argument = any(token in {"-command", "-c", "/command"} for token in lower_tokens)
-        if not has_command_argument:
-            final_tokens.extend(["-Command", self._render_powershell_launch_script(agents_md_path)])
-
-        if self._has_windows_terminal():
-            return ["wt.exe", "-d", str(project_root), *final_tokens]
-
-        return final_tokens
-
 
     def _build_windows_codex_command(
         self,
@@ -489,40 +491,6 @@ class TerminalAgentService:
             "    }\n"
             "}\n"
         )
-
-    def _render_powershell_launch_script(self, agents_md_path: Path) -> str:
-        """
-        Create the PowerShell bootstrap script that surfaces task context before yielding the prompt.
-
-        Args:
-            agents_md_path: Path to the AGENTS.md handoff file for the active task.
-
-        Returns:
-            PowerShell command string executed prior to entering interactive mode.
-        """
-        agents_literal = str(agents_md_path).replace("'", "''")
-
-        header_lines = [
-            "$ErrorActionPreference='Stop'",
-            "$taskId = $env:AURA_AGENT_TASK_ID",
-            "if ([string]::IsNullOrWhiteSpace($taskId)) { $taskId = 'unknown' }",
-            "$specPath = $env:AURA_AGENT_SPEC_PATH",
-            f"$agentsPath = '{agents_literal}'",
-            "Write-Host ('Aura manual session for task ' + $taskId) -ForegroundColor Cyan",
-            "if ($specPath -and (Test-Path -LiteralPath $specPath)) {",
-            "    Write-Host \"`nLoaded specification from: $specPath\" -ForegroundColor DarkGray",
-            "}",
-            "if (Test-Path -LiteralPath $agentsPath) {",
-            "    Write-Host \"`n===== AGENTS.md =====\" -ForegroundColor Yellow",
-            "    Get-Content -LiteralPath $agentsPath",
-            "    Write-Host \"`n=====================\" -ForegroundColor Yellow",
-            "} else {",
-            "    Write-Warning ('AGENTS.md not found at ' + $agentsPath)",
-            "}",
-            "Write-Host \"`nPowerShell session ready. Use the instructions above.\" -ForegroundColor Cyan",
-        ]
-
-        return "\n".join(header_lines)
 
     def _apply_autonomy_flags(self, agent_command: str, *, require_stdin: bool) -> List[str]:
         """
@@ -662,8 +630,6 @@ class TerminalAgentService:
             return "claude_code"
         elif "gemini-cli" in template:
             return "gemini-cli"
-        elif "powershell" in template or "pwsh" in template:
-            return "powershell"
         else:
             return "unknown"
 
@@ -790,8 +756,6 @@ class TerminalAgentService:
                 )
             self._create_gemini_cli_config(project_root)
             logger.info("TerminalAgentService: ensured Gemini CLI environment configuration")
-        elif agent_type == "powershell":
-            logger.info("TerminalAgentService: PowerShell agent selected; no auto-configuration required")
         else:
             logger.warning("Unknown agent type '%s', skipping auto-config creation", agent_type)
 

@@ -18,6 +18,7 @@ from src.aura.services.memory_manager import MemoryManager
 from src.aura.services.token_tracker import TokenTracker
 from src.aura.services.user_settings_manager import (
     get_terminal_agent_command_template,
+    get_terminal_host_preference,
     load_user_settings,
 )
 from src.aura.models.events import Event
@@ -137,11 +138,13 @@ class AuraApp:
         # Load terminal agent configuration from user settings
         user_settings = load_user_settings()
         agent_command_template = get_terminal_agent_command_template(user_settings)
+        terminal_host_preference = get_terminal_host_preference(user_settings)
 
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
             default_command=None,  # Will use template-based command building
             agent_command_template=agent_command_template,
+            terminal_shell_preference=terminal_host_preference,
         )
         self.workspace_monitor = WorkspaceChangeMonitor(WORKSPACE_DIR)
         self.terminal_session_manager = TerminalSessionManager(

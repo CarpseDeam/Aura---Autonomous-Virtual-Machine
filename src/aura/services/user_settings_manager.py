@@ -30,10 +30,6 @@ TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
         "label": "Gemini CLI",
         "command_template": "gemini -p \"{prompt}\" --output-format json"
     },
-    "powershell": {
-        "label": "PowerShell (manual)",
-        "command_template": "pwsh.exe"
-    },
 }
 
 # Default command template used when the selection cannot be resolved.
@@ -53,6 +49,7 @@ def _default_settings() -> Dict[str, Any]:
         "aura_brain_model": AURA_BRAIN_MODEL_CHOICES[0][0],
         "terminal_agent": "codex",
         "terminal_agent_custom_command": "",
+        "terminal_host": "auto",
         "api_keys": DEFAULT_API_KEYS.copy(),
         "auto_accept_changes": True,
     }
@@ -91,6 +88,14 @@ def _infer_terminal_preset_from_command(command: Optional[str]) -> str:
         if normalized == preset["command_template"].strip():
             return key
     return "custom"
+
+
+def _normalize_terminal_host(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"auto", "powershell"}:
+            return normalized
+    return "auto"
 
 
 def _sanitize_api_keys(api_keys: Any) -> Dict[str, str]:
@@ -153,6 +158,13 @@ def load_user_settings() -> Dict[str, Any]:
             custom_command = legacy_custom
     settings["terminal_agent_custom_command"] = custom_command.strip()
 
+    terminal_host = data.get("terminal_host")
+    if terminal_host is None:
+        preferences = data.get("preferences")
+        if isinstance(preferences, dict):
+            terminal_host = preferences.get("terminal_host")
+    settings["terminal_host"] = _normalize_terminal_host(terminal_host)
+
     # API keys
     api_keys = data.get("api_keys")
     if api_keys is None:
@@ -182,6 +194,7 @@ def save_user_settings(settings: Dict[str, Any]) -> None:
             _default_settings()["aura_brain_model"],
         ),
         "terminal_agent": _normalize_terminal_selection(normalized.get("terminal_agent")),
+        "terminal_host": _normalize_terminal_host(normalized.get("terminal_host")),
         "api_keys": _sanitize_api_keys(normalized.get("api_keys")),
         "auto_accept_changes": bool(normalized.get("auto_accept_changes", True)),
     }
@@ -267,3 +280,13 @@ def get_terminal_agent_command_template(settings: Optional[Dict[str, Any]] = Non
             return command_template
 
     return DEFAULT_TERMINAL_COMMAND_TEMPLATE
+
+
+def get_terminal_host_preference(settings: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Resolve the user's preferred terminal host for spawned agent sessions.
+    """
+    if settings is None:
+        settings = load_user_settings()
+
+    return _normalize_terminal_host(settings.get("terminal_host"))
