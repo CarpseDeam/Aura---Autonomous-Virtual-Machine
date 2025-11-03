@@ -78,9 +78,6 @@ class TerminalAgentService:
         Returns:
             Command list ready for subprocess.Popen
         """
-        # Construct AGENTS.md path in project root
-        agents_md_path = project_root / "AGENTS.md"
-
         def _coerce(value: Optional[str]) -> str:
             return value or ""
 
@@ -140,9 +137,7 @@ class TerminalAgentService:
 
             # Default: Use simple PowerShell passthrough for unknown agents
             logger.debug("Unknown agent type on Windows, using PowerShell passthrough")
-            agents_md_literal = str(agents_md_path).replace("'", "''")
-            reader_command = f"Get-Content -Raw -Encoding UTF8 '{agents_md_literal}'"
-            delayed_command = f"Start-Sleep -Seconds 2; {reader_command} | {agent_command}"
+            delayed_command = f"Start-Sleep -Seconds 2; {agent_command}"
             return [
                 "pwsh.exe",
                 "-NoExit",
@@ -150,17 +145,13 @@ class TerminalAgentService:
                 delayed_command,
             ]
         else:
-            # Unix: Launch Claude in interactive mode while injecting AGENTS.md content
+            # Unix: Run agents while allowing non-Claude commands a short startup delay
             first_token = agent_tokens[0].lower() if agent_tokens else ""
-            agents_md_quoted = shlex.quote(str(agents_md_path))
             if first_token in {"claude", "claude-code"}:
-                launch_cmd = (
-                    f"CLAUDE_PROMPT=$(cat {agents_md_quoted}) && "
-                    f"claude --dangerously-skip-permissions \"$CLAUDE_PROMPT\""
-                )
+                launch_cmd = agent_command
             else:
-                # Default behaviour for non-Claude agents: keep previous pipe with slight delay
-                launch_cmd = f"sleep 2 && cat {agents_md_quoted} | {agent_command}"
+                # Delay other agents briefly to avoid race conditions with terminal startup
+                launch_cmd = f"sleep 2 && {agent_command}"
 
             # Unix: Try to find an available terminal emulator
             terminal_emulators = [
