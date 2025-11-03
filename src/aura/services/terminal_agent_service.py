@@ -44,6 +44,10 @@ class TerminalAgentService:
         agent_command_template: Optional[str] = None,
         terminal_shell_preference: str = "auto",
     ) -> None:
+        logger.info(
+            "TerminalAgentService received terminal_shell_preference=%s",
+            terminal_shell_preference,
+        )
         self.workspace_root = Path(workspace_root)
         self.default_command = list(default_command) if default_command else None
         self.agent_command_template = agent_command_template or "cat {spec_path}"
@@ -111,6 +115,7 @@ class TerminalAgentService:
                 windows_command = self._build_windows_codex_command(
                     agent_tokens,
                     project_root,
+                    use_windows_terminal=not prefer_powershell,
                 )
                 logger.debug("Constructed Windows Codex command: %s", windows_command)
                 return windows_command
@@ -237,6 +242,8 @@ class TerminalAgentService:
         self,
         tokens: Sequence[str],
         project_root: Path,
+        *,
+        use_windows_terminal: bool = True,
     ) -> List[str]:
         """Launch Codex with AGENTS.md streamed over stdin."""
         if not tokens:
@@ -251,7 +258,16 @@ class TerminalAgentService:
         variants = self._deduplicate_variant_commands(variants)
         logger.debug("Codex streaming variants: %s", variants)
         script = self._render_streaming_script("Codex", variants)
-        return self._wrap_windows_shell_command(script, project_root, use_windows_terminal=True)
+        if use_windows_terminal and not self._has_windows_terminal():
+            logger.warning(
+                "Windows Terminal (wt.exe) not found; falling back to PowerShell for Codex.",
+            )
+            use_windows_terminal = False
+        return self._wrap_windows_shell_command(
+            script,
+            project_root,
+            use_windows_terminal=use_windows_terminal,
+        )
 
     def _ensure_working_directory_flag(self, tokens: Sequence[str], project_root: Path) -> List[str]:
         """

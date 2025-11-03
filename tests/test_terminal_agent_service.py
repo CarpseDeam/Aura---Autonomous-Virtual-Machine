@@ -258,6 +258,41 @@ def test_windows_claude_prefers_powershell_terminal_when_requested(
     assert "'stream-json'" in script
     assert " -p " not in script and not script.rstrip().endswith(" -p")
 
+
+def test_windows_codex_prefers_powershell_terminal_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        agent_command_template="codex",
+        terminal_shell_preference="powershell",
+    )
+
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: str(tmp_path / f"{name}.exe") if name.lower() in {"wt", "wt.exe", "codex"} else None,
+    )
+
+    spec = _sample_specification(task_id="task-codex-preference")
+    spec_path = service.spec_dir / f"{spec.task_id}.md"
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    command = service._build_terminal_command(spec_path, project_root, spec)
+
+    assert command[0].lower() == "pwsh.exe"
+    assert "-NoExit" in command, "PowerShell launch should keep the shell open"
+    assert "-Command" in command, "PowerShell launch should execute the bootstrap script"
+    script = command[-1]
+    assert "'codex'" in script
+    assert "--working-directory=" in script
+    assert "'--dangerously-bypass-approvals-and-sandbox'" in script
+    assert "--full-auto" in script
+
 def test_spawn_agent_creates_codex_config_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
