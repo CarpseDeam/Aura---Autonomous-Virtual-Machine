@@ -251,7 +251,6 @@ class TerminalAgentService:
 
         base_tokens = list(tokens)
         variants = [
-            self._append_unique_tokens(base_tokens, ["--stream"]),
             list(base_tokens),
         ]
         variants = self._deduplicate_variant_commands(variants)
@@ -336,6 +335,8 @@ class TerminalAgentService:
             return sanitized
         command_name = Path(sanitized[0]).stem.lower()
         if command_name in {"gemini", "gemini-cli"}:
+            if not any(token.lower() == "--stream" for token in sanitized[1:]):
+                sanitized.append("--stream")
             sanitized.extend(["-o", "stream-json"])
         else:
             sanitized.extend(["--output-format", "stream-json"])
@@ -378,7 +379,11 @@ class TerminalAgentService:
             if variant_tokens and variant_tokens[0].lower() in self.STREAMING_EXECUTABLES:
                 variant_tokens = self._ensure_streaming_output_flag(variant_tokens)
             normalized_variants.append(variant_tokens)
-        command_arrays = ", ".join(self._format_powershell_array(cmd) for cmd in normalized_variants)
+        # Materialize each variant with a unary comma so PowerShell preserves nested arrays
+        command_lines = [
+            f"$commands += ,{self._format_powershell_array(cmd)};"
+            for cmd in normalized_variants
+        ]
 
         # Build the output redirection part if task_id is provided
         tee_redirect = ""
@@ -390,7 +395,8 @@ class TerminalAgentService:
             "$ErrorActionPreference='Stop';",
             "$agentsPath=Join-Path (Get-Location) 'AGENTS.md';",
             "if (-not (Test-Path -LiteralPath $agentsPath)) { throw \"AGENTS.md not found\" }",
-            f"$commands=@({command_arrays});",
+            "$commands=@();",
+            *command_lines,
             "$lastError=$null;",
             "$launched=$false;",
             "foreach ($args in $commands) {",

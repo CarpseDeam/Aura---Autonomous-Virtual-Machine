@@ -413,6 +413,20 @@ def test_windows_gemini_command_uses_double_quotes(
     assert command[1:3] == ["-NoExit", "-Command"]
     script = command[3]
     assert "'gemini-cli'" in script
-    assert script.count("'--output-format'") >= 1
+    assert script.count("'--output-format'") >= 1 or script.count("'-o'") >= 1
     assert "'stream-json'" in script
     assert "'--stream'" in script
+
+
+def test_render_streaming_script_preserves_single_variant_array(tmp_path: Path) -> None:
+    service = TerminalAgentService(workspace_root=tmp_path)
+
+    script = service._render_streaming_script("Claude Code", [["claude"]], task_id="task-stream")
+
+    command_lines = [
+        line.strip()
+        for line in script.splitlines()
+        if line.strip().startswith("$commands +=")
+    ]
+    assert len(command_lines) == 1
+    assert command_lines[0].startswith("$commands += ,@('claude'")
