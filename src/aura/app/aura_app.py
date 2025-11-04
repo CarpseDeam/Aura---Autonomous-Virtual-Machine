@@ -128,6 +128,7 @@ class AuraApp:
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
             llm_service=self.llm_service,
+            event_bus=self.event_bus,
             agent_command_template=agent_command_template,
         )
         # Ensure the requested project is active

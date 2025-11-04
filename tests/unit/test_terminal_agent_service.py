@@ -30,10 +30,18 @@ class DummyLLM:
         return self.response
 
 
+class DummyEventBus:
+    def __init__(self) -> None:
+        self.dispatched: list[Any] = []
+
+    def dispatch(self, event: Any) -> None:
+        self.dispatched.append(event)
+
+
 @pytest.fixture()
 def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TerminalAgentService:
     monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda self: DummyExpectModule)
-    return TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
+    return TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM(), event_bus=DummyEventBus())
 
 
 def test_ensure_claude_flags_appends_skip_permissions(service: TerminalAgentService) -> None:
@@ -84,7 +92,7 @@ def test_spawn_with_pty_windows_uses_headless_popen(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
-    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
+    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM(), event_bus=DummyEventBus())
 
     process = service._spawn_with_pty(["claude"], tmp_path, {"PATH": "value"})  # noqa: SLF001
 
@@ -124,7 +132,7 @@ def test_build_command_adds_print_mode_flag_on_windows(
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
 
-    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
+    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM(), event_bus=DummyEventBus())
 
     from src.aura.models.agent_task import AgentSpecification
 
@@ -150,7 +158,7 @@ def test_build_command_no_print_mode_on_non_windows(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
 
-    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
+    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM(), event_bus=DummyEventBus())
 
     from src.aura.models.agent_task import AgentSpecification
 

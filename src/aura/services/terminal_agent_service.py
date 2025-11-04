@@ -9,13 +9,17 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING, Tuple
 
 from src.aura.models.agent_task import AgentSpecification, TerminalSession
+from src.aura.models.event_types import AGENT_OUTPUT
+from src.aura.models.events import Event
 from src.aura.services.agents_md_formatter import format_specification_for_codex
 
 if TYPE_CHECKING:
+    from src.aura.app.event_bus import EventBus
     from src.aura.services.llm_service import LLMService
 
 
@@ -40,6 +44,7 @@ class TerminalAgentService:
         self,
         workspace_root: Path,
         llm_service: LLMService,
+        event_bus: EventBus,
         *,
         agent_command_template: Optional[str] = None,
         question_agent_name: str = _DEFAULT_LLM_AGENT,
@@ -50,6 +55,7 @@ class TerminalAgentService:
         self.spec_dir.mkdir(parents=True, exist_ok=True)
 
         self.llm_service = llm_service
+        self.event_bus = event_bus
         self.question_agent_name = question_agent_name
 
         self.agent_command_template = agent_command_template or "C:\\Users\\carps\\AppData\\Roaming\\npm\\claude.cmd --dangerously-skip-permissions"
@@ -267,6 +273,15 @@ class TerminalAgentService:
                         log_stream.write(line + "\n")
                         log_stream.flush()
 
+                        self.event_bus.dispatch(Event(
+                            event_type=AGENT_OUTPUT,
+                            payload={
+                                "task_id": session.task_id,
+                                "text": line,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        ))
+
                         question = self._detect_question(line)
                         if question:
                             self._handle_agent_question(session, question)
@@ -293,6 +308,15 @@ class TerminalAgentService:
 
                         log_stream.write(line + "\n")
                         log_stream.flush()
+
+                        self.event_bus.dispatch(Event(
+                            event_type=AGENT_OUTPUT,
+                            payload={
+                                "task_id": session.task_id,
+                                "text": line,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        ))
 
                         question = self._detect_question(line)
                         if question:
