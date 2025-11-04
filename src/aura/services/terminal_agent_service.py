@@ -209,7 +209,7 @@ class TerminalAgentService:
     def _monitor_pty_output(self, session: TerminalSession, log_path: Path) -> None:
         child = session.child
         if child is None:
-            logger.warning("Monitor thread launched without PTY child for task %s", session.task_id)
+            logger.warning("Monitor thread launched without child for task %s", session.task_id)
             return
 
         logger.info("=" * 60)
@@ -219,58 +219,53 @@ class TerminalAgentService:
         logger.info("Log path: %s", log_path)
         logger.info("=" * 60)
 
+        if sys.platform.startswith("win"):
+            from src.aura.services.output_monitor import FileStreamMonitor
+            output_file = self.spec_dir / f"{session.task_id}.output.log"
+            monitor = FileStreamMonitor(poll_interval=0.1)
+            logger.info("Using FileStreamMonitor for Windows (output_file=%s)", output_file)
+            monitor_path = output_file
+        else:
+            from src.aura.services.output_monitor import PipeStreamMonitor
+            monitor = PipeStreamMonitor(child)
+            logger.info("Using PipeStreamMonitor for Unix")
+            monitor_path = log_path
+
+        def handle_line(line: str) -> None:
+            logger.info("GOT LINE: %r", line[:100])
+
+            try:
+                with log_path.open("a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except Exception as exc:
+                logger.error("Failed to write to log: %s", exc)
+
+            if self._detect_question(line):
+                self._handle_agent_question(session, line)
+
+            try:
+                self.event_bus.dispatch(Event(
+                    event_type=AGENT_OUTPUT,
+                    payload={
+                        "task_id": session.task_id,
+                        "text": line,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                ))
+            except Exception as exc:
+                logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
+
         try:
-            with log_path.open("a", encoding="utf-8") as log_stream:
-                while True:
-                    try:
-                        raw_line = child.readline()
-                        if raw_line:
-                            logger.info("GOT LINE: %r", raw_line[:100])
-                    except self._expect.TIMEOUT:
-                        continue
-                    except self._expect.EOF:
-                        logger.info("PTY stream ended for task %s", session.task_id)
-                        break
-                    except Exception as exc:
-                        logger.error("PTY read failed for task %s: %s", session.task_id, exc, exc_info=True)
-                        break
-
-                    if not raw_line:
-                        logger.info("PTY readline returned empty for task %s", session.task_id)
-                        break
-
-                    line = raw_line.rstrip("\r\n")
-                    if not line:
-                        continue
-
-                    log_stream.write(line + "\n")
-                    log_stream.flush()
-
-                    try:
-                        self.event_bus.dispatch(Event(
-                            event_type=AGENT_OUTPUT,
-                            payload={
-                                "task_id": session.task_id,
-                                "text": line,
-                                "timestamp": datetime.now().isoformat()
-                            }
-                        ))
-                    except Exception as exc:
-                        logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
-
-                    question = self._detect_question(line)
-                    if question:
-                        self._handle_agent_question(session, question)
-
+            monitor.start_monitoring(monitor_path, handle_line)
         except Exception as exc:
-            logger.error("Monitor thread crashed for task %s: %s", session.task_id, exc, exc_info=True)
+            logger.error("Monitor crashed for task %s: %s", session.task_id, exc, exc_info=True)
         finally:
             exit_code = getattr(child, "exitstatus", None)
             if exit_code is None:
                 exit_code = getattr(child, "status", None)
             session.mark_exit(exit_code)
             self._safe_close(child)
-            logger.info("PTY monitor stopped for task %s (exit_code=%s)", session.task_id, exit_code)
+            logger.info("Monitor thread exiting for task %s (exit_code=%s)", session.task_id, exit_code)
 
     def _handle_agent_question(self, session: TerminalSession, question: str) -> None:
         with session.answer_lock:
@@ -376,21 +371,25 @@ class TerminalAgentService:
             if not claude_tokens:
                 raise ValueError("Resolved Claude command is empty on Windows")
 
+            output_file = self.spec_dir / f"{spec.task_id}.output.log"
+
             invocation_parts = [f"& {self._powershell_quote(str(claude_tokens[0]))}"]
             invocation_parts.extend(self._powershell_quote(str(arg)) for arg in claude_tokens[1:])
             invocation = " ".join(invocation_parts)
 
             command_str = (
+                f"$ErrorActionPreference = 'Stop'; "
                 f"$promptPath = {self._powershell_quote(str(prompt_path))}; "
+                f"$outputPath = {self._powershell_quote(str(output_file))}; "
                 "$prompt = Get-Content -LiteralPath $promptPath -Raw; "
-                f"$prompt | {invocation} -p $input"
+                f"$prompt | {invocation} -p $input > $outputPath 2>&1"
             )
 
-            command = ["powershell.exe", "-NoProfile", "-Command", command_str]
+            command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command_str]
             logger.info(
-                "Built Windows command for task %s using PowerShell prompt injection (prompt=%s)",
+                "Built Windows command for task %s with output redirect to: %s",
                 spec.task_id,
-                prompt_path,
+                output_file,
             )
             return command
 
