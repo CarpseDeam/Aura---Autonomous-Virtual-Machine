@@ -37,7 +37,7 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TerminalAgentSer
 
 
 def test_ensure_claude_flags_appends_skip_permissions(service: TerminalAgentService) -> None:
-    tokens = service._ensure_claude_flags(["claude-code"])  # noqa: SLF001
+    tokens = service._ensure_claude_flags(["claude"])  # noqa: SLF001
     assert "--dangerously-skip-permissions" in tokens
 
 
@@ -86,10 +86,10 @@ def test_spawn_with_pty_windows_uses_headless_popen(monkeypatch: pytest.MonkeyPa
 
     service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
 
-    process = service._spawn_with_pty(["claude-code"], tmp_path, {"PATH": "value"})  # noqa: SLF001
+    process = service._spawn_with_pty(["claude"], tmp_path, {"PATH": "value"})  # noqa: SLF001
 
     assert process.pid == 1234
-    assert captured["cmd"] == ["claude-code"]
+    assert captured["cmd"] == ["claude"]
 
     kwargs = captured["kwargs"]
     assert kwargs["cwd"] == str(tmp_path)

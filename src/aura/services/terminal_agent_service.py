@@ -52,7 +52,7 @@ class TerminalAgentService:
         self.llm_service = llm_service
         self.question_agent_name = question_agent_name
 
-        self.agent_command_template = agent_command_template or "claude-code --dangerously-skip-permissions"
+        self.agent_command_template = agent_command_template or "claude --dangerously-skip-permissions"
         self._expect = self._load_expect_module()
         self._question_patterns = self._compile_question_patterns()
 
@@ -83,7 +83,7 @@ class TerminalAgentService:
         session_env = os.environ.copy()
         if sys.platform.startswith("win"):
             # On Windows, prepend the virtual environment's Scripts path to PATH
-            # so the spawned process can resolve our executables (claude-code, codex, etc.)
+            # so the spawned process can resolve our executables (claude, codex, etc.)
             venv_scripts_path = str(Path(sys.executable).parent)
             original_path = session_env.get("PATH", "")
             session_env["PATH"] = f"{venv_scripts_path}{os.pathsep}{original_path}"

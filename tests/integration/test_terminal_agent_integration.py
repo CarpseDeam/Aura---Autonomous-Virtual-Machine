@@ -136,7 +136,7 @@ def test_terminal_agent_answers_questions_end_to_end(
     service = TerminalAgentService(
         workspace_root=tmp_path,
         llm_service=llm,
-        agent_command_template="claude-code",
+        agent_command_template="claude",
     )
     spec = _build_specification("test-io-pty-001")
 

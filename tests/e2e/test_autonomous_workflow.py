@@ -159,7 +159,7 @@ def test_autonomous_workflow_end_to_end(
     service = TerminalAgentService(
         workspace_root=tmp_path,
         llm_service=llm,
-        agent_command_template="claude-code --dangerously-skip-permissions",
+        agent_command_template="claude --dangerously-skip-permissions",
     )
 
     # Create specification for FastAPI hello world task

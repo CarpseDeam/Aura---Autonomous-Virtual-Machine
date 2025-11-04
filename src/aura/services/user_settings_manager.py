@@ -24,7 +24,7 @@ TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
     },
     "claude_code": {
         "label": "Claude Code",
-        "command_template": "claude-code --dangerously-skip-permissions"
+        "command_template": "claude --dangerously-skip-permissions"
     },
     "gemini-cli": {
         "label": "Gemini CLI",
@@ -68,7 +68,7 @@ def _normalize_terminal_selection(value: Any) -> str:
         selection = value.strip().lower()
         aliases = {
             "claude code": "claude_code",
-            "claude-code": "claude_code",
+            "claude": "claude_code",
             "codex (gpt-5)": "codex",
         }
         selection = aliases.get(selection, selection)
@@ -81,8 +81,7 @@ def _infer_terminal_preset_from_command(command: Optional[str]) -> str:
     if not command:
         return "codex"
     normalized = command.strip()
-    # Support legacy alias where the executable was named 'claude-code'
-    if normalized in {"claude", "claude-code"}:
+    if normalized == "claude" or normalized.startswith("claude "):
         return "claude_code"
     for key, preset in TERMINAL_AGENT_PRESETS.items():
         if normalized == preset["command_template"].strip():
