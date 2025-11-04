@@ -135,3 +135,5 @@ GEMINI.md
 /pyproject.toml
 /old/
 /.aura/
+/aura_err.txt
+/aura_log.txt

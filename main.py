@@ -1,3 +1,4 @@
+import logging
 from dotenv import load_dotenv
 
 from src.aura.app.aura_app import AuraApp
@@ -6,6 +7,9 @@ if __name__ == "__main__":
     """
     Main entry point for the AURA application.
     """
+    # Configure logging
+    logging.basicConfig(level=logging.DEBUG)
+    
     # Load environment variables from .env file
     load_dotenv()
 

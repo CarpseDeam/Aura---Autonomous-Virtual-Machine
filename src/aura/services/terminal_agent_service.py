@@ -165,7 +165,7 @@ class TerminalAgentService:
                 cwd=str(project_root),
                 env=env,
                 encoding="utf-8",
-                codec_errors="replace",
+                codec_errors="ignore",
                 timeout=self._READ_TIMEOUT_SECONDS,
                 **spawn_kwargs,
             )
@@ -183,18 +183,32 @@ class TerminalAgentService:
         spawn_kwargs: Dict[str, Any] = {}
 
         if sys.platform.startswith("win") and getattr(self._expect, "__name__", "") == "wexpect":
+            # Build the command line for Claude Code
             command_line = subprocess.list2cmdline(spawn_command)
+
+            # PowerShell script that:
+            # 1. Sets console encoding to UTF-8
+            # 2. Sets code page to 65001 (UTF-8)
+            # 3. Then runs Claude Code
+            powershell_script = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+                "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
+                "chcp 65001 > $null; "
+                f"& {command_line}"
+            )
+
             powershell_command = [
                 "powershell.exe",
                 "-NoExit",
                 "-Command",
-                f"& {command_line}",
+                powershell_script,
             ]
+
             spawn_command = powershell_command
             spawn_kwargs["interact"] = True
+
             logger.debug(
-                "Wrapped Windows command for separate PowerShell window: %s -> %s",
-                command,
+                "Wrapped Windows command for separate PowerShell window with UTF-8 encoding: %s",
                 spawn_command,
             )
 
