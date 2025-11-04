@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
-import subprocess
 import sys
 
 import pytest
@@ -140,11 +139,24 @@ def test_build_command_uses_interactive_mode_on_windows(
     with caplog.at_level(logging.INFO):
         command = service._build_command(spec, None, prompt_content)  # noqa: SLF001
 
-    assert "-p" not in command
-    assert prompt_content not in command
-    assert "--dangerously-skip-permissions" in command
+    assert command[0].lower().endswith("powershell.exe")
+    assert "-NoProfile" in command
+    assert len(command) == 4
+
+    powershell_command = command[3]
+    assert "-p $input" in powershell_command
+    assert "--dangerously-skip-permissions" in powershell_command
+    assert "claude.cmd" in powershell_command
+    assert "Get-Content" in powershell_command
+    assert prompt_content not in powershell_command
+
+    prompt_file = service.spec_dir / "test-task.prompt.txt"
+    assert prompt_file.exists()
+    assert prompt_file.read_text(encoding="utf-8") == prompt_content
+    assert str(prompt_file) in powershell_command
+
     assert any(
-        "Using interactive mode for task test-task" in record.getMessage()
+        "Built Windows command for task test-task using PowerShell prompt injection" in record.getMessage()
         for record in caplog.records
     )
 

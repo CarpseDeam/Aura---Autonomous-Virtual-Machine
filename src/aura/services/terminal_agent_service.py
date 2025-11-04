@@ -4,11 +4,13 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Dict, List, Optional, Sequence, TYPE_CHECKING
 
 from src.aura.models.agent_task import AgentSpecification, TerminalSession
@@ -83,7 +85,18 @@ class TerminalAgentService:
         spec_path = self._persist_specification(spec)
         agents_md_path = self._write_agents_md(project_root, spec)
 
-        command = self._build_command(spec, command_override)
+        try:
+            agents_prompt = agents_md_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.error(
+                "Failed to read AGENTS.md for task %s: %s",
+                spec.task_id,
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(f"Failed to read AGENTS.md for task {spec.task_id}") from exc
+
+        command = self._build_command(spec, command_override, prompt=agents_prompt)
 
         session_env = os.environ.copy()
         if sys.platform.startswith("win"):
@@ -115,7 +128,7 @@ class TerminalAgentService:
                 child=child,
                 log_path=str(log_path),
             )
-            # Send the initial prompt via stdin for all platforms (interactive mode)
+            # On Unix we inject the prompt via stdin; Windows handles it via -p
             self._send_initial_prompt(session, agents_md_path)
             self._start_monitor_thread(session, log_path)
             return session
@@ -153,6 +166,13 @@ class TerminalAgentService:
 
     def _send_initial_prompt(self, session: TerminalSession, agents_md_path: Path) -> None:
         """Send the initial AGENTS.md prompt to the agent."""
+        if sys.platform.startswith("win"):
+            logger.debug(
+                "Skipping initial prompt injection for task %s on Windows; prompt provided via -p",
+                session.task_id,
+            )
+            return
+
         time.sleep(0.5)
 
         try:
@@ -326,16 +346,57 @@ class TerminalAgentService:
             logger.info("Using command override for task %s: %s", spec.task_id, tokens)
             return tokens
 
-        tokens = self._resolve_claude_command()
-        tokens.append("--dangerously-skip-permissions")
-        logger.info("Built command for task %s: %s", spec.task_id, tokens)
-
         if sys.platform.startswith("win"):
-            logger.info(
-                "Using interactive mode for task %s (prompt will be sent via stdin)",
-                spec.task_id,
+            prompt_text = prompt if prompt is not None else format_specification_for_codex(spec)
+            prompt_path = self.spec_dir / f"{spec.task_id}.prompt.txt"
+
+            try:
+                prompt_path.write_text(prompt_text, encoding="utf-8")
+            except OSError as exc:
+                logger.error(
+                    "Failed to write prompt file for task %s: %s",
+                    spec.task_id,
+                    exc,
+                    exc_info=True,
+                )
+                raise RuntimeError(f"Failed to write prompt file for task {spec.task_id}") from exc
+
+            try:
+                claude_tokens = self._render_template_command(spec)
+            except Exception as exc:
+                logger.error(
+                    "Failed to render agent command template for task %s: %s",
+                    spec.task_id,
+                    exc,
+                    exc_info=True,
+                )
+                raise
+
+            claude_tokens = self._ensure_claude_flags(claude_tokens)
+            if not claude_tokens:
+                raise ValueError("Resolved Claude command is empty on Windows")
+
+            invocation_parts = [f"& {self._powershell_quote(str(claude_tokens[0]))}"]
+            invocation_parts.extend(self._powershell_quote(str(arg)) for arg in claude_tokens[1:])
+            invocation = " ".join(invocation_parts)
+
+            command_str = (
+                f"$promptPath = {self._powershell_quote(str(prompt_path))}; "
+                "$prompt = Get-Content -LiteralPath $promptPath -Raw; "
+                f"$prompt | {invocation} -p $input"
             )
 
+            command = ["powershell.exe", "-NoProfile", "-Command", command_str]
+            logger.info(
+                "Built Windows command for task %s using PowerShell prompt injection (prompt=%s)",
+                spec.task_id,
+                prompt_path,
+            )
+            return command
+
+        tokens = self._resolve_claude_command()
+        tokens = self._ensure_claude_flags(tokens)
+        logger.info("Built command for task %s: %s", spec.task_id, tokens)
         return tokens
 
     def _render_template_command(self, spec: AgentSpecification) -> List[str]:
@@ -443,8 +504,166 @@ class TerminalAgentService:
     def _load_expect_module(self):
         """Load the appropriate PTY module for this platform."""
         if sys.platform.startswith("win"):
-            logger.info("Loading Windows PTY backend...")
-            return self._create_windows_pty_wrapper()
+            logger.info("Loading Windows PTY backend (simple subprocess wrapper)")
+
+            class SimpleExpect:
+                """Minimal expect-like wrapper backed by subprocess.Popen on Windows."""
+
+                class TIMEOUT(Exception):
+                    """Raised when no output is available before the timeout expires."""
+
+                class EOF(Exception):
+                    """Raised when the child process closes the output stream."""
+
+                class SimpleChild:
+                    """Line-oriented subprocess wrapper compatible with the monitor thread."""
+
+                    def __init__(
+                        self,
+                        cmd: Sequence[str],
+                        cwd: Optional[str],
+                        env: Optional[Dict[str, str]],
+                        encoding: str,
+                        timeout: float,
+                    ) -> None:
+                        self._timeout = timeout
+                        self._stdout_queue: Queue[Optional[str]] = Queue()
+                        self._closed = False
+                        self.exitstatus: Optional[int] = None
+                        self.status: Optional[int] = None
+
+                        try:
+                            self._proc = subprocess.Popen(
+                                cmd,
+                                cwd=cwd,
+                                env=env,
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                text=True,
+                                encoding=encoding,
+                                errors="replace",
+                                bufsize=1,
+                            )
+                        except OSError as exc:
+                            logger.error("Failed to launch Windows subprocess: %s", exc, exc_info=True)
+                            raise
+
+                        self.pid = self._proc.pid
+                        logger.info("Spawned Windows subprocess with PID %s", self.pid)
+                        self._start_reader_thread()
+
+                    def _start_reader_thread(self) -> None:
+                        def reader() -> None:
+                            try:
+                                stream = self._proc.stdout
+                                if stream is None:
+                                    logger.error("Windows subprocess missing stdout; signalling EOF")
+                                    return
+
+                                for line in stream:
+                                    self._stdout_queue.put(line)
+                            except Exception:
+                                logger.debug("Reader thread failure for Windows PTY", exc_info=True)
+                            finally:
+                                try:
+                                    self._proc.wait(timeout=0.1)
+                                except Exception:
+                                    logger.debug("Reader thread wait failed", exc_info=True)
+                                self.exitstatus = self._proc.returncode
+                                self.status = self._proc.returncode
+                                self._stdout_queue.put(None)
+
+                        self._reader_thread = threading.Thread(
+                            target=reader,
+                            name=f"windows-pty-reader-{self.pid}",
+                            daemon=True,
+                        )
+                        self._reader_thread.start()
+
+                    def readline(self) -> str:
+                        try:
+                            payload = self._stdout_queue.get(timeout=self._timeout)
+                        except Empty:
+                            raise SimpleExpect.TIMEOUT()
+
+                        if payload is None:
+                            raise SimpleExpect.EOF()
+
+                        return payload
+
+                    def sendline(self, text: str) -> None:
+                        if self._closed:
+                            logger.debug("Skipping sendline; Windows subprocess already closed")
+                            return
+
+                        if self._proc.stdin is None:
+                            logger.debug("Skipping sendline; stdin unavailable")
+                            return
+
+                        try:
+                            self._proc.stdin.write(f"{text}\n")
+                            self._proc.stdin.flush()
+                        except Exception as exc:
+                            logger.error("Failed to write to Windows subprocess stdin: %s", exc, exc_info=True)
+                            raise
+
+                    def isalive(self) -> bool:
+                        return self._proc.poll() is None
+
+                    def close(self, force: bool = False) -> None:
+                        if self._closed:
+                            return
+
+                        self._closed = True
+
+                        if self.isalive():
+                            try:
+                                if force:
+                                    self._proc.kill()
+                                else:
+                                    self._proc.terminate()
+                                self._proc.wait(timeout=5)
+                            except Exception:
+                                logger.debug("Force terminating Windows subprocess after failure", exc_info=True)
+                                try:
+                                    self._proc.kill()
+                                except Exception:
+                                    logger.debug("Failed to kill Windows subprocess", exc_info=True)
+
+                        self.exitstatus = self._proc.returncode
+                        self.status = self._proc.returncode
+
+                        for stream in (self._proc.stdin, self._proc.stdout):
+                            if stream is None:
+                                continue
+                            try:
+                                stream.close()
+                            except Exception:
+                                logger.debug("Failed to close Windows subprocess stream", exc_info=True)
+
+                        self._stdout_queue.put(None)
+                        if hasattr(self, "_reader_thread"):
+                            try:
+                                self._reader_thread.join(timeout=0.2)
+                            except Exception:
+                                logger.debug("Reader thread join failed", exc_info=True)
+
+                @staticmethod
+                def spawn(
+                    command: str,
+                    args: Sequence[str],
+                    *,
+                    cwd: Optional[str],
+                    env: Optional[Dict[str, str]],
+                    encoding: str,
+                    timeout: float,
+                ) -> "SimpleExpect.SimpleChild":
+                    full_cmd = [command, *args]
+                    logger.info("Launching Windows command: %s", full_cmd)
+                    return SimpleExpect.SimpleChild(full_cmd, cwd, env, encoding, timeout)
+
+            return SimpleExpect
         else:
             try:
                 import pexpect
@@ -453,145 +672,7 @@ class TerminalAgentService:
             except ImportError as exc:
                 raise RuntimeError("pexpect required. Install via requirements.txt") from exc
 
-def _create_windows_pty_wrapper(self):
-    """Create a Windows-compatible PTY wrapper using Windows ConPTY."""
-    import subprocess
-    import threading
-    import sys
-    from queue import Queue, Empty
-    
-    class WindowsPTYWrapper:
-        """Windows PTY using ConPTY for real terminal emulation."""
-        
-        class TIMEOUT(Exception):
-            pass
-        
-        class EOF(Exception):
-            pass
-        
-        class ConPTYChild:
-            """Process with real ConPTY terminal on Windows."""
-            
-            def __init__(self, cmd, cwd, env, encoding, timeout):
-                # Use STARTUPINFO to enable ConPTY
-                startupinfo = subprocess.STARTUPINFO()
-                
-                # Create process with pseudo-console
-                self.proc = subprocess.Popen(
-                    cmd,
-                    cwd=cwd,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.PIPE,
-                    bufsize=0,  # Unbuffered
-                    text=False,  # Binary mode
-                    startupinfo=startupinfo,
-                )
-                
-                self.pid = self.proc.pid
-                self.encoding = encoding
-                self.timeout = timeout
-                self._output_queue = Queue()
-                self._closed = False
-                self._start_reader_thread()
-                
-                logger.info("ConPTY process spawned with PID: %d", self.pid)
-            
-            def _start_reader_thread(self):
-                """Background thread reads binary output and decodes."""
-                def reader():
-                    try:
-                        while True:
-                            # Read one byte at a time to avoid blocking
-                            chunk = self.proc.stdout.read(1)
-                            if not chunk:
-                                break
-                            
-                            # Accumulate until newline
-                            line_bytes = chunk
-                            while not line_bytes.endswith(b'\n'):
-                                chunk = self.proc.stdout.read(1)
-                                if not chunk:
-                                    break
-                                line_bytes += chunk
-                            
-                            if line_bytes:
-                                try:
-                                    line = line_bytes.decode(self.encoding, errors='replace')
-                                    self._output_queue.put(('line', line))
-                                except Exception as e:
-                                    logger.error("Decode error: %s", e)
-                    except Exception as exc:
-                        logger.debug("Reader thread error: %s", exc)
-                    finally:
-                        self._output_queue.put(('eof', None))
-                
-                self._reader_thread = threading.Thread(
-                    target=reader,
-                    daemon=True,
-                    name=f"conpty-reader-{self.pid}"
-                )
-                self._reader_thread.start()
-            
-            def readline(self):
-                """Read one line from queue."""
-                try:
-                    event_type, data = self._output_queue.get(timeout=self.timeout)
-                    if event_type == 'eof':
-                        raise WindowsPTYWrapper.EOF()
-                    return data
-                except Empty:
-                    raise WindowsPTYWrapper.TIMEOUT()
-            
-            def sendline(self, text):
-                """Send text to stdin."""
-                if self.proc.stdin and not self._closed:
-                    try:
-                        self.proc.stdin.write((text + '\n').encode(self.encoding))
-                        self.proc.stdin.flush()
-                        logger.info("Sent %d bytes to stdin", len(text) + 1)
-                    except Exception as e:
-                        logger.error("Failed to write to stdin: %s", e)
-            
-            def isalive(self):
-                """Check if process is running."""
-                return self.proc.poll() is None
-            
-            def close(self, force=False):
-                """Close the process."""
-                self._closed = True
-                if self.isalive():
-                    try:
-                        if force:
-                            self.proc.kill()
-                        else:
-                            self.proc.terminate()
-                        self.proc.wait(timeout=5)
-                    except:
-                        self.proc.kill()
-        
-        @staticmethod
-        def spawn(command, args, **kwargs):
-            """Spawn process with ConPTY."""
-            full_cmd = [command] + list(args)
-            
-            # Add environment variables for unbuffered output
-            env = dict(kwargs.get('env', {}))
-            env.update({
-                "PYTHONUNBUFFERED": "1",
-                "FORCE_COLOR": "1",  # Enable colors
-                "TERM": "xterm-256color",  # Proper terminal type
-            })
-            kwargs['env'] = env
-            
-            return WindowsPTYWrapper.ConPTYChild(
-                cmd=full_cmd,
-                cwd=kwargs.get('cwd'),
-                env=env,
-                encoding=kwargs.get('encoding', 'utf-8'),
-                timeout=kwargs.get('timeout', 0.5),
-            )
-    
-    logger.info("Created Windows ConPTY wrapper")
-    return WindowsPTYWrapper()
+    def _powershell_quote(self, value: str) -> str:
+        """Quote a value for safe use in a PowerShell command string."""
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"

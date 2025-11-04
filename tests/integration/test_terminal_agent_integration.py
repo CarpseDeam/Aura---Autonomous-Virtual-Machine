@@ -166,7 +166,9 @@ def test_terminal_agent_answers_questions_end_to_end(
     assert any("Proceed with deploy?" in prompt for prompt in prompts)
 
     responses = [message for kind, message in sent_messages if kind == "sendline"]
-    assert responses == ["Use async - it matches the FastAPI stack."]
+    assert len(responses) == 2
+    assert "Refactor the database layer" in responses[0]
+    assert responses[1] == "Use async - it matches the FastAPI stack."
 
     answered = session.answered_questions
     assert answered == {
@@ -176,4 +178,4 @@ def test_terminal_agent_answers_questions_end_to_end(
     }
 
     initial_prompts = [message for kind, message in sent_messages if kind == "send"]
-    assert initial_prompts and initial_prompts[0]
+    assert not initial_prompts
