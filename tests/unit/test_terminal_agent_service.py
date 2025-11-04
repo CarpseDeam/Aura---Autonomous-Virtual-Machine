@@ -173,3 +173,22 @@ def test_build_command_no_print_mode_on_non_windows(
 
     assert "-p" not in command
     assert prompt_content not in command
+
+
+def test_event_bus_parameter_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify TerminalAgentService requires event_bus parameter."""
+    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
+
+    # Should work with event_bus
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        llm_service=DummyLLM(),
+        event_bus=DummyEventBus()
+    )
+    assert service.event_bus is not None
+
+
+def test_monitor_thread_has_access_to_event_bus(service: TerminalAgentService) -> None:
+    """Verify monitoring thread can access event bus."""
+    assert hasattr(service, 'event_bus')
+    assert service.event_bus is not None

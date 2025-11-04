@@ -273,14 +273,17 @@ class TerminalAgentService:
                         log_stream.write(line + "\n")
                         log_stream.flush()
 
-                        self.event_bus.dispatch(Event(
-                            event_type=AGENT_OUTPUT,
-                            payload={
-                                "task_id": session.task_id,
-                                "text": line,
-                                "timestamp": datetime.now().isoformat()
-                            }
-                        ))
+                        try:
+                            self.event_bus.dispatch(Event(
+                                event_type=AGENT_OUTPUT,
+                                payload={
+                                    "task_id": session.task_id,
+                                    "text": line,
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                            ))
+                        except Exception as exc:
+                            logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
 
                         question = self._detect_question(line)
                         if question:
@@ -309,14 +312,17 @@ class TerminalAgentService:
                         log_stream.write(line + "\n")
                         log_stream.flush()
 
-                        self.event_bus.dispatch(Event(
-                            event_type=AGENT_OUTPUT,
-                            payload={
-                                "task_id": session.task_id,
-                                "text": line,
-                                "timestamp": datetime.now().isoformat()
-                            }
-                        ))
+                        try:
+                            self.event_bus.dispatch(Event(
+                                event_type=AGENT_OUTPUT,
+                                payload={
+                                    "task_id": session.task_id,
+                                    "text": line,
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                            ))
+                        except Exception as exc:
+                            logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
 
                         question = self._detect_question(line)
                         if question:

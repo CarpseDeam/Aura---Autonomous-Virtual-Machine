@@ -111,6 +111,16 @@ class MockLLMService:
         return self._responses.popleft()
 
 
+class MockEventBus:
+    """Mock event bus that records dispatched events."""
+
+    def __init__(self) -> None:
+        self.dispatched: List[Any] = []
+
+    def dispatch(self, event: Any) -> None:  # noqa: ANN401
+        self.dispatched.append(event)
+
+
 def test_autonomous_workflow_end_to_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -156,9 +166,11 @@ def test_autonomous_workflow_end_to_end(
     )
 
     # Create the service
+    event_bus = MockEventBus()
     service = TerminalAgentService(
         workspace_root=tmp_path,
         llm_service=llm,
+        event_bus=event_bus,
         agent_command_template="claude --dangerously-skip-permissions",
     )
 

@@ -96,6 +96,16 @@ class DummyLLMService:
         return str(result)
 
 
+class DummyEventBus:
+    """Mock event bus that records dispatched events."""
+
+    def __init__(self) -> None:
+        self.dispatched: List[Any] = []
+
+    def dispatch(self, event: Any) -> None:  # noqa: ANN401
+        self.dispatched.append(event)
+
+
 def _build_specification(task_id: str) -> AgentSpecification:
     return AgentSpecification(
         task_id=task_id,
@@ -133,9 +143,11 @@ def test_terminal_agent_answers_questions_end_to_end(
         ]
     )
 
+    event_bus = DummyEventBus()
     service = TerminalAgentService(
         workspace_root=tmp_path,
         llm_service=llm,
+        event_bus=event_bus,
         agent_command_template="claude",
     )
     spec = _build_specification("test-io-pty-001")
