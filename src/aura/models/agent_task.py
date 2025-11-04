@@ -46,6 +46,10 @@ class TerminalSession(BaseModel):
         if child is None:
             return False
         try:
+            # Check if child is a Popen object (has poll method)
+            if hasattr(child, 'poll'):
+                return child.poll() is None
+            # Otherwise it's a pexpect object (has isalive method)
             return bool(child.isalive())
         except Exception:
             return False
@@ -63,7 +67,12 @@ class TerminalSession(BaseModel):
             return self._exit_code
         if timeout is None:
             try:
-                child.wait()
+                # Check if child is a Popen object (has wait method with different signature)
+                if hasattr(child, 'poll'):
+                    child.wait()
+                else:
+                    # pexpect object
+                    child.wait()
             except Exception:
                 pass
             return self._capture_exit_code()
@@ -82,9 +91,14 @@ class TerminalSession(BaseModel):
         child = self.child
         if child is None:
             return self._exit_code
-        exit_code = getattr(child, "exitstatus", None)
-        if exit_code is None:
-            exit_code = getattr(child, "status", None)
+        # Check if child is a Popen object
+        if hasattr(child, 'poll'):
+            exit_code = child.poll()
+        else:
+            # pexpect object
+            exit_code = getattr(child, "exitstatus", None)
+            if exit_code is None:
+                exit_code = getattr(child, "status", None)
         if exit_code is not None:
             self._exit_code = exit_code
         return self._exit_code
