@@ -192,11 +192,20 @@ class TerminalAgentService:
             logger.warning("Monitor thread launched without PTY child for task %s", session.task_id)
             return
 
+        logger.info("=" * 60)
+        logger.info("MONITOR THREAD STARTED for task %s", session.task_id)
+        logger.info("Child type: %s", type(child).__name__)
+        logger.info("Child PID: %s", getattr(child, 'pid', 'NO PID'))
+        logger.info("Log path: %s", log_path)
+        logger.info("=" * 60)
+
         try:
             with log_path.open("a", encoding="utf-8") as log_stream:
                 while True:
                     try:
                         raw_line = child.readline()
+                        if raw_line:
+                            logger.info("GOT LINE: %r", raw_line[:100])
                     except self._expect.TIMEOUT:
                         continue
                     except self._expect.EOF:
@@ -434,26 +443,8 @@ class TerminalAgentService:
     def _load_expect_module(self):
         """Load the appropriate PTY module for this platform."""
         if sys.platform.startswith("win"):
-            try:
-                import pexpect
-                from pexpect.popen_spawn import PopenSpawn
-
-                # Create a wrapper that uses PopenSpawn (works on Windows)
-                class WindowsPTY:
-                    TIMEOUT = pexpect.TIMEOUT
-                    EOF = pexpect.EOF
-
-                    @staticmethod
-                    def spawn(command, args, **kwargs):
-                        # Use PopenSpawn which works reliably on Windows
-                        full_cmd = [command] + list(args)
-                        child = PopenSpawn(full_cmd, **kwargs)
-                        return child
-
-                logger.info("Loaded PTY backend: pexpect.PopenSpawn (Windows)")
-                return WindowsPTY()
-            except ImportError as exc:
-                raise RuntimeError("pexpect required. Install via requirements.txt") from exc
+            logger.info("Loading Windows PTY backend...")
+            return self._create_windows_pty_wrapper()
         else:
             try:
                 import pexpect
@@ -461,3 +452,121 @@ class TerminalAgentService:
                 return pexpect
             except ImportError as exc:
                 raise RuntimeError("pexpect required. Install via requirements.txt") from exc
+
+    def _create_windows_pty_wrapper(self):
+        """Create a Windows-compatible PTY wrapper using subprocess.Popen with threaded reading."""
+        import subprocess
+        import threading
+        from queue import Queue, Empty
+
+        class WindowsPTYWrapper:
+            """Windows PTY implementation using subprocess with threaded output reading."""
+
+            class TIMEOUT(Exception):
+                """Raised when readline times out."""
+                pass
+
+            class EOF(Exception):
+                """Raised when process terminates."""
+                pass
+
+            class PopenChild:
+                """Wrapper around subprocess.Popen that mimics pexpect API."""
+
+                def __init__(self, cmd, cwd, env, encoding, timeout):
+                    # Force unbuffered output
+                    env = dict(env)
+                    env.update({
+                        "PYTHONUNBUFFERED": "1",
+                        "PYTHONUTF8": "1",
+                        "PYTHONIOENCODING": "utf-8",
+                        "TERM": "dumb",
+                    })
+
+                    self.proc = subprocess.Popen(
+                        cmd,
+                        cwd=cwd,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        stdin=subprocess.PIPE,
+                        text=True,
+                        encoding=encoding,
+                        bufsize=1,  # Line buffered
+                        universal_newlines=True,
+                    )
+
+                    self.pid = self.proc.pid
+                    self.encoding = encoding
+                    self.timeout = timeout
+                    self._output_queue = Queue()
+                    self._start_reader_thread()
+
+                    logger.info("Process spawned with PID: %d", self.pid)
+
+                def _start_reader_thread(self):
+                    """Start background thread to read process output into queue."""
+                    def reader():
+                        logger.debug("Reader thread started for PID %d", self.pid)
+                        try:
+                            for line in self.proc.stdout:
+                                self._output_queue.put(('line', line))
+                        except Exception as exc:
+                            logger.debug("Reader thread error: %s", exc)
+                        finally:
+                            self._output_queue.put(('eof', None))
+                            logger.debug("Reader thread exiting for PID %d", self.pid)
+
+                    self._reader_thread = threading.Thread(
+                        target=reader,
+                        name=f"output-reader-{self.pid}",
+                        daemon=True
+                    )
+                    self._reader_thread.start()
+
+                def readline(self):
+                    """Read one line from the process output."""
+                    try:
+                        event_type, data = self._output_queue.get(timeout=self.timeout)
+                        if event_type == 'eof':
+                            raise WindowsPTYWrapper.EOF()
+                        return data
+                    except Empty:
+                        raise WindowsPTYWrapper.TIMEOUT()
+
+                def sendline(self, text):
+                    """Send a line to the process stdin."""
+                    if self.proc.stdin:
+                        self.proc.stdin.write(text + '\n')
+                        self.proc.stdin.flush()
+
+                def isalive(self):
+                    """Check if process is still running."""
+                    return self.proc.poll() is None
+
+                def close(self, force=False):
+                    """Close the process."""
+                    if self.isalive():
+                        if force:
+                            self.proc.kill()
+                        else:
+                            self.proc.terminate()
+                    try:
+                        self.proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.proc.kill()
+
+            @staticmethod
+            def spawn(command, args, **kwargs):
+                """Spawn a process and return a PopenChild wrapper."""
+                full_cmd = [command] + list(args)
+                return WindowsPTYWrapper.PopenChild(
+                    cmd=full_cmd,
+                    cwd=kwargs.get('cwd'),
+                    env=kwargs.get('env'),
+                    encoding=kwargs.get('encoding', 'utf-8'),
+                    timeout=kwargs.get('timeout', 0.5),
+                )
+
+        logger.info("Created Windows PTY wrapper with threaded reader")
+        return WindowsPTYWrapper()
