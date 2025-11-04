@@ -313,6 +313,20 @@ class TerminalAgentService:
 
     # ------------------------------------------------------------------ Helpers
 
+    def _resolve_claude_command(self) -> List[str]:
+        """Resolve the executable used to launch Claude Code."""
+        if not sys.platform.startswith("win"):
+            return ["claude"]
+
+        npm_prefix = Path(os.environ.get("APPDATA", "")) / "npm"
+        claude_script = npm_prefix / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+
+        if not claude_script.exists():
+            raise RuntimeError(f"Claude Code script not found at: {claude_script}")
+
+        logger.info("Resolved Claude Code script to node.exe %s", claude_script)
+        return ["node.exe", str(claude_script)]
+
     def _build_command(
         self,
         spec: AgentSpecification,
@@ -322,16 +336,17 @@ class TerminalAgentService:
         if command_override:
             tokens = list(command_override)
             logger.info("Using command override for task %s: %s", spec.task_id, tokens)
-        else:
-            tokens = self._render_template_command(spec)
-            logger.info("Rendered command template for task %s: %s", spec.task_id, tokens)
+            return tokens
 
-        tokens = self._ensure_claude_flags(tokens)
+        tokens = self._resolve_claude_command()
+        tokens.append("--dangerously-skip-permissions")
+        logger.info("Built command for task %s: %s", spec.task_id, tokens)
 
         if sys.platform.startswith("win"):
-            # Use interactive mode on Windows to avoid command-line length limits
-            logger.info("Using interactive mode for task %s (prompt will be sent via stdin)", spec.task_id)
-            # Don't add -p flag - we'll send prompt via stdin after spawn
+            logger.info(
+                "Using interactive mode for task %s (prompt will be sent via stdin)",
+                spec.task_id,
+            )
 
         return tokens
 

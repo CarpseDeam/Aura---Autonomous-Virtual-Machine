@@ -131,6 +131,10 @@ def test_build_command_uses_interactive_mode_on_windows(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    claude_dir = tmp_path / "npm" / "node_modules" / "@anthropic-ai" / "claude-code"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "cli.js").write_text("// dummy cli", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
 
