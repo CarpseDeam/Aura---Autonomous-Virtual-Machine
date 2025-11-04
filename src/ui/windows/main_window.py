@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtCore import Qt, QThreadPool, Signal
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QSplitter, QVBoxLayout, QWidget
 
@@ -42,6 +42,8 @@ class MainWindow(QMainWindow):
     """
     Aura command deck main window orchestrating specialized UI widgets.
     """
+
+    restore_input_signal = Signal()
 
     def __init__(
         self,
@@ -153,6 +155,7 @@ class MainWindow(QMainWindow):
 
         self.chat_input.message_requested.connect(self._handle_message_requested)
         self.chat_display.anchor_requested.connect(self._event_controller.handle_anchor_clicked)
+        self.restore_input_signal.connect(self._restore_chat_input)
         # Resize splitter when sidebar collapses/expands
         try:
             self.conversation_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
@@ -238,7 +241,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             logger.error("Failed to process message with supervisor: %s", exc, exc_info=True)
             # Since this is in a background thread, we need to explicitly restore the UI
-            self._restore_chat_input()
+            self.restore_input_signal.emit()
 
     def closeEvent(self, event) -> None:  # noqa: D401 - QWidget signature
         QApplication.quit()
