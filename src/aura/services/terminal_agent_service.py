@@ -83,6 +83,13 @@ class TerminalAgentService:
         command = self._build_command(spec, command_override)
 
         session_env = os.environ.copy()
+        if sys.platform.startswith("win"):
+            # On Windows, prepend the virtual environment's Scripts path to PATH
+            # so the spawned PowerShell process can find our executables (claude-code, codex, etc.)
+            venv_scripts_path = str(Path(sys.executable).parent)
+            original_path = session_env.get("PATH", "")
+            session_env["PATH"] = f"{venv_scripts_path}{os.pathsep}{original_path}"
+            logger.info("Prepended venv Scripts path to agent's PATH: %s", venv_scripts_path)
         session_env.update(env or {})
         session_env["AURA_AGENT_SPEC_PATH"] = str(spec_path)
         session_env["AURA_AGENT_TASK_ID"] = spec.task_id
