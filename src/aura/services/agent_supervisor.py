@@ -93,11 +93,58 @@ class AgentSupervisor:
         self._start_monitor_thread(session, project_path)
 
     def _generate_task_description(self, user_message: str) -> str:
-        prompt = (
-            "Convert the following user request into a concise, actionable task description "
-            "for a coding agent.\n\n"
-            f"User request:\n{user_message.strip()}"
-        )
+        """
+        Generate detailed task description from user message via LLM.
+        
+        Args:
+            user_message: Raw user input
+            
+        Returns:
+            Detailed task specification with concrete file names and paths
+        """
+        prompt = f"""User request: {user_message}
+
+Generate a detailed technical specification for a coding agent to implement this request.
+
+CRITICAL REQUIREMENTS:
+1. Include SPECIFIC file names, not vague descriptions
+2. Include EXACT file paths relative to project root
+3. Specify directory structure if new directories are needed
+4. Provide file-by-file breakdown of what to create/modify
+
+Format your response as:
+
+## Task Summary
+[One sentence describing what will be built]
+
+## Files to Create/Modify
+- path/to/specific_file.py: [One line describing purpose]
+- path/to/another_file.py: [One line describing purpose]
+
+## Implementation Steps
+1. Create [specific_file.py] containing [concrete description]
+2. Add [specific function/class] to [specific_file.py]
+3. Test by running [specific command]
+
+EXAMPLES:
+
+BAD (too vague):
+"Write a Python script that prints a greeting"
+
+GOOD (concrete):
+"Create hello_world.py in the project root containing a print() statement that outputs 'Hello, World!'"
+
+BAD (no file name):
+"Build a Flask API with routes"
+
+GOOD (specific files):
+"Create app.py in project root with Flask initialization
+Create routes.py containing /hello endpoint that returns JSON
+Create models.py with User dataclass"
+
+Always provide explicit file names. Never say "a file" or "a script" without naming it.
+"""
+        
         try:
             response = self.llm.run_for_agent(self._LLM_AGENT_NAME, prompt).strip()
             return response or user_message
