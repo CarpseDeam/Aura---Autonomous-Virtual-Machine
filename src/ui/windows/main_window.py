@@ -11,6 +11,7 @@ from src.aura.app.event_bus import EventBus
 from src.aura.config import ASSETS_DIR
 from src.aura.models.event_types import (
     AGENT_OUTPUT,
+    TERMINAL_EXECUTE_COMMAND,
     TERMINAL_SESSION_COMPLETED,
     TERMINAL_SESSION_FAILED,
 )
@@ -34,6 +35,7 @@ from src.ui.windows.settings_window import SettingsWindow
 from src.ui.widgets.chat_display_widget import ChatDisplayWidget
 from src.ui.widgets.chat_input_widget import ChatInputWidget
 from src.ui.widgets.terminal_monitor_widget import TerminalMonitorWidget
+from src.ui.widgets.terminal_widget import TerminalWidget
 from src.ui.widgets.thinking_indicator_widget import ThinkingIndicatorWidget
 from src.ui.widgets.toolbar_widget import ToolbarWidget
 from src.ui.qt_worker import Worker
@@ -85,6 +87,7 @@ class MainWindow(QMainWindow):
         self.toolbar = ToolbarWidget(auto_accept_enabled=self._auto_accept_enabled, parent=self)
         self.conversation_sidebar = ConversationSidebarWidget(parent=self)
         self.chat_display = ChatDisplayWidget(image_storage=image_storage, parent=self)
+        self.terminal_widget = TerminalWidget(parent=self)
         self.chat_input = ChatInputWidget(image_storage=image_storage, parent=self)
         self.thinking_indicator = ThinkingIndicatorWidget(parent=self)
         self.project_actions = ProjectActions(self.event_bus, self.chat_display, self)
@@ -138,13 +141,23 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.toolbar)
         layout.addWidget(banner_label)
 
+        self.panel_splitter = QSplitter(Qt.Vertical)
+        self.panel_splitter.addWidget(self.chat_display)
+        self.panel_splitter.addWidget(self.terminal_widget)
+        self.panel_splitter.setChildrenCollapsible(False)
+        self.panel_splitter.setCollapsible(0, False)
+        self.panel_splitter.setCollapsible(1, False)
+        self.panel_splitter.setStretchFactor(0, 3)
+        self.panel_splitter.setStretchFactor(1, 1)
+        self.terminal_widget.setMinimumHeight(160)
+
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.conversation_sidebar)
-        self.splitter.addWidget(self.chat_display)
+        self.splitter.addWidget(self.panel_splitter)
         self.splitter.setChildrenCollapsible(True)
         self.splitter.setCollapsible(0, True)
         self.splitter.setStretchFactor(0, 0)  # Sidebar has fixed width
-        self.splitter.setStretchFactor(1, 1)  # Chat display takes remaining space
+        self.splitter.setStretchFactor(1, 1)  # Main panel takes remaining space
         layout.addWidget(self.splitter, 1)
 
         layout.addWidget(self.thinking_indicator)
@@ -171,6 +184,7 @@ class MainWindow(QMainWindow):
         self.event_bus.subscribe(AGENT_OUTPUT, self._handle_agent_output)
         self.event_bus.subscribe(TERMINAL_SESSION_COMPLETED, self._handle_session_completed)
         self.event_bus.subscribe(TERMINAL_SESSION_FAILED, self._handle_session_failed)
+        self.event_bus.subscribe(TERMINAL_EXECUTE_COMMAND, self._handle_terminal_command)
 
     def _start_new_session(self) -> None:
         self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
@@ -184,6 +198,18 @@ class MainWindow(QMainWindow):
         if self.thinking_indicator.is_animating:
             self.thinking_indicator.stop_thinking()
         self.chat_display.display_system_message("AGENT", text)
+
+    def _handle_terminal_command(self, event: Event) -> None:
+        payload = event.payload or {}
+        command = (payload.get("command") or "").strip()
+        if not command:
+            return
+        try:
+            self.terminal_widget.clear_captured_output()
+        except Exception:
+            pass
+        self.terminal_widget.send_command(command)
+        self.terminal_widget.focus_terminal()
 
     def _handle_session_completed(self, event: Event) -> None:
         payload = event.payload or {}

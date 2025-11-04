@@ -164,6 +164,16 @@ Payload:
     timestamp (str): ISO timestamp when line was captured
 """
 
+TERMINAL_EXECUTE_COMMAND = "TERMINAL_EXECUTE_COMMAND"
+"""
+Dispatched to instruct the embedded terminal to execute a command string.
+
+Payload:
+    task_id (str): Unique identifier for the task issuing the command
+    command (str): Command string to send to the embedded terminal
+    project_root (str, optional): Project directory associated with the command
+"""
+
 AGENT_OUTPUT = "AGENT_OUTPUT"
 """
 Dispatched when processed agent output is ready for display.

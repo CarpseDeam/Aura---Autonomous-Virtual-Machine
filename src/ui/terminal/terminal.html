@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <style>
+        :root {
+            color-scheme: dark;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1e1e1e;
+            font-family: JetBrains Mono, Consolas, monospace;
+        }
+        #terminal {
+            height: 100vh;
+            width: 100vw;
+        }
+        #status {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            padding: 2px 6px;
+            font-size: 11px;
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.45);
+            color: #b0b0b0;
+            z-index: 10;
+            transition: opacity 0.3s ease;
+        }
+        #status.hidden {
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+    <div id="status">connecting...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <script>
+        (function () {
+            const params = new URLSearchParams(window.location.search);
+            const host = params.get('host') || '127.0.0.1';
+            const port = params.get('port') || '8765';
+            const secure = params.get('secure') === '1';
+            const wsUrl = `${secure ? 'wss' : 'ws'}://${host}:${port}`;
+            const statusEl = document.getElementById('status');
+
+            const terminalOptions = {
+                cursorBlink: true,
+                cursorStyle: 'block',
+                convertEol: true,
+                fontSize: 14,
+                fontFamily: 'JetBrains Mono, Consolas, monospace',
+                theme: {
+                    background: '#1e1e1e',
+                    foreground: '#d4d4d4',
+                    cursor: '#d4d4d4',
+                },
+            };
+
+            const term = new window.Terminal(terminalOptions);
+            const fitAddon = new window.FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(document.getElementById('terminal'));
+            fitAddon.fit();
+
+            let reconnectDelay = 1000;
+            let socket = null;
+            const capturedOutput = [];
+
+            function setStatus(text, hideAfterMs) {
+                statusEl.textContent = text;
+                statusEl.classList.remove('hidden');
+                if (hideAfterMs) {
+                    setTimeout(() => statusEl.classList.add('hidden'), hideAfterMs);
+                }
+            }
+
+            function sendMessage(message) {
+                if (!socket || socket.readyState !== WebSocket.OPEN) {
+                    return false;
+                }
+                socket.send(JSON.stringify(message));
+                return true;
+            }
+
+            function sendInput(data) {
+                if (!data) {
+                    return;
+                }
+                sendMessage({ type: 'input', data });
+            }
+
+            function resizeTerminal() {
+                fitAddon.fit();
+                sendMessage({ type: 'resize', cols: term.cols, rows: term.rows });
+            }
+
+            function connect() {
+                setStatus(`connecting to ${wsUrl}...`);
+                socket = new WebSocket(wsUrl);
+
+                socket.addEventListener('open', () => {
+                    setStatus('connected', 800);
+                    reconnectDelay = 1000;
+                    resizeTerminal();
+                });
+
+                socket.addEventListener('message', (event) => {
+                    const data = event.data;
+                    if (typeof data === 'string') {
+                        capturedOutput.push(data);
+                        term.write(data);
+                    } else if (data instanceof ArrayBuffer) {
+                        const text = new TextDecoder().decode(new Uint8Array(data));
+                        capturedOutput.push(text);
+                        term.write(text);
+                    }
+                });
+
+                socket.addEventListener('close', () => {
+                    setStatus('disconnected - retrying...');
+                    socket = null;
+                    setTimeout(connect, reconnectDelay);
+                    reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+                });
+
+                socket.addEventListener('error', (err) => {
+                    console.error('WebSocket error', err);
+                    socket?.close();
+                });
+            }
+
+            term.onData((data) => {
+                sendInput(data);
+            });
+
+            term.onResize(({ cols, rows }) => {
+                sendMessage({ type: 'resize', cols, rows });
+            });
+
+            window.addEventListener('resize', () => resizeTerminal());
+
+            window.AuraTerminal = {
+                sendInput,
+                sendCommand(command) {
+                    if (!command) {
+                        return;
+                    }
+                    const payload = command.endsWith('\r') || command.endsWith('\n')
+                        ? command
+                        : `${command}\r`;
+                    sendInput(payload);
+                },
+                focus() {
+                    term.focus();
+                },
+                getCapturedOutput() {
+                    return capturedOutput.join('');
+                },
+                clearCapturedOutput() {
+                    capturedOutput.length = 0;
+                },
+                clearTerminal() {
+                    term.clear();
+                },
+                getDimensions() {
+                    return { cols: term.cols, rows: term.rows };
+                },
+            };
+
+            connect();
+        }());
+    </script>
+</body>
+</html>
