@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -247,35 +248,78 @@ class TerminalAgentService:
 
         try:
             if sys.platform.startswith("win"):
-                output_file = self.spec_dir / f"{session.task_id}.output.log"
-                logger.info("Monitoring Windows process with buffered output: %s", output_file)
+                task_id = session.task_id
+                done_file = self.spec_dir / f"{task_id}.done"
+                summary_file = self.spec_dir / f"{task_id}.summary.json"
 
-                while session.is_alive():
-                    time.sleep(0.1)
+                logger.info("Monitoring completion files for task %s", task_id)
 
-                logger.info(
-                    "Windows process completed for task %s; reading buffered output from %s",
-                    session.task_id,
-                    output_file,
-                )
+                poll_start = time.monotonic()
+                completion_timeout_seconds = 300
 
-                if not output_file.exists():
-                    logger.warning("Output file missing for task %s: %s", session.task_id, output_file)
+                while session.is_alive() or not done_file.exists():
+                    time.sleep(0.5)
+                    if not session.is_alive() and done_file.exists():
+                        break
+
+                    if not session.is_alive() and not done_file.exists():
+                        elapsed = time.monotonic() - poll_start
+                        if elapsed >= completion_timeout_seconds:
+                            logger.warning(
+                                "Timed out waiting for completion file for task %s after %.1f seconds",
+                                task_id,
+                                elapsed,
+                            )
+                            break
+
+                if done_file.exists():
+                    logger.info("Task %s completed, reading summary", task_id)
                 else:
+                    logger.warning("Task %s completed without a completion marker", task_id)
+
+                if summary_file.exists():
                     try:
-                        with output_file.open("r", encoding="utf-8", errors="replace") as f:
-                            buffered_lines = f.readlines()
-                        for raw_line in buffered_lines:
-                            line = raw_line.rstrip("\r\n")
-                            if line.strip():
-                                handle_line(line)
+                        with summary_file.open("r", encoding="utf-8") as f:
+                            summary_data = json.load(f)
                     except Exception as exc:
-                        logger.error(
-                            "Failed to read output file for task %s: %s",
-                            session.task_id,
-                            exc,
-                            exc_info=True,
-                        )
+                        logger.error("Failed to parse summary for task %s: %s", task_id, exc, exc_info=True)
+                        handle_line("Task completed (summary parse failed)")
+                    else:
+                        status = summary_data.get("status", "unknown")
+
+                        def as_iterable(value: Optional[object]) -> List[str]:
+                            if value is None:
+                                return []
+                            if isinstance(value, str):
+                                return [value]
+                            if isinstance(value, (list, tuple, set)):
+                                return [str(item) for item in value]
+                            logger.debug(
+                                "Unexpected summary value type for task %s: %s",
+                                task_id,
+                                type(value).__name__,
+                            )
+                            return [str(value)]
+
+                        for file_path in as_iterable(summary_data.get("files_created")):
+                            handle_line(f"Created: {file_path}")
+                        for file_path in as_iterable(summary_data.get("files_modified")):
+                            handle_line(f"Modified: {file_path}")
+                        for file_path in as_iterable(summary_data.get("files_deleted")):
+                            handle_line(f"Deleted: {file_path}")
+                        for warning_msg in as_iterable(summary_data.get("warnings")):
+                            handle_line(f"Warning: {warning_msg}")
+                        for error_msg in as_iterable(summary_data.get("errors")):
+                            handle_line(f"Error: {error_msg}")
+                        for suggestion in as_iterable(summary_data.get("suggestions")):
+                            handle_line(f"Suggestion: {suggestion}")
+
+                        handle_line(f"Task completed with status: {status}")
+                else:
+                    if done_file.exists():
+                        handle_line("Task completed (no summary available)")
+                    else:
+                        handle_line("Task completed (completion marker missing)")
             else:
                 from src.aura.services.output_monitor import PipeStreamMonitor
                 monitor = PipeStreamMonitor(child)
@@ -398,8 +442,6 @@ class TerminalAgentService:
             if not claude_tokens:
                 raise ValueError("Resolved Claude command is empty on Windows")
 
-            output_file = self.spec_dir / f"{spec.task_id}.output.log"
-
             invocation_parts = [f"& {self._powershell_quote(str(claude_tokens[0]))}"]
             invocation_parts.extend(self._powershell_quote(str(arg)) for arg in claude_tokens[1:])
             invocation = " ".join(invocation_parts)
@@ -407,17 +449,12 @@ class TerminalAgentService:
             command_str = (
                 f"$ErrorActionPreference = 'Stop'; "
                 f"$promptPath = {self._powershell_quote(str(prompt_path))}; "
-                f"$outputPath = {self._powershell_quote(str(output_file))}; "
                 "$prompt = Get-Content -LiteralPath $promptPath -Raw; "
-                f"{invocation} -p $prompt > $outputPath 2>&1"
+                f"{invocation} -p $prompt"
             )
 
             command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command_str]
-            logger.info(
-                "Built Windows command for task %s with output redirect to: %s",
-                spec.task_id,
-                output_file,
-            )
+            logger.info("Built Windows command for task %s using completion files", spec.task_id)
             return command
 
         tokens = self._resolve_claude_command()
