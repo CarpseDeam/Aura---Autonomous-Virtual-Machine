@@ -4,11 +4,13 @@ Tests the full pipeline from agent spawn to GUI display.
 """
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from typing import List, Any
 
 import pytest
+from PySide6.QtCore import QCoreApplication
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.agent_task import AgentSpecification
@@ -43,7 +45,8 @@ class EventCollector:
         while len(self.get_agent_output_events()) < count:
             if time.time() - start > timeout:
                 return False
-            time.sleep(0.1)
+            QCoreApplication.processEvents()
+            time.sleep(0.01)
         return True
 
     def get_events_for_task(self, task_id: str) -> List[Any]:
@@ -54,8 +57,17 @@ class EventCollector:
         ]
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """Provide a QCoreApplication instance for Qt event processing."""
+    app = QCoreApplication.instance()
+    if app is None:
+        app = QCoreApplication(sys.argv)
+    return app
+
+
 @pytest.fixture()
-def event_bus() -> EventBus:
+def event_bus(qapp) -> EventBus:
     """Provide a real event bus for integration testing."""
     return EventBus()
 
@@ -101,6 +113,7 @@ class TestEventBusIntegration:
         )
 
         event_bus.dispatch(event)
+        QCoreApplication.processEvents()
 
         # Verify collector received it
         assert len(event_collector.events) == 1
@@ -131,6 +144,7 @@ class TestEventBusIntegration:
         )
 
         event_bus.dispatch(event)
+        QCoreApplication.processEvents()
 
         # Both collectors should receive the event
         assert len(collector1.events) == 1
@@ -206,6 +220,7 @@ class TestEventCollectorUtilities:
                 }
             )
             event_bus.dispatch(event)
+            QCoreApplication.processEvents()
 
         # Verify filtering
         task1_events = event_collector.get_events_for_task("task-1")
