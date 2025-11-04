@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import subprocess
 import sys
 
 import pytest
@@ -65,6 +66,49 @@ def test_handle_agent_question_prevents_duplicates(service: TerminalAgentService
     service._handle_agent_question(session, "Should I use a function?")  # noqa: SLF001
 
     assert sent == ["Use a function."]
+
+
+def test_spawn_with_pty_windows_uses_headless_popen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
+    monkeypatch.setattr(
+        TerminalAgentService,
+        "_wrap_command_with_powershell",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Should not wrap command on Windows spawn")),
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_popen(cmd: Any, **kwargs: Any) -> Any:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+
+        class DummyProcess:
+            pid = 1234
+
+        return DummyProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
+
+    process = service._spawn_with_pty(["claude-code"], tmp_path, {"PATH": "value"})  # noqa: SLF001
+
+    assert process.pid == 1234
+    assert captured["cmd"] == ["claude-code"]
+
+    kwargs = captured["kwargs"]
+    assert kwargs["cwd"] == str(tmp_path)
+    assert kwargs["env"] == {"PATH": "value"}
+    assert kwargs["stdin"] is subprocess.PIPE
+    assert kwargs["stdout"] is subprocess.PIPE
+    assert kwargs["stderr"] is subprocess.STDOUT
+    assert kwargs["text"] is True
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "ignore"
+    assert kwargs["bufsize"] == 1
+    assert "creationflags" not in kwargs
+    assert "shell" not in kwargs
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific behavior")

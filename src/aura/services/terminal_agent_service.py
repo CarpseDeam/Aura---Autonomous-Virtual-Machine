@@ -139,13 +139,12 @@ class TerminalAgentService:
             raise ValueError("Command must not be empty")
 
         if sys.platform.startswith("win"):
-            # On Windows, spawn a headless PowerShell session and keep full pipe control.
-            spawn_command = self._wrap_command_with_powershell(command)
-            logger.info("Spawning headless Windows terminal with pipes: %s", spawn_command)
+            # On Windows, launch the agent command directly with pipe supervision.
+            logger.info("Spawning headless Windows terminal with pipes: %s", command)
 
             try:
                 process = subprocess.Popen(
-                    spawn_command,
+                    list(command),
                     cwd=str(project_root),
                     env=env,
                     stdin=subprocess.PIPE,
@@ -158,7 +157,7 @@ class TerminalAgentService:
                 )
                 return process  # Return the Popen object directly
             except Exception as exc:
-                raise RuntimeError(f"Failed to spawn headless terminal for command {spawn_command}: {exc}") from exc
+                raise RuntimeError(f"Failed to spawn headless terminal for command {command}: {exc}") from exc
 
         else:
             # On Unix-like systems, the existing pexpect PTY approach works perfectly.
