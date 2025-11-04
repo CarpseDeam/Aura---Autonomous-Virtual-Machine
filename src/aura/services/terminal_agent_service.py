@@ -204,6 +204,10 @@ class TerminalAgentService:
         return spawn_command, spawn_kwargs
 
     def _send_initial_prompt(self, session: TerminalSession, agents_md_path: Path) -> None:
+        """Send the initial AGENTS.md prompt to the agent."""
+        # Add a small delay to ensure the new process's stdin is ready.
+        time.sleep(0.5)
+
         try:
             prompt = agents_md_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -221,8 +225,6 @@ class TerminalAgentService:
             return
 
         logger.info("Sending AGENTS.md prompt to Claude Code for task %s", session.task_id)
-        # Allow the Claude Code TUI to finish bootstrapping before injecting the initial prompt.
-        time.sleep(0.5)
         with session.write_lock:
             if sys.platform.startswith("win"):
                 # On Windows, child is a Popen object
