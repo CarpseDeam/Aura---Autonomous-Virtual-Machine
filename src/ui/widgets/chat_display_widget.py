@@ -161,6 +161,77 @@ AURA_RESPONSE_CSS = """
         color: #64B5F6;
         text-align: right;
     }
+    .task-summary-card {
+        border: 1px solid #555;
+        border-radius: 8px;
+        padding: 16px;
+        margin: 16px 0;
+        background: #2E2E2E;
+        font-family: 'JetBrains Mono', monospace;
+        color: #E0E0E0;
+    }
+    .summary-header {
+        font-size: 16px;
+        font-weight: bold;
+        margin-bottom: 12px;
+    }
+    .summary-status {
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+    .summary-status-completed { background-color: #2E7D32; color: #fff; }
+    .summary-status-failed { background-color: #C62828; color: #fff; }
+    .summary-status-partial { background-color: #FF8F00; color: #fff; }
+    .summary-status-unknown { background-color: #4A4A4A; color: #fff; }
+    .summary-section {
+        margin-top: 12px;
+    }
+    .summary-section h4 {
+        font-size: 14px;
+        color: #FFD27F;
+        margin-bottom: 6px;
+    }
+    .summary-file-list {
+        list-style: none;
+        padding-left: 10px;
+    }
+    .summary-file-list li {
+        margin: 4px 0;
+        font-size: 13px;
+    }
+    .summary-suggestions {
+        list-style: disc;
+        padding-left: 25px;
+    }
+    .summary-note {
+        font-style: italic;
+        color: #BDBDBD;
+        font-size: 12px;
+        margin-top: 10px;
+    }
+    .confirmation-message {
+        border: 1px solid #64B5F6;
+        border-radius: 8px;
+        padding: 16px;
+        margin: 16px 0;
+        background: #2a170a;
+        text-align: center;
+    }
+    .confirmation-text {
+        font-size: 14px;
+        color: #FFD27F;
+        margin-bottom: 16px;
+    }
+    .confirmation-actions a {
+        display: inline-block;
+        padding: 8px 16px;
+        border-radius: 4px;
+        text-decoration: none;
+        font-weight: bold;
+        background-color: #2E7D32;
+        color: #ffffff;
+    }
 </style>
 """
 
@@ -185,6 +256,77 @@ class ChatDisplayWidget(QTextBrowser):
         self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.setReadOnly(True)
         self.anchorClicked.connect(self.anchor_requested.emit)
+
+    def display_task_plan(self, task_description: str) -> None:
+        """Displays the task plan in the chat UI."""
+        self._ensure_styles()
+        plan_html = f'''
+        <div class="confirmation-message" style="background: #2a1b0a; border-color: #FFB74D; text-align: left;">
+            <div class="confirmation-text" style="color: #FFD27F;"><b>Aura's Plan:</b><br>{escape(task_description)}</div>
+        </div><br>
+        '''
+        self.moveCursor(QTextCursor.End)
+        self.insertHtml(plan_html)
+        self.ensureCursorVisible()
+
+    def display_task_summary(self, summary: dict) -> None:
+        """Render a rich HTML card for the task summary."""
+        self._ensure_styles()
+
+        status = summary.get("status", "unknown").lower()
+        status_map = {
+            "completed": ("Completed", "summary-status-completed"),
+            "failed": ("Failed", "summary-status-failed"),
+            "partial": ("Partial Success", "summary-status-partial"),
+            "unknown": ("Unknown", "summary-status-unknown"),
+        }
+        status_text, status_class = status_map.get(status, status_map["unknown"])
+
+        files_created = summary.get("files_created", [])
+        files_modified = summary.get("files_modified", [])
+        files_deleted = summary.get("files_deleted", [])
+        suggestions = summary.get("suggestions", [])
+        note = summary.get("note")
+
+        def create_file_list(files: List[str]) -> str:
+            if not files:
+                return "<li><i>None</i></li>"
+            return "".join(f"<li>{escape(f)}</li>" for f in files)
+
+        summary_html = f"""
+        <div class="task-summary-card">
+            <div class="summary-header">
+                Task Summary: <span class="summary-status {status_class}">{status_text}</span>
+            </div>
+
+            <div class="summary-section">
+                <h4>File Changes</h4>
+                <ul class="summary-file-list">
+                    <li><strong>Created:</strong> {len(files_created)}</li>
+                    <li><strong>Modified:</strong> {len(files_modified)}</li>
+                    <li><strong>Deleted:</strong> {len(files_deleted)}</li>
+                </ul>
+            </div>
+        """
+
+        if suggestions:
+            summary_html += """
+            <div class="summary-section">
+                <h4>Suggestions</h4>
+                <ul class="summary-suggestions">
+            """
+            for suggestion in suggestions:
+                summary_html += f"<li>{escape(suggestion)}</li>"
+            summary_html += "</ul></div>"
+
+        if note:
+            summary_html += f'<div class="summary-note">{escape(note)}</div>'
+
+        summary_html += "</div><br>"
+
+        self.moveCursor(QTextCursor.End)
+        self.insertHtml(summary_html)
+        self.ensureCursorVisible()
 
     def display_boot_sequence(self, boot_sequence: Sequence[Dict[str, Any]]) -> None:
         """

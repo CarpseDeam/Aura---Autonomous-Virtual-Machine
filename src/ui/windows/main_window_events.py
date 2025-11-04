@@ -66,6 +66,7 @@ class MainWindowEventController:
         self.event_bus.subscribe("MODEL_STREAM_ENDED", self._emit_stream_end)
         self.event_bus.subscribe("MODEL_ERROR", self._emit_model_error)
 
+        self.event_bus.subscribe("TASK_PLAN_GENERATED", self._handle_task_plan_generated)
         self.event_bus.subscribe("DISPATCH_TASK", self._handle_task_dispatch)
         self.event_bus.subscribe("GENERATION_PROGRESS", self._handle_generation_progress)
         self.event_bus.subscribe("WORKFLOW_STATUS_UPDATE", self._handle_workflow_status_update)
@@ -104,6 +105,7 @@ class MainWindowEventController:
 
         action = url.host() or url.path().lstrip("/")
         query = QUrlQuery(url)
+
         change_id = query.queryItemValue("change_id")
         if not change_id:
             return
@@ -121,6 +123,13 @@ class MainWindowEventController:
             self.pending_change_states[change_id] = "rejecting"
             self.chat_display.display_system_message("SYSTEM", f"Rejecting change {self._short_change_id(change_id)}...")
             self.event_bus.dispatch(Event(event_type="REJECT_FILE_CHANGES", payload={"change_id": change_id}))
+
+    def _handle_task_plan_generated(self, event: Event) -> None:
+        payload = event.payload or {}
+        task_description = payload.get("task_description")
+        if task_description:
+            self.thinking_indicator.stop_thinking()
+            self.chat_display.display_task_plan(task_description)
 
     def _emit_model_chunk(self, event: Event) -> None:
         chunk = (event.payload or {}).get("chunk", "")

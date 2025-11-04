@@ -149,6 +149,9 @@ Payload:
     aborted_by (str): User or system identifier
 """
 
+TASK_PLAN_GENERATED = "TASK_PLAN_GENERATED"
+
+
 # Terminal I/O streaming events
 TERMINAL_OUTPUT_RECEIVED = "TERMINAL_OUTPUT_RECEIVED"
 """

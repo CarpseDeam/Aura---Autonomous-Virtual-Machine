@@ -121,6 +121,11 @@ class TerminalAgentService:
 
     # ------------------------------------------------------------------ PTY orchestration
 
+    def _get_platform_spawn_prefix(self) -> List[str]:
+        if sys.platform == "win32":
+            return ["cmd.exe", "/c", "start", "/wait"]
+        return []
+
     def _spawn_with_pty(
         self,
         command: Sequence[str],
@@ -130,17 +135,20 @@ class TerminalAgentService:
         if not command:
             raise ValueError("PTY command must not be empty")
 
+        prefix = self._get_platform_spawn_prefix()
         spawn_command, spawn_kwargs = self._prepare_spawn_command(command)
 
-        executable, *args = spawn_command
-        if spawn_command != list(command):
+        final_command = prefix + spawn_command
+        executable, *args = final_command
+
+        if final_command != list(command):
             logger.info(
-                "Spawning PTY session via PowerShell wrapper (original=%s, effective=%s)",
+                "Spawning PTY session via wrapper (original=%s, effective=%s)",
                 command,
-                spawn_command,
+                final_command,
             )
         else:
-            logger.info("Spawning PTY session: %s", spawn_command)
+            logger.info("Spawning PTY session: %s", final_command)
 
         try:
             child = self._expect.spawn(
@@ -155,7 +163,7 @@ class TerminalAgentService:
             )
         except Exception as exc:  # pragma: no cover - expect library surfaces platform-specific exceptions
             raise RuntimeError(
-                f"Failed to spawn PTY for command {spawn_command} (original={command}): {exc}"
+                f"Failed to spawn PTY for command {final_command} (original={command}): {exc}"
             ) from exc
 
         child.delaybeforesend = 0.05

@@ -9,7 +9,11 @@ from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QSplitter, QVBo
 
 from src.aura.app.event_bus import EventBus
 from src.aura.config import ASSETS_DIR
-from src.aura.models.event_types import AGENT_OUTPUT, TERMINAL_SESSION_COMPLETED, TERMINAL_SESSION_FAILED
+from src.aura.models.event_types import (
+    AGENT_OUTPUT,
+    TERMINAL_SESSION_COMPLETED,
+    TERMINAL_SESSION_FAILED,
+)
 from src.aura.models.events import Event
 from src.aura.services.agent_supervisor import AgentSupervisor
 from src.aura.services.conversation_management_service import ConversationManagementService
@@ -183,10 +187,16 @@ class MainWindow(QMainWindow):
 
     def _handle_session_completed(self, event: Event) -> None:
         payload = event.payload or {}
-        reason = payload.get("completion_reason") or "completed"
         task_id = payload.get("task_id", "?")
+        summary_data = payload.get("summary_data")
+
         self._restore_chat_input()
-        self.chat_display.display_system_message("AGENT", f"Task {task_id} completed: {reason}")
+
+        if summary_data:
+            self.chat_display.display_task_summary(summary_data)
+        else:
+            reason = payload.get("completion_reason") or "completed"
+            self.chat_display.display_system_message("AGENT", f"Task {task_id} completed: {reason}")
 
     def _handle_session_failed(self, event: Event) -> None:
         payload = event.payload or {}

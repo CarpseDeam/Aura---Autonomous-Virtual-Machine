@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -7,9 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+import pydantic
+
 from src.aura.app.event_bus import EventBus
-from src.aura.models.agent_task import AgentSpecification, TerminalSession
+from src.aura.models.agent_task import AgentSpecification, TerminalSession, TaskSummary
 from src.aura.models.event_types import (
+    TASK_PLAN_GENERATED,
     TERMINAL_SESSION_COMPLETED,
     TERMINAL_SESSION_FAILED,
     TERMINAL_SESSION_STARTED,
@@ -39,7 +43,6 @@ class AgentSupervisor:
         self.terminal_service = terminal_service
         self.workspace = workspace_service
         self.event_bus = event_bus
-        self._lock = threading.Lock()
         self._sessions: dict[str, TerminalSession] = {}
 
     def process_message(self, user_message: str, project_name: str) -> None:
@@ -49,20 +52,34 @@ class AgentSupervisor:
         project = project_name.strip()
         if not project:
             raise ValueError("project_name must not be empty")
+
         task_id = uuid4().hex[:12]
         project_path = self._ensure_project_directory(project)
-        description = self._generate_task_description(message)
-        spec = self._build_specification(task_id, project, message, description)
-        self._create_agents_md(project_path, description, task_id)
+        task_description = self._generate_task_description(message)
+        spec = self._build_specification(task_id, project, message, task_description)
+
+        # Dispatch event to show the user the plan
+        self._dispatch_event(
+            TASK_PLAN_GENERATED,
+            {
+                "task_id": task_id,
+                "task_description": task_description,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
+
+        self._create_agents_md(project_path, spec.prompt, spec.task_id)
+
         try:
             session = self.terminal_service.spawn_agent(spec)
         except Exception as exc:
-            logger.error("Failed to spawn agent for task %s: %s", task_id, exc, exc_info=True)
+            logger.error("Failed to spawn agent for task %s: %s", spec.task_id, exc, exc_info=True)
             self._dispatch_event(
                 TERMINAL_SESSION_FAILED,
-                {"task_id": task_id, "failure_reason": "spawn_failed", "error_message": str(exc)},
+                {"task_id": spec.task_id, "failure_reason": "spawn_failed", "error_message": str(exc)},
             )
             raise
+
         self._sessions[session.task_id] = session
         payload = {
             "task_id": session.task_id,
@@ -142,7 +159,7 @@ class AgentSupervisor:
                 running = session.is_alive()
                 result = parser.analyze(text, running)
                 if result.is_complete or not running:
-                    self._finalize_session(session, result)
+                    self._finalize_session(session, result, project_path)
                     break
                 time.sleep(self._POLL_INTERVAL_SECONDS)
         except Exception as exc:
@@ -152,22 +169,57 @@ class AgentSupervisor:
                 {"task_id": task_id, "failure_reason": "monitor_error", "error_message": str(exc)},
             )
 
-    def _finalize_session(self, session: TerminalSession, result: OutputParserResult) -> None:
+    def _finalize_session(
+        self, session: TerminalSession, result: OutputParserResult, project_path: Path
+    ) -> None:
         exit_code = session.poll()
         if exit_code is None and result.is_complete:
             exit_code = session.wait(timeout=1.0)
+
+        summary_data = self._load_task_summary(session.task_id, project_path)
+
         payload = {
             "task_id": session.task_id,
             "completion_reason": result.completion_reason or "process-exit",
+            "summary_data": summary_data,
         }
         if exit_code is not None:
             payload["exit_code"] = exit_code
-        event_type = TERMINAL_SESSION_COMPLETED if exit_code in (0, None) else TERMINAL_SESSION_FAILED
+
+        event_type = (
+            TERMINAL_SESSION_COMPLETED if exit_code in (0, None) else TERMINAL_SESSION_FAILED
+        )
         self._dispatch_event(event_type, payload)
         self._sessions.pop(session.task_id, None)
+
+    def _load_task_summary(self, task_id: str, project_path: Path) -> dict:
+        summary_file = project_path / ".aura" / f"{task_id}.summary.json"
+        try:
+            if not summary_file.exists():
+                raise FileNotFoundError("Summary file not found.")
+            summary_content = summary_file.read_text(encoding="utf-8")
+            summary = TaskSummary.model_validate_json(summary_content)
+            return summary.model_dump(mode="json")
+        except (FileNotFoundError, json.JSONDecodeError, pydantic.ValidationError) as e:
+            logger.warning(
+                "Could not load or parse summary file for task %s: %s", task_id, e
+            )
+            return {
+                "status": "unknown",
+                "files_created": [],
+                "files_modified": [],
+                "files_deleted": [],
+                "suggestions": [],
+                "note": "Summary file could not be retrieved or was invalid.",
+            }
 
     def _dispatch_event(self, event_type: str, payload: dict[str, object]) -> None:
         try:
             self.event_bus.dispatch(Event(event_type=event_type, payload=payload))
         except Exception:
-            logger.error("Failed to dispatch %s for task %s", event_type, payload.get("task_id"), exc_info=True)
+            logger.error(
+                "Failed to dispatch %s for task %s",
+                event_type,
+                payload.get("task_id"),
+                exc_info=True,
+            )
