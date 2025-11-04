@@ -165,10 +165,15 @@ def test_terminal_agent_answers_questions_end_to_end(
     assert any("Confirm deployment? (y/n)" in prompt for prompt in prompts)
     assert any("Proceed with deploy?" in prompt for prompt in prompts)
 
+    # Verify initial prompt was sent via send()
+    initial_sends = [message for kind, message in sent_messages if kind == "send"]
+    assert len(initial_sends) == 1
+    assert "Refactor the database layer" in initial_sends[0]
+
+    # Verify LLM response was sent via sendline()
     responses = [message for kind, message in sent_messages if kind == "sendline"]
-    assert len(responses) == 2
-    assert "Refactor the database layer" in responses[0]
-    assert responses[1] == "Use async - it matches the FastAPI stack."
+    assert len(responses) == 1
+    assert responses[0] == "Use async - it matches the FastAPI stack."
 
     answered = session.answered_questions
     assert answered == {
@@ -176,6 +181,3 @@ def test_terminal_agent_answers_questions_end_to_end(
         "Confirm deployment? (y/n)",
         "Proceed with deploy?",
     }
-
-    initial_prompts = [message for kind, message in sent_messages if kind == "send"]
-    assert not initial_prompts

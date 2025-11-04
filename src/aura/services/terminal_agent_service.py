@@ -193,7 +193,7 @@ class TerminalAgentService:
 
         logger.info("Sending AGENTS.MD prompt to Claude Code for task %s", session.task_id)
         with session.write_lock:
-            child.sendline(prompt)
+            child.send(prompt)
 
     def _start_monitor_thread(self, session: TerminalSession, log_path: Path) -> None:
         thread = threading.Thread(
@@ -222,7 +222,7 @@ class TerminalAgentService:
         if sys.platform.startswith("win"):
             from src.aura.services.output_monitor import FileStreamMonitor
             output_file = self.spec_dir / f"{session.task_id}.output.log"
-            monitor = FileStreamMonitor(poll_interval=0.1)
+            monitor = FileStreamMonitor(poll_interval=0.1, child_process=child)
             logger.info("Using FileStreamMonitor for Windows (output_file=%s)", output_file)
             monitor_path = output_file
         else:
@@ -260,6 +260,7 @@ class TerminalAgentService:
         except Exception as exc:
             logger.error("Monitor crashed for task %s: %s", session.task_id, exc, exc_info=True)
         finally:
+            monitor.stop_monitoring()
             exit_code = getattr(child, "exitstatus", None)
             if exit_code is None:
                 exit_code = getattr(child, "status", None)
@@ -382,7 +383,7 @@ class TerminalAgentService:
                 f"$promptPath = {self._powershell_quote(str(prompt_path))}; "
                 f"$outputPath = {self._powershell_quote(str(output_file))}; "
                 "$prompt = Get-Content -LiteralPath $promptPath -Raw; "
-                f"$prompt | {invocation} -p $input > $outputPath 2>&1"
+                f"{invocation} -p $prompt > $outputPath 2>&1"
             )
 
             command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command_str]

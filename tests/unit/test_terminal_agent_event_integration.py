@@ -123,7 +123,7 @@ class TestMonitoringThreadEventDispatching:
         """Test that Windows monitoring thread dispatches AGENT_OUTPUT events."""
         monkeypatch.setattr(sys, 'platform', 'win32')
 
-        # Create mock pexpect child (both Windows and Unix now use the same interface)
+        # Create mock pexpect child
         class MockExpect:
             TIMEOUT = TimeoutError
             EOF = EOFError
@@ -133,13 +133,8 @@ class TestMonitoringThreadEventDispatching:
 
         mock_child = MagicMock()
         mock_child.pid = 12345
+        mock_child.exitstatus = None
         mock_child.isalive.side_effect = [True, True, True, False]
-        mock_child.readline.side_effect = [
-            "Line 1\n",
-            "Line 2\n",
-            "Line 3\n",
-            mock_expect.EOF()
-        ]
 
         # Create session
         session = TerminalSession(
@@ -150,10 +145,13 @@ class TestMonitoringThreadEventDispatching:
             child=mock_child
         )
 
+        # Create output file with content (Windows reads from file, not readline)
+        output_file = tmp_path / ".aura" / "test-task.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text("Line 1\nLine 2\nLine 3\n", encoding="utf-8")
+
         # Create log file
         log_path = tmp_path / ".aura" / "test-task.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         # Start monitoring in a thread
         import threading
@@ -163,6 +161,12 @@ class TestMonitoringThreadEventDispatching:
             daemon=True
         )
         thread.start()
+        time.sleep(0.5)  # Give monitoring thread time to read file
+
+        # Stop monitoring by marking child as not alive
+        mock_child.exitstatus = 0
+        time.sleep(0.2)
+
         thread.join(timeout=2.0)
 
         # Verify events were dispatched
@@ -263,14 +267,7 @@ class TestEventDispatchingErrorHandling:
         monkeypatch.setattr(service, "_expect", mock_expect)
 
         mock_child = MagicMock()
-        mock_child.isalive.side_effect = [True, True, True, True, False]
-        mock_child.readline.side_effect = [
-            "Line 1\n",
-            "Line 2\n",
-            "Line 3\n",
-            "Line 4\n",
-            mock_expect.EOF()
-        ]
+        mock_child.exitstatus = None
 
         session = TerminalSession(
             task_id="test-task",
@@ -279,9 +276,12 @@ class TestEventDispatchingErrorHandling:
             child=mock_child
         )
 
+        # Create output file with content (Windows reads from file)
+        output_file = tmp_path / ".aura" / "test-task.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text("Line 1\nLine 2\nLine 3\nLine 4\n", encoding="utf-8")
+
         log_path = tmp_path / ".aura" / "test-task.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         # Should not raise exception
         import threading
@@ -291,6 +291,10 @@ class TestEventDispatchingErrorHandling:
             daemon=True
         )
         thread.start()
+        time.sleep(0.5)  # Give time to process
+
+        # Stop monitoring
+        mock_child.exitstatus = 0
         thread.join(timeout=2.0)
 
         # Verify monitoring attempted multiple dispatches despite failures
@@ -318,13 +322,8 @@ class TestEventDispatchingPerformance:
         mock_expect = MockExpect()
         monkeypatch.setattr(service, "_expect", mock_expect)
 
-        # Generate 1000 lines of output
-        output_lines = [f"Output line {i}\n" for i in range(1000)]
-        output_lines.append(mock_expect.EOF())
-
         mock_child = MagicMock()
-        mock_child.isalive.return_value = True
-        mock_child.readline.side_effect = output_lines
+        mock_child.exitstatus = None
 
         session = TerminalSession(
             task_id="test-task",
@@ -333,9 +332,13 @@ class TestEventDispatchingPerformance:
             child=mock_child
         )
 
+        # Create output file with 1000 lines
+        output_file = tmp_path / ".aura" / "test-task.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_lines = "\n".join([f"Output line {i}" for i in range(1000)])
+        output_file.write_text(output_lines, encoding="utf-8")
+
         log_path = tmp_path / ".aura" / "test-task.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         start_time = time.time()
 
@@ -346,6 +349,10 @@ class TestEventDispatchingPerformance:
             daemon=True
         )
         thread.start()
+        time.sleep(1.0)  # Give time to process
+
+        # Stop monitoring
+        mock_child.exitstatus = 0
         thread.join(timeout=10.0)
 
         elapsed = time.time() - start_time
@@ -382,12 +389,8 @@ class TestEventDispatchingPerformance:
         mock_expect = MockExpect()
         monkeypatch.setattr(service, "_expect", mock_expect)
 
-        output_lines = [f"Line {i}\n" for i in range(100)]
-        output_lines.append(mock_expect.EOF())
-
         mock_child = MagicMock()
-        mock_child.isalive.return_value = True
-        mock_child.readline.side_effect = output_lines
+        mock_child.exitstatus = None
 
         session = TerminalSession(
             task_id="test-task",
@@ -396,9 +399,13 @@ class TestEventDispatchingPerformance:
             child=mock_child
         )
 
+        # Create output file with 100 lines
+        output_file = tmp_path / ".aura" / "test-task.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_lines = "\n".join([f"Line {i}" for i in range(100)])
+        output_file.write_text(output_lines, encoding="utf-8")
+
         log_path = tmp_path / ".aura" / "test-task.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         start_time = time.time()
 
@@ -409,6 +416,10 @@ class TestEventDispatchingPerformance:
             daemon=True
         )
         thread.start()
+        time.sleep(0.5)  # Give time to process
+
+        # Stop monitoring
+        mock_child.exitstatus = 0
         thread.join(timeout=5.0)
 
         elapsed = time.time() - start_time
@@ -441,8 +452,7 @@ class TestEventPayloadValidation:
         monkeypatch.setattr(service, "_expect", mock_expect)
 
         mock_child = MagicMock()
-        mock_child.isalive.side_effect = [True, False]
-        mock_child.readline.side_effect = ["Test output\n", mock_expect.EOF()]
+        mock_child.exitstatus = None
 
         session = TerminalSession(
             task_id="unique-task-id-123",
@@ -451,9 +461,12 @@ class TestEventPayloadValidation:
             child=mock_child
         )
 
+        # Create output file with content
+        output_file = tmp_path / ".aura" / "unique-task-id-123.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text("Test output\n", encoding="utf-8")
+
         log_path = tmp_path / ".aura" / "unique-task-id-123.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         import threading
         thread = threading.Thread(
@@ -462,6 +475,9 @@ class TestEventPayloadValidation:
             daemon=True
         )
         thread.start()
+        time.sleep(0.3)
+
+        mock_child.exitstatus = 0
         thread.join(timeout=2.0)
 
         events = mock_event_bus.get_events_by_type(AGENT_OUTPUT)
@@ -487,12 +503,7 @@ class TestEventPayloadValidation:
         monkeypatch.setattr(service, "_expect", mock_expect)
 
         mock_child = MagicMock()
-        mock_child.isalive.side_effect = [True, True, False]
-        mock_child.readline.side_effect = [
-            "Creating file main.py\n",
-            "Writing tests\n",
-            mock_expect.EOF()
-        ]
+        mock_child.exitstatus = None
 
         session = TerminalSession(
             task_id="test-task",
@@ -501,9 +512,12 @@ class TestEventPayloadValidation:
             child=mock_child
         )
 
+        # Create output file with content
+        output_file = tmp_path / ".aura" / "test-task.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text("Creating file main.py\nWriting tests\n", encoding="utf-8")
+
         log_path = tmp_path / ".aura" / "test-task.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         import threading
         thread = threading.Thread(
@@ -512,6 +526,9 @@ class TestEventPayloadValidation:
             daemon=True
         )
         thread.start()
+        time.sleep(0.3)
+
+        mock_child.exitstatus = 0
         thread.join(timeout=2.0)
 
         events = mock_event_bus.get_events_by_type(AGENT_OUTPUT)
@@ -542,8 +559,7 @@ class TestEventPayloadValidation:
         monkeypatch.setattr(service, "_expect", mock_expect)
 
         mock_child = MagicMock()
-        mock_child.isalive.side_effect = [True, False]
-        mock_child.readline.side_effect = ["Output\n", mock_expect.EOF()]
+        mock_child.exitstatus = None
 
         session = TerminalSession(
             task_id="test-task",
@@ -552,9 +568,12 @@ class TestEventPayloadValidation:
             child=mock_child
         )
 
+        # Create output file with content
+        output_file = tmp_path / ".aura" / "test-task.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text("Output\n", encoding="utf-8")
+
         log_path = tmp_path / ".aura" / "test-task.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         import threading
         thread = threading.Thread(
@@ -563,6 +582,9 @@ class TestEventPayloadValidation:
             daemon=True
         )
         thread.start()
+        time.sleep(0.3)
+
+        mock_child.exitstatus = 0
         thread.join(timeout=2.0)
 
         events = mock_event_bus.get_events_by_type(AGENT_OUTPUT)

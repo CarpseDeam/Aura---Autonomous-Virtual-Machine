@@ -263,15 +263,9 @@ class TestEndToEndOutputFlow:
 
         monkeypatch.setattr(sys, 'platform', 'win32')
 
-        # Create mock process with output
+        # Create mock process
         mock_process = MagicMock()
-        mock_process.poll.return_value = 0
-        mock_process.readline.side_effect = [
-            "Line 1\n",
-            "Line 2\n",
-            "Line 3\n",
-            ""
-        ]
+        mock_process.exitstatus = None
 
         session = TerminalSession(
             task_id="integration-test",
@@ -280,9 +274,12 @@ class TestEndToEndOutputFlow:
             child=mock_process
         )
 
+        # Create output file with content (Windows reads from file)
+        output_file = tmp_path / ".aura" / "integration-test.output.log"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text("Line 1\nLine 2\nLine 3\n", encoding="utf-8")
+
         log_path = tmp_path / ".aura" / "integration-test.output.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.touch()
 
         # Start monitoring
         thread = threading.Thread(
@@ -294,6 +291,9 @@ class TestEndToEndOutputFlow:
 
         # Wait for events
         event_collector.wait_for_events(3, timeout=2.0)
+
+        # Stop monitoring
+        mock_process.exitstatus = 0
         thread.join(timeout=1.0)
 
         # Verify events were received by subscriber
@@ -323,20 +323,10 @@ class TestEndToEndOutputFlow:
 
         # Create two mock processes
         mock_process1 = MagicMock()
-        mock_process1.poll.return_value = 0
-        mock_process1.readline.side_effect = [
-            "Session 1 Line 1\n",
-            "Session 1 Line 2\n",
-            ""
-        ]
+        mock_process1.exitstatus = None
 
         mock_process2 = MagicMock()
-        mock_process2.poll.return_value = 0
-        mock_process2.readline.side_effect = [
-            "Session 2 Line 1\n",
-            "Session 2 Line 2\n",
-            ""
-        ]
+        mock_process2.exitstatus = None
 
         session1 = TerminalSession(
             task_id="task-1",
@@ -352,12 +342,13 @@ class TestEndToEndOutputFlow:
             child=mock_process2
         )
 
+        # Create output files with content (Windows reads from files)
         log1 = tmp_path / ".aura" / "task-1.output.log"
         log1.parent.mkdir(parents=True, exist_ok=True)
-        log1.touch()
+        log1.write_text("Session 1 Line 1\nSession 1 Line 2\n", encoding="utf-8")
 
         log2 = tmp_path / ".aura" / "task-2.output.log"
-        log2.touch()
+        log2.write_text("Session 2 Line 1\nSession 2 Line 2\n", encoding="utf-8")
 
         # Start both monitoring threads
         thread1 = threading.Thread(
@@ -376,6 +367,10 @@ class TestEndToEndOutputFlow:
 
         # Wait for events
         event_collector.wait_for_events(4, timeout=2.0)
+
+        # Stop monitoring
+        mock_process1.exitstatus = 0
+        mock_process2.exitstatus = 0
 
         thread1.join(timeout=1.0)
         thread2.join(timeout=1.0)

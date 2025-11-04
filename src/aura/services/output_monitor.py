@@ -36,16 +36,20 @@ class OutputMonitor(ABC):
 class FileStreamMonitor(OutputMonitor):
     """Monitors a log file for new content (file tailing)."""
 
-    def __init__(self, poll_interval: float = 0.1) -> None:
-        """Initialize file monitor with polling interval in seconds."""
+    def __init__(self, poll_interval: float = 0.1, child_process: Optional[Any] = None) -> None:
+        """Initialize file monitor with polling interval in seconds and optional child process."""
         self.poll_interval = poll_interval
+        self.child_process = child_process
         self._monitoring = False
         self._last_position = 0
+        self._idle_cycles = 0
+        self._max_idle_cycles = 30
 
     def start_monitoring(self, output_path: Path, on_line: Callable[[str], None]) -> None:
         """Start tailing the output file and invoke callback for each line."""
         self._monitoring = True
         self._last_position = 0
+        self._idle_cycles = 0
 
         logger.info("Starting file monitoring: %s", output_path)
 
@@ -61,6 +65,11 @@ class FileStreamMonitor(OutputMonitor):
         try:
             with output_path.open("r", encoding="utf-8", errors="replace") as f:
                 while self._monitoring:
+                    if self.child_process and hasattr(self.child_process, 'exitstatus'):
+                        if self.child_process.exitstatus is not None:
+                            logger.info("Child process exited, stopping file monitoring")
+                            break
+
                     current_size = output_path.stat().st_size
 
                     if current_size > self._last_position:
@@ -72,6 +81,12 @@ class FileStreamMonitor(OutputMonitor):
                                 on_line(line)
 
                         self._last_position = f.tell()
+                        self._idle_cycles = 0
+                    else:
+                        self._idle_cycles += 1
+                        if self._idle_cycles >= self._max_idle_cycles:
+                            logger.info("File monitoring idle timeout reached")
+                            break
 
                     time.sleep(self.poll_interval)
 
