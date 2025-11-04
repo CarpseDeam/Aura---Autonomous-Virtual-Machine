@@ -123,15 +123,22 @@ class TestMonitoringThreadEventDispatching:
         """Test that Windows monitoring thread dispatches AGENT_OUTPUT events."""
         monkeypatch.setattr(sys, 'platform', 'win32')
 
-        # Create mock process with output
-        mock_process = MagicMock()
-        mock_process.pid = 12345
-        mock_process.poll.return_value = None  # Process running
-        mock_process.stdout.readline.side_effect = [
+        # Create mock pexpect child (both Windows and Unix now use the same interface)
+        class MockExpect:
+            TIMEOUT = TimeoutError
+            EOF = EOFError
+
+        mock_expect = MockExpect()
+        monkeypatch.setattr(service, "_expect", mock_expect)
+
+        mock_child = MagicMock()
+        mock_child.pid = 12345
+        mock_child.isalive.side_effect = [True, True, True, False]
+        mock_child.readline.side_effect = [
             "Line 1\n",
             "Line 2\n",
             "Line 3\n",
-            ""  # EOF
+            mock_expect.EOF()
         ]
 
         # Create session
@@ -140,7 +147,7 @@ class TestMonitoringThreadEventDispatching:
             command=["claude"],
             spec_path=str(tmp_path / "spec.md"),
             process_id=12345,
-            child=mock_process
+            child=mock_child
         )
 
         # Create log file
@@ -247,22 +254,29 @@ class TestEventDispatchingErrorHandling:
         failing_bus = FailingEventBus()
         service.event_bus = failing_bus
 
-        # Create mock process
-        mock_process = MagicMock()
-        mock_process.poll.return_value = 0  # Exited
-        mock_process.stdout.readline.side_effect = [
+        # Create mock pexpect child
+        class MockExpect:
+            TIMEOUT = TimeoutError
+            EOF = EOFError
+
+        mock_expect = MockExpect()
+        monkeypatch.setattr(service, "_expect", mock_expect)
+
+        mock_child = MagicMock()
+        mock_child.isalive.side_effect = [True, True, True, True, False]
+        mock_child.readline.side_effect = [
             "Line 1\n",
             "Line 2\n",
             "Line 3\n",
             "Line 4\n",
-            ""
+            mock_expect.EOF()
         ]
 
         session = TerminalSession(
             task_id="test-task",
             command=["claude"],
             spec_path=str(tmp_path / "spec.md"),
-            child=mock_process
+            child=mock_child
         )
 
         log_path = tmp_path / ".aura" / "test-task.output.log"
@@ -296,19 +310,27 @@ class TestEventDispatchingPerformance:
         """Verify monitoring can handle high-volume output without lag."""
         monkeypatch.setattr(sys, 'platform', 'win32')
 
+        # Create mock pexpect child
+        class MockExpect:
+            TIMEOUT = TimeoutError
+            EOF = EOFError
+
+        mock_expect = MockExpect()
+        monkeypatch.setattr(service, "_expect", mock_expect)
+
         # Generate 1000 lines of output
         output_lines = [f"Output line {i}\n" for i in range(1000)]
-        output_lines.append("")  # EOF
+        output_lines.append(mock_expect.EOF())
 
-        mock_process = MagicMock()
-        mock_process.poll.return_value = 0
-        mock_process.stdout.readline.side_effect = output_lines
+        mock_child = MagicMock()
+        mock_child.isalive.return_value = True
+        mock_child.readline.side_effect = output_lines
 
         session = TerminalSession(
             task_id="test-task",
             command=["claude"],
             spec_path=str(tmp_path / "spec.md"),
-            child=mock_process
+            child=mock_child
         )
 
         log_path = tmp_path / ".aura" / "test-task.output.log"
@@ -352,18 +374,26 @@ class TestEventDispatchingPerformance:
         slow_bus = SlowEventBus()
         service.event_bus = slow_bus
 
-        output_lines = [f"Line {i}\n" for i in range(100)]
-        output_lines.append("")
+        # Create mock pexpect child
+        class MockExpect:
+            TIMEOUT = TimeoutError
+            EOF = EOFError
 
-        mock_process = MagicMock()
-        mock_process.poll.return_value = 0
-        mock_process.stdout.readline.side_effect = output_lines
+        mock_expect = MockExpect()
+        monkeypatch.setattr(service, "_expect", mock_expect)
+
+        output_lines = [f"Line {i}\n" for i in range(100)]
+        output_lines.append(mock_expect.EOF())
+
+        mock_child = MagicMock()
+        mock_child.isalive.return_value = True
+        mock_child.readline.side_effect = output_lines
 
         session = TerminalSession(
             task_id="test-task",
             command=["claude"],
             spec_path=str(tmp_path / "spec.md"),
-            child=mock_process
+            child=mock_child
         )
 
         log_path = tmp_path / ".aura" / "test-task.output.log"
@@ -402,15 +432,23 @@ class TestEventPayloadValidation:
         """Verify events contain the correct task ID."""
         monkeypatch.setattr(sys, 'platform', 'win32')
 
-        mock_process = MagicMock()
-        mock_process.poll.return_value = 0
-        mock_process.stdout.readline.side_effect = ["Test output\n", ""]
+        # Create mock pexpect child
+        class MockExpect:
+            TIMEOUT = TimeoutError
+            EOF = EOFError
+
+        mock_expect = MockExpect()
+        monkeypatch.setattr(service, "_expect", mock_expect)
+
+        mock_child = MagicMock()
+        mock_child.isalive.side_effect = [True, False]
+        mock_child.readline.side_effect = ["Test output\n", mock_expect.EOF()]
 
         session = TerminalSession(
             task_id="unique-task-id-123",
             command=["claude"],
             spec_path=str(tmp_path / "spec.md"),
-            child=mock_process
+            child=mock_child
         )
 
         log_path = tmp_path / ".aura" / "unique-task-id-123.output.log"
@@ -440,19 +478,27 @@ class TestEventPayloadValidation:
         """Verify events contain the actual agent output text."""
         monkeypatch.setattr(sys, 'platform', 'win32')
 
-        mock_process = MagicMock()
-        mock_process.poll.return_value = 0
-        mock_process.stdout.readline.side_effect = [
+        # Create mock pexpect child
+        class MockExpect:
+            TIMEOUT = TimeoutError
+            EOF = EOFError
+
+        mock_expect = MockExpect()
+        monkeypatch.setattr(service, "_expect", mock_expect)
+
+        mock_child = MagicMock()
+        mock_child.isalive.side_effect = [True, True, False]
+        mock_child.readline.side_effect = [
             "Creating file main.py\n",
             "Writing tests\n",
-            ""
+            mock_expect.EOF()
         ]
 
         session = TerminalSession(
             task_id="test-task",
             command=["claude"],
             spec_path=str(tmp_path / "spec.md"),
-            child=mock_process
+            child=mock_child
         )
 
         log_path = tmp_path / ".aura" / "test-task.output.log"
@@ -487,15 +533,23 @@ class TestEventPayloadValidation:
 
         monkeypatch.setattr(sys, 'platform', 'win32')
 
-        mock_process = MagicMock()
-        mock_process.poll.return_value = 0
-        mock_process.stdout.readline.side_effect = ["Output\n", ""]
+        # Create mock pexpect child
+        class MockExpect:
+            TIMEOUT = TimeoutError
+            EOF = EOFError
+
+        mock_expect = MockExpect()
+        monkeypatch.setattr(service, "_expect", mock_expect)
+
+        mock_child = MagicMock()
+        mock_child.isalive.side_effect = [True, False]
+        mock_child.readline.side_effect = ["Output\n", mock_expect.EOF()]
 
         session = TerminalSession(
             task_id="test-task",
             command=["claude"],
             spec_path=str(tmp_path / "spec.md"),
-            child=mock_process
+            child=mock_child
         )
 
         log_path = tmp_path / ".aura" / "test-task.output.log"

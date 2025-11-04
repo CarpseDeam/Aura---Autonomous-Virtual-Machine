@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import re
@@ -10,7 +9,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING, Tuple
+from typing import Dict, List, Optional, Sequence, TYPE_CHECKING
 
 from src.aura.models.agent_task import AgentSpecification, TerminalSession
 from src.aura.models.event_types import AGENT_OUTPUT
@@ -133,44 +132,24 @@ class TerminalAgentService:
 
     # ------------------------------------------------------------------ PTY orchestration
 
-    def _spawn_with_pty(
-        self,
-        command: Sequence[str],
-        project_root: Path,
-        env: Dict[str, str],
-    ):
-        """Spawn the agent with PTY on both Windows and Unix."""
+    def _spawn_with_pty(self, command: Sequence[str], project_root: Path, env: Dict[str, str]):
         if not command:
             raise ValueError("Command must not be empty")
 
-        spawn_command, spawn_kwargs = self._prepare_spawn_command(command)
-        logger.info("Spawning PTY session: %s", spawn_command)
+        logger.info("Spawning PTY session: %s", command)
 
         try:
             child = self._expect.spawn(
-                spawn_command[0],
-                spawn_command[1:],
+                command[0],
+                command[1:],
                 cwd=str(project_root),
                 env=env,
                 encoding="utf-8",
-                codec_errors="ignore",
                 timeout=self._READ_TIMEOUT_SECONDS,
-                **spawn_kwargs,
             )
-
-            child.delaybeforesend = 0.05
-
-            if not sys.platform.startswith("win"):
-                child.logfile_read = sys.stdout
-
             return child
         except Exception as exc:
-            raise RuntimeError(f"Failed to spawn PTY for command {spawn_command}: {exc}") from exc
-
-    def _prepare_spawn_command(self, command: Sequence[str]) -> Tuple[List[str], Dict[str, Any]]:
-        spawn_command = list(command)
-        spawn_kwargs: Dict[str, Any] = {}
-        return spawn_command, spawn_kwargs
+            raise RuntimeError(f"Failed to spawn PTY: {exc}") from exc
 
     def _send_initial_prompt(self, session: TerminalSession, agents_md_path: Path) -> None:
         """Send the initial AGENTS.md prompt to the agent."""
@@ -453,12 +432,32 @@ class TerminalAgentService:
         return tuple(re.compile(pattern, re.IGNORECASE) for pattern in patterns)
 
     def _load_expect_module(self):
-        module_name = "wexpect" if sys.platform.startswith("win") else "pexpect"
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError as exc:
-            raise RuntimeError(
-                f"{module_name} is required for PTY terminal control. Install it via requirements.txt."
-            ) from exc
-        logger.info("Loaded PTY backend module: %s", module_name)
-        return module
+        """Load the appropriate PTY module for this platform."""
+        if sys.platform.startswith("win"):
+            try:
+                import pexpect
+                from pexpect.popen_spawn import PopenSpawn
+
+                # Create a wrapper that uses PopenSpawn (works on Windows)
+                class WindowsPTY:
+                    TIMEOUT = pexpect.TIMEOUT
+                    EOF = pexpect.EOF
+
+                    @staticmethod
+                    def spawn(command, args, **kwargs):
+                        # Use PopenSpawn which works reliably on Windows
+                        full_cmd = [command] + list(args)
+                        child = PopenSpawn(full_cmd, **kwargs)
+                        return child
+
+                logger.info("Loaded PTY backend: pexpect.PopenSpawn (Windows)")
+                return WindowsPTY()
+            except ImportError as exc:
+                raise RuntimeError("pexpect required. Install via requirements.txt") from exc
+        else:
+            try:
+                import pexpect
+                logger.info("Loaded PTY backend: pexpect (Unix)")
+                return pexpect
+            except ImportError as exc:
+                raise RuntimeError("pexpect required. Install via requirements.txt") from exc

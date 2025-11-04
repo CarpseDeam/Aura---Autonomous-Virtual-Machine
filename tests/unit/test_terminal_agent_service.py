@@ -79,51 +79,39 @@ def test_handle_agent_question_prevents_duplicates(service: TerminalAgentService
 
 def test_spawn_with_pty_windows_uses_headless_popen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
+
     captured: dict[str, Any] = {}
 
-    def fake_popen(cmd: Any, **kwargs: Any) -> Any:
-        captured["cmd"] = cmd
-        captured["kwargs"] = kwargs
+    class MockWindowsPTY:
+        TIMEOUT = TimeoutError
+        EOF = EOFError
 
-        class DummyProcess:
-            pid = 1234
+        @staticmethod
+        def spawn(command: str, args: list[str], **kwargs: Any) -> Any:
+            captured["command"] = command
+            captured["args"] = args
+            captured["kwargs"] = kwargs
 
-        return DummyProcess()
+            class DummyProcess:
+                pid = 1234
 
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+            return DummyProcess()
+
+    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: MockWindowsPTY())
 
     service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM(), event_bus=DummyEventBus())
 
-    process = service._spawn_with_pty(["claude"], tmp_path, {"PATH": "value"})  # noqa: SLF001
+    process = service._spawn_with_pty(["claude", "--flag"], tmp_path, {"PATH": "value"})  # noqa: SLF001
 
     assert process.pid == 1234
-    assert captured["cmd"] == ["claude"]
+    assert captured["command"] == "claude"
+    assert captured["args"] == ["--flag"]
 
     kwargs = captured["kwargs"]
     assert kwargs["cwd"] == str(tmp_path)
     assert kwargs["env"] == {"PATH": "value"}
-    assert kwargs["stdin"] is subprocess.PIPE
-    assert kwargs["stdout"] is subprocess.PIPE
-    assert kwargs["stderr"] is subprocess.STDOUT
-    assert kwargs["text"] is True
     assert kwargs["encoding"] == "utf-8"
-    assert kwargs["errors"] == "ignore"
-    assert kwargs["bufsize"] == 1
-    assert "creationflags" not in kwargs
-    assert "shell" not in kwargs
-
-
-def test_prepare_spawn_command_returns_original_on_non_windows(
-    service: TerminalAgentService,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(sys, "platform", "linux")
-
-    command, kwargs = service._prepare_spawn_command(["codex", "--flag"])  # noqa: SLF001
-
-    assert command == ["codex", "--flag"]
-    assert kwargs == {}
+    assert kwargs["timeout"] == service._READ_TIMEOUT_SECONDS  # noqa: SLF001
 
 
 def test_build_command_uses_interactive_mode_on_windows(

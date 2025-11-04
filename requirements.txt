@@ -15,5 +15,3 @@ psutil
 google-generativeai
 ollama
 pexpect>=4.8.0
-wexpect>=4.0.0; sys_platform == 'win32'
-#
