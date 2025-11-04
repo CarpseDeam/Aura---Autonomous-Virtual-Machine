@@ -221,44 +221,6 @@ class TerminalSessionManager:
 
         return newly_completed
 
-    # ----------------------------- Visible terminal behavior ------------------------------
-
-    def read_terminal_output(self, task_id: str, max_lines: int = 100, include_stderr: bool = True) -> str:
-        """
-        Visible terminals do not expose stdout/stderr pipes for programmatic capture.
-
-        Args:
-            task_id: The active session identifier.
-            max_lines: Unused; maintained for interface compatibility.
-            include_stderr: Unused; maintained for interface compatibility.
-
-        Returns:
-            Advisory string explaining capture limitations.
-        """
-        logger.info(
-            "Terminal output capture requested for task %s, but visible sessions stream output directly to the user",
-            task_id,
-        )
-        return "Terminal output capture is not available for visible terminal sessions."
-
-    def send_to_terminal(self, task_id: str, message: str, append_newline: bool = True) -> None:
-        """
-        Visible terminals require direct human interaction rather than stdin piping.
-
-        Args:
-            task_id: The active session identifier.
-            message: Text that would be written to stdin (unused).
-            append_newline: Whether a newline would have been appended (unused).
-
-        Raises:
-            RuntimeError: Always, indicating programmatic input is not supported.
-        """
-        logger.warning(
-            "Attempted to send input to task %s, but visible sessions cannot receive programmatic stdin",
-            task_id,
-        )
-        raise RuntimeError("Sending input programmatically is not supported for visible terminal sessions")
-
     def _check_completion_signals(self, status: SessionStatus) -> Optional[Dict]:
         """
         Check various completion signals for a session.

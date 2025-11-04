@@ -217,25 +217,17 @@ class AuraApp:
 
     def _handle_project_create(self, project_name: str) -> None:
         root_path = get_project_root_path(project_name)
-        if self.project_manager.project_exists(project_name):
-            logging.info("Project '%s' already exists; activating workspace.", project_name)
-        else:
-            try:
-                self.project_manager.create_project(project_name, root_path)
-            except Exception as exc:
-                logging.error("Failed to create project '%s': %s", project_name, exc)
-                return
         try:
+            project = self.project_manager.create_project(project_name, root_path)
+            logging.info("Ensured project '%s' is ready at %s", project_name, project.root_path)
             self.workspace_service.set_active_project(project_name)
         except Exception as exc:
-            logging.error("Failed to activate project '%s': %s", project_name, exc)
+            logging.error("Failed to create or activate project '%s': %s", project_name, exc)
 
     def _handle_project_switch(self, project_name: str) -> None:
-        if not self.project_manager.project_exists(project_name):
-            logging.warning("Cannot switch: project '%s' does not exist", project_name)
-            return
         try:
-            self.project_manager.switch_project(project_name)
+            project = self.project_manager.switch_project(project_name)
+            logging.info("Switched to project '%s' at %s", project_name, project.root_path)
             self.workspace_service.set_active_project(project_name)
         except Exception as exc:
             logging.error("Failed to switch project '%s': %s", project_name, exc)

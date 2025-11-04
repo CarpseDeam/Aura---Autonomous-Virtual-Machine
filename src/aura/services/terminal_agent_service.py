@@ -23,24 +23,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class _StdoutRelay:
-    """Mirror PTY output to the controlling terminal so the TUI remains visible."""
-
-    def __init__(self) -> None:
-        self._stream = getattr(sys, "stdout", None)
-
-    def write(self, data: str) -> int:  # pragma: no cover - thin wrapper
-        if not data or self._stream is None:
-            return 0
-        self._stream.write(data)
-        self._stream.flush()
-        return len(data)
-
-    def flush(self) -> None:  # pragma: no cover - thin wrapper
-        if self._stream is not None:
-            self._stream.flush()
-
-
 class TerminalAgentService:
     """
     Spawn Claude Code inside a pseudo-terminal so Aura can supervise the session.
@@ -73,7 +55,6 @@ class TerminalAgentService:
 
         self.agent_command_template = agent_command_template or "claude-code --dangerously-skip-permissions"
         self._expect = self._load_expect_module()
-        self._stdout_relay = _StdoutRelay()
         self._question_patterns = self._compile_question_patterns()
         self._powershell_executable: Optional[str] = None
 
@@ -178,14 +159,14 @@ class TerminalAgentService:
             ) from exc
 
         child.delaybeforesend = 0.05
-        child.logfile_read = self._stdout_relay
+        child.logfile_read = sys.stdout
         return child
 
     def _prepare_spawn_command(self, command: Sequence[str]) -> Tuple[List[str], Dict[str, Any]]:
         spawn_command = list(command)
         spawn_kwargs: Dict[str, Any] = {}
 
-        if self._is_windows_pty():
+        if sys.platform.startswith("win"):
             spawn_command = self._wrap_command_with_powershell(spawn_command)
             spawn_kwargs["interact"] = True
 
@@ -448,9 +429,6 @@ class TerminalAgentService:
         logger.info("Loaded PTY backend module: %s", module_name)
         return module
 
-    def _is_windows_pty(self) -> bool:
-        return sys.platform.startswith("win") and getattr(self._expect, "__name__", "") == "wexpect"
-
     def _wrap_command_with_powershell(self, command: Sequence[str]) -> List[str]:
         powershell_executable = self._resolve_powershell_executable()
         command_line = subprocess.list2cmdline(list(command))
@@ -478,13 +456,4 @@ class TerminalAgentService:
             logger.info("Using PowerShell 7 executable: %s", candidate)
             return candidate
 
-        candidate = shutil.which("powershell.exe")
-        if candidate:
-            self._powershell_executable = candidate
-            logger.warning(
-                "PowerShell 7 (pwsh.exe) not found; falling back to Windows PowerShell: %s",
-                candidate,
-            )
-            return candidate
-
-        raise RuntimeError("Unable to locate PowerShell (pwsh.exe or powershell.exe) in PATH.")
+        raise RuntimeError("PowerShell 7 (pwsh.exe) is required on Windows but was not found in PATH.")
