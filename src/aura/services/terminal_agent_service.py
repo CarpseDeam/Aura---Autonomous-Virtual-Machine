@@ -141,11 +141,15 @@ class TerminalAgentService:
         if sys.platform.startswith("win"):
             # On Windows, use subprocess.Popen for a visible console and I/O pipes.
             spawn_command = self._wrap_command_with_powershell(command)
-            logger.info("Spawning visible Windows terminal with I/O pipes: %s", spawn_command)
+            logger.info("Spawning visible Windows terminal with shell=True: %s", spawn_command)
 
             try:
+                # Join the command list into a single string for shell=True
+                command_str = " ".join(spawn_command)
+
                 process = subprocess.Popen(
-                    spawn_command,
+                    command_str,
+                    shell=True,
                     cwd=str(project_root),
                     env=env,
                     creationflags=subprocess.CREATE_NEW_CONSOLE,
