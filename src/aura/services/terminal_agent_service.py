@@ -187,32 +187,44 @@ class TerminalAgentService:
         spawn_kwargs: Dict[str, Any] = {}
 
         if sys.platform.startswith("win") and getattr(self._expect, "__name__", "") == "wexpect":
-            # Build the command line for Claude Code
             command_line = subprocess.list2cmdline(spawn_command)
 
-            powershell_executable = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
-            encoding_directives = [
-                "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
-                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-                "$OutputEncoding = [System.Text.Encoding]::UTF8",
-            ]
-            if not powershell_executable.lower().endswith("pwsh.exe"):
-                encoding_directives.append("chcp.com 65001 > $null")
-            powershell_script = "; ".join(encoding_directives) + f"; & {command_line}"
-
-            powershell_command = [
-                powershell_executable,
-                "-NoExit",
-                "-Command",
-                powershell_script,
-            ]
+            # Try PowerShell 7 first (better UTF-8 support)
+            if shutil.which("pwsh.exe"):
+                ps_executable = "pwsh.exe"
+                logger.info("Using PowerShell 7 (pwsh.exe) for native UTF-8 support.")
+                powershell_command = [
+                    ps_executable,
+                    "-NoExit",
+                    "-Command",
+                    f"& {command_line}",
+                ]
+            else:
+                ps_executable = "powershell.exe"
+                logger.warning(
+                    "PowerShell 7 (pwsh.exe) not found, falling back to Windows PowerShell (powershell.exe). "
+                    "For optimal Unicode support, please install PowerShell 7."
+                )
+                encoding_directives = [
+                    "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
+                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+                    "$OutputEncoding = [System.Text.Encoding]::UTF8",
+                    "chcp.com 65001 > $null"
+                ]
+                powershell_script = "; ".join(encoding_directives) + f"; & {command_line}"
+                powershell_command = [
+                    ps_executable,
+                    "-NoExit",
+                    "-Command",
+                    powershell_script,
+                ]
 
             spawn_command = powershell_command
             spawn_kwargs["interact"] = True
 
             logger.debug(
-                "Wrapped Windows command for separate PowerShell window using %s with UTF-8 preamble: %s",
-                powershell_executable,
+                "Wrapped Windows command for separate PowerShell window: %s -> %s",
+                command,
                 spawn_command,
             )
 
