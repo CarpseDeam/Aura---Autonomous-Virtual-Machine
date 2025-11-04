@@ -4,6 +4,7 @@ import importlib
 import logging
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -105,6 +106,9 @@ class TerminalAgentService:
         session_env.update(env or {})
         session_env["AURA_AGENT_SPEC_PATH"] = str(spec_path)
         session_env["AURA_AGENT_TASK_ID"] = spec.task_id
+        if sys.platform.startswith("win"):
+            session_env.setdefault("PYTHONUTF8", "1")
+            session_env.setdefault("PYTHONIOENCODING", "utf-8")
 
         child = None
         log_path = project_root / self.SPEC_DIR_NAME / f"{spec.task_id}.output.log"
@@ -186,19 +190,18 @@ class TerminalAgentService:
             # Build the command line for Claude Code
             command_line = subprocess.list2cmdline(spawn_command)
 
-            # PowerShell script that:
-            # 1. Sets console encoding to UTF-8
-            # 2. Sets code page to 65001 (UTF-8)
-            # 3. Then runs Claude Code
-            powershell_script = (
-                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-                "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
-                "chcp 65001 > $null; "
-                f"& {command_line}"
-            )
+            powershell_executable = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
+            encoding_directives = [
+                "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+                "$OutputEncoding = [System.Text.Encoding]::UTF8",
+            ]
+            if not powershell_executable.lower().endswith("pwsh.exe"):
+                encoding_directives.append("chcp.com 65001 > $null")
+            powershell_script = "; ".join(encoding_directives) + f"; & {command_line}"
 
             powershell_command = [
-                "powershell.exe",
+                powershell_executable,
                 "-NoExit",
                 "-Command",
                 powershell_script,
@@ -208,7 +211,8 @@ class TerminalAgentService:
             spawn_kwargs["interact"] = True
 
             logger.debug(
-                "Wrapped Windows command for separate PowerShell window with UTF-8 encoding: %s",
+                "Wrapped Windows command for separate PowerShell window using %s with UTF-8 preamble: %s",
+                powershell_executable,
                 spawn_command,
             )
 
