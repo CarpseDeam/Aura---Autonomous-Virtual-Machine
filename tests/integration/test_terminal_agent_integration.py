@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from pathlib import Path
 from typing import Any, Deque, List, Optional, Tuple
+import sys
 
 import pytest
 
@@ -108,6 +109,8 @@ def test_terminal_agent_answers_questions_end_to_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+
     script = deque(
         [
             ("line", "Boot complete."),

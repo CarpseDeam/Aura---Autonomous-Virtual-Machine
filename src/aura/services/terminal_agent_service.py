@@ -4,7 +4,6 @@ import importlib
 import logging
 import os
 import re
-import shutil
 import shlex
 import subprocess
 import sys
@@ -56,7 +55,6 @@ class TerminalAgentService:
         self.agent_command_template = agent_command_template or "claude-code --dangerously-skip-permissions"
         self._expect = self._load_expect_module()
         self._question_patterns = self._compile_question_patterns()
-        self._powershell_executable: Optional[str] = None
 
         logger.info(
             "TerminalAgentService initialized with PTY support (workspace=%s, template=%s, llm_agent=%s)",
@@ -85,7 +83,7 @@ class TerminalAgentService:
         session_env = os.environ.copy()
         if sys.platform.startswith("win"):
             # On Windows, prepend the virtual environment's Scripts path to PATH
-            # so the spawned PowerShell process can find our executables (claude-code, codex, etc.)
+            # so the spawned process can resolve our executables (claude-code, codex, etc.)
             venv_scripts_path = str(Path(sys.executable).parent)
             original_path = session_env.get("PATH", "")
             session_env["PATH"] = f"{venv_scripts_path}{os.pathsep}{original_path}"
@@ -184,17 +182,6 @@ class TerminalAgentService:
     def _prepare_spawn_command(self, command: Sequence[str]) -> Tuple[List[str], Dict[str, Any]]:
         spawn_command = list(command)
         spawn_kwargs: Dict[str, Any] = {}
-
-        if sys.platform.startswith("win"):
-            spawn_command = self._wrap_command_with_powershell(spawn_command)
-            spawn_kwargs["interact"] = True
-
-            logger.debug(
-                "Wrapped Windows command for separate PowerShell window: %s -> %s",
-                command,
-                spawn_command,
-            )
-
         return spawn_command, spawn_kwargs
 
     def _send_initial_prompt(self, session: TerminalSession, agents_md_path: Path) -> None:
@@ -500,32 +487,3 @@ class TerminalAgentService:
             ) from exc
         logger.info("Loaded PTY backend module: %s", module_name)
         return module
-
-    def _wrap_command_with_powershell(self, command: Sequence[str]) -> List[str]:
-        powershell_executable = self._resolve_powershell_executable()
-        command_line = subprocess.list2cmdline(list(command))
-        ps_command = f"& {command_line}"
-        wrapped = [
-            powershell_executable,
-            "-NoExit",
-            "-Command",
-            ps_command,
-        ]
-        logger.info(
-            "Launching PowerShell console %s for command: %s",
-            powershell_executable,
-            ps_command,
-        )
-        return wrapped
-
-    def _resolve_powershell_executable(self) -> str:
-        if self._powershell_executable:
-            return self._powershell_executable
-
-        candidate = shutil.which("pwsh.exe")
-        if candidate:
-            self._powershell_executable = candidate
-            logger.info("Using PowerShell 7 executable: %s", candidate)
-            return candidate
-
-        raise RuntimeError("PowerShell 7 (pwsh.exe) is required on Windows but was not found in PATH.")

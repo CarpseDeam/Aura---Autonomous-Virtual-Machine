@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections import deque
 from pathlib import Path
 from typing import Any, Deque, List, Optional, Tuple
+import sys
 
 import pytest
 
@@ -114,6 +115,7 @@ def test_autonomous_workflow_end_to_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
     """
     Test the complete autonomous supervision workflow from user request to completion.
 

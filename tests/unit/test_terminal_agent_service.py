@@ -71,12 +71,6 @@ def test_handle_agent_question_prevents_duplicates(service: TerminalAgentService
 def test_spawn_with_pty_windows_uses_headless_popen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
-    monkeypatch.setattr(
-        TerminalAgentService,
-        "_wrap_command_with_powershell",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Should not wrap command on Windows spawn")),
-    )
-
     captured: dict[str, Any] = {}
 
     def fake_popen(cmd: Any, **kwargs: Any) -> Any:
@@ -111,29 +105,6 @@ def test_spawn_with_pty_windows_uses_headless_popen(monkeypatch: pytest.MonkeyPa
     assert "shell" not in kwargs
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific behavior")
-def test_prepare_spawn_command_wraps_with_pwsh_on_windows(
-    service: TerminalAgentService,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "src.aura.services.terminal_agent_service.subprocess.list2cmdline",
-        lambda items: " ".join(items),
-    )
-    monkeypatch.setattr(
-        service,
-        "_resolve_powershell_executable",
-        lambda: r"C:\Program Files\PowerShell\7\pwsh.exe",
-    )
-
-    command, kwargs = service._prepare_spawn_command(["codex"])  # noqa: SLF001
-
-    assert command[0].lower().endswith("pwsh.exe")
-    assert command[1:3] == ["-NoExit", "-Command"]
-    assert command[3].startswith("& codex")
-    assert kwargs.get("interact") is True
-
-
 def test_prepare_spawn_command_returns_original_on_non_windows(
     service: TerminalAgentService,
     monkeypatch: pytest.MonkeyPatch,
@@ -144,18 +115,3 @@ def test_prepare_spawn_command_returns_original_on_non_windows(
 
     assert command == ["codex", "--flag"]
     assert kwargs == {}
-
-
-def test_resolve_powershell_executable_errors_when_missing(
-    service: TerminalAgentService,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "src.aura.services.terminal_agent_service.shutil.which",
-        lambda *_args, **_kwargs: None,
-    )
-
-    with pytest.raises(RuntimeError) as exc:
-        service._resolve_powershell_executable()  # noqa: SLF001
-
-    assert "PowerShell 7 (pwsh.exe) is required" in str(exc.value)
