@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QTextCursor, QTextOption
 from PySide6.QtWidgets import QTextBrowser, QWidget
 
+from src.aura.models.terminal_message import TerminalOutputMessage
 from src.aura.services.image_storage_service import ImageStorageService
 
 logger = logging.getLogger(__name__)
@@ -232,6 +233,60 @@ AURA_RESPONSE_CSS = """
         background-color: #2E7D32;
         color: #ffffff;
     }
+    .terminal-message {
+        border: 1px solid #3e3e3e;
+        border-radius: 6px;
+        padding: 0;
+        margin: 12px 0;
+        background: #1e1e1e;
+        font-family: 'JetBrains Mono', Consolas, monospace;
+        font-size: 13px;
+        overflow: hidden;
+    }
+    .terminal-header {
+        background: #2a2a2a;
+        border-bottom: 1px solid #3e3e3e;
+        padding: 8px 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: #FFD27F;
+        font-weight: bold;
+        font-size: 12px;
+    }
+    .terminal-status {
+        display: inline-block;
+        margin-left: 8px;
+        font-size: 11px;
+    }
+    .terminal-status.running { color: #64B5F6; }
+    .terminal-status.completed { color: #4CAF50; }
+    .terminal-status.failed { color: #FF4444; }
+    .terminal-command {
+        background: #252525;
+        padding: 8px 12px;
+        border-bottom: 1px solid #3e3e3e;
+        color: #FFD27F;
+        font-size: 12px;
+        word-wrap: break-word;
+    }
+    .terminal-output {
+        padding: 8px 12px;
+        color: #E0E0E0;
+        white-space: pre-wrap;
+        font-size: 12px;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+    .terminal-footer {
+        background: #252525;
+        border-top: 1px solid #3e3e3e;
+        padding: 6px 12px;
+        color: #BDBDBD;
+        font-size: 11px;
+        display: flex;
+        justify-content: space-between;
+    }
 </style>
 """
 
@@ -249,6 +304,7 @@ class ChatDisplayWidget(QTextBrowser):
         super().__init__(parent)
         self._image_storage = image_storage
         self._styles_injected = False
+        self._terminal_message_cursors: Dict[str, QTextCursor] = {}
 
         self.setObjectName("chat_display")
         self.setFocusPolicy(Qt.NoFocus)
@@ -627,10 +683,91 @@ class ChatDisplayWidget(QTextBrowser):
             return "N/A"
         return change_id[:8].upper()
 
+    def create_terminal_message(self, message: TerminalOutputMessage) -> None:
+        """
+        Display a new terminal output message box in chat.
+
+        Args:
+            message: Terminal message with command and initial status
+        """
+        self._ensure_styles()
+
+        command_display = message.command
+        if len(command_display) > 100:
+            command_display = command_display[:97] + "..."
+
+        status_indicator = "⋯" if message.status == "running" else ""
+        status_class = message.status
+
+        terminal_html = f"""
+        <div class="terminal-message">
+            <div class="terminal-header">
+                <span>🤖 Claude Code</span>
+                <span class="terminal-status {status_class}">{status_indicator}</span>
+            </div>
+            <div class="terminal-command">$ {escape(command_display)}</div>
+            <div class="terminal-output">"""
+
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertHtml(terminal_html)
+
+        self._terminal_message_cursors[message.message_id] = QTextCursor(cursor)
+
+        cursor.insertHtml("</div></div><br>")
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def update_terminal_message(
+        self,
+        message_id: str,
+        new_output: str,
+        status: Literal["running", "completed", "failed"] = "running",
+        exit_code: Optional[int] = None,
+        duration: Optional[float] = None,
+    ) -> None:
+        """
+        Append new output to existing terminal message and update status.
+
+        Args:
+            message_id: ID of terminal message to update
+            new_output: New output lines to append
+            status: Current execution status
+            exit_code: Exit code when completed
+            duration: Total duration in seconds when completed
+        """
+        if message_id not in self._terminal_message_cursors:
+            return
+
+        cursor = self._terminal_message_cursors[message_id]
+
+        if new_output:
+            safe_output = escape(new_output)
+            cursor.insertHtml(safe_output)
+
+        if status != "running":
+            status_symbol = "✓" if status == "completed" else "✗"
+            status_color = "#4CAF50" if status == "completed" else "#FF4444"
+
+            footer_html = f"""
+            </div>
+            <div class="terminal-footer">
+                <span style="color: {status_color};">{status_symbol} {status.capitalize()}</span>
+                <span>Duration: {duration:.1f}s | Exit: {exit_code}</span>
+            </div>
+            </div>
+            """
+            cursor.insertHtml(footer_html)
+
+            del self._terminal_message_cursors[message_id]
+
+        self.ensureCursorVisible()
+
     def clear_chat(self) -> None:
         """Clear all content from the chat display."""
         self.setText("")
         self._styles_injected = False
+        self._terminal_message_cursors.clear()
 
     def load_conversation_history(self, messages: List[Dict[str, Any]], limit: int = 100) -> None:
         """

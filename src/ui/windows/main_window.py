@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Qt, QThreadPool, Signal, QTimer
 from PySide6.QtGui import QFont, QIcon
@@ -10,13 +11,14 @@ from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QSplitter, QVBo
 from src.aura.app.event_bus import EventBus
 from src.aura.config import ASSETS_DIR
 from src.aura.models.event_types import (
-    AGENT_OUTPUT,
     TERMINAL_EXECUTE_COMMAND,
+    TERMINAL_OUTPUT_RECEIVED,
     TERMINAL_SESSION_COMPLETED,
     TERMINAL_SESSION_FAILED,
     TERMINAL_SESSION_STARTED,
 )
 from src.aura.models.events import Event
+from src.aura.models.terminal_message import TerminalOutputMessage
 from src.aura.services.agent_supervisor import AgentSupervisor
 from src.aura.services.conversation_management_service import ConversationManagementService
 from src.aura.services.image_storage_service import ImageStorageService
@@ -111,6 +113,8 @@ class MainWindow(QMainWindow):
             conversations=conversations,
         )
 
+        self._active_terminal_messages: Dict[str, TerminalOutputMessage] = {}
+
         self._build_layout()
         self._connect_signals()
         self._event_controller.register()
@@ -151,9 +155,10 @@ class MainWindow(QMainWindow):
         self.panel_splitter.setChildrenCollapsible(False)
         self.panel_splitter.setCollapsible(0, False)
         self.panel_splitter.setCollapsible(1, False)
-        self.panel_splitter.setStretchFactor(0, 3)
-        self.panel_splitter.setStretchFactor(1, 1)
-        self.terminal_widget.setMinimumHeight(160)
+        self.panel_splitter.setStretchFactor(0, 1)
+        self.panel_splitter.setStretchFactor(1, 0)
+        self.terminal_widget.setVisible(False)
+        self.terminal_widget.setMaximumHeight(0)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.conversation_sidebar)
@@ -185,8 +190,8 @@ class MainWindow(QMainWindow):
 
     def _subscribe_supervisor_events(self) -> None:
         """Subscribe to supervisor-emitted events for agent output and lifecycle."""
-        self.event_bus.subscribe(AGENT_OUTPUT, self._handle_agent_output)
         self.event_bus.subscribe(TERMINAL_SESSION_STARTED, self._handle_terminal_session_started)
+        self.event_bus.subscribe(TERMINAL_OUTPUT_RECEIVED, self._handle_terminal_output_received)
         self.event_bus.subscribe(TERMINAL_SESSION_COMPLETED, self._handle_session_completed)
         self.event_bus.subscribe(TERMINAL_SESSION_FAILED, self._handle_session_failed)
         self.event_bus.subscribe(TERMINAL_EXECUTE_COMMAND, self._handle_terminal_command)
@@ -195,15 +200,6 @@ class MainWindow(QMainWindow):
         self.event_bus.dispatch(Event(event_type="NEW_SESSION_REQUESTED"))
         self.chat_display.display_boot_sequence(BOOT_SEQUENCE)
 
-    def _handle_agent_output(self, event: Event) -> None:
-        payload = event.payload or {}
-        text = (payload.get("text") or "").strip()
-        if not text:
-            return
-        if self.thinking_indicator.is_animating:
-            self.thinking_indicator.stop_thinking()
-        self.chat_display.display_system_message("AGENT", text)
-
     def _handle_terminal_session_started(self, event: Event) -> None:
         payload = event.payload or {}
         task_id = payload.get("task_id")
@@ -211,8 +207,35 @@ class MainWindow(QMainWindow):
         command_str = " ".join(command) if isinstance(command, list) else str(command)
         identifier = str(task_id) if task_id else "?"
         logger.info("Terminal session started for task %s: %s", identifier, command_str)
-        short_identifier = identifier[:8] if identifier != "?" else identifier
-        self.chat_display.display_system_message("SYSTEM", f" Executing task {short_identifier}...")
+
+        message = TerminalOutputMessage(
+            message_id=f"term-{task_id}",
+            task_id=str(task_id),
+            command=command_str,
+            status="running",
+            started_at=datetime.now(),
+        )
+
+        self._active_terminal_messages[str(task_id)] = message
+        self.chat_display.create_terminal_message(message)
+
+    def _handle_terminal_output_received(self, event: Event) -> None:
+        """Stream terminal output to chat message box."""
+        payload = event.payload or {}
+        task_id = str(payload.get("task_id", ""))
+        text = payload.get("text", "")
+
+        if not task_id or task_id not in self._active_terminal_messages:
+            return
+
+        message = self._active_terminal_messages[task_id]
+        message.output += text + "\n"
+
+        self.chat_display.update_terminal_message(
+            message_id=message.message_id,
+            new_output=text + "\n",
+            status="running",
+        )
 
     def _handle_terminal_command(self, event: Event) -> None:
         payload = event.payload or {}
@@ -228,8 +251,26 @@ class MainWindow(QMainWindow):
 
     def _handle_session_completed(self, event: Event) -> None:
         payload = event.payload or {}
-        task_id = payload.get("task_id", "?")
+        task_id = str(payload.get("task_id", "?"))
         summary_data = payload.get("summary_data")
+        exit_code = payload.get("exit_code", 0)
+
+        if task_id in self._active_terminal_messages:
+            message = self._active_terminal_messages[task_id]
+            message.status = "completed"
+            message.completed_at = datetime.now()
+            message.exit_code = exit_code
+            message.duration_seconds = (message.completed_at - message.started_at).total_seconds()
+
+            self.chat_display.update_terminal_message(
+                message_id=message.message_id,
+                new_output="",
+                status="completed",
+                exit_code=exit_code,
+                duration=message.duration_seconds,
+            )
+
+            del self._active_terminal_messages[task_id]
 
         self._restore_chat_input()
 
@@ -242,8 +283,27 @@ class MainWindow(QMainWindow):
     def _handle_session_failed(self, event: Event) -> None:
         payload = event.payload or {}
         reason = payload.get("failure_reason") or payload.get("completion_reason") or "failed"
-        task_id = payload.get("task_id", "?")
+        task_id = str(payload.get("task_id", "?"))
         error_message = payload.get("error_message")
+        exit_code = payload.get("exit_code", 1)
+
+        if task_id in self._active_terminal_messages:
+            message = self._active_terminal_messages[task_id]
+            message.status = "failed"
+            message.completed_at = datetime.now()
+            message.exit_code = exit_code
+            message.duration_seconds = (message.completed_at - message.started_at).total_seconds()
+
+            self.chat_display.update_terminal_message(
+                message_id=message.message_id,
+                new_output="",
+                status="failed",
+                exit_code=exit_code,
+                duration=message.duration_seconds,
+            )
+
+            del self._active_terminal_messages[task_id]
+
         self._restore_chat_input()
         summary = f"Task {task_id} failed: {reason}"
         if error_message:
@@ -310,6 +370,21 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: D401 - QWidget signature
         QApplication.quit()
         super().closeEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        """Handle keyboard shortcuts."""
+        if event.key() == Qt.Key_QuoteLeft and event.modifiers() == Qt.ControlModifier:
+            visible = self.terminal_widget.isVisible()
+            self.terminal_widget.setVisible(not visible)
+            if not visible:
+                self.terminal_widget.setMaximumHeight(300)
+                self.panel_splitter.setStretchFactor(0, 7)
+                self.panel_splitter.setStretchFactor(1, 3)
+            else:
+                self.terminal_widget.setMaximumHeight(0)
+                self.panel_splitter.setStretchFactor(0, 1)
+                self.panel_splitter.setStretchFactor(1, 0)
+        super().keyPressEvent(event)
 
     def _on_sidebar_collapsed_changed(self, collapsed: bool) -> None:
         """Adjust splitter sizes when the conversation sidebar is toggled."""
