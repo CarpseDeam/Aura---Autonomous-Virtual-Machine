@@ -81,8 +81,20 @@ def event_collector(event_bus: EventBus) -> EventCollector:
 
 
 @pytest.fixture()
-def service(tmp_path: Path, event_bus: EventBus) -> TerminalAgentService:
+def service(tmp_path: Path, event_bus: EventBus, monkeypatch: pytest.MonkeyPatch) -> TerminalAgentService:
     """Create a real TerminalAgentService for integration testing."""
+    from unittest.mock import MagicMock
+
+    # Mock the expect module to avoid platform-specific PTY issues
+    mock_expect = MagicMock()
+    mock_expect.TIMEOUT = Exception  # Define TIMEOUT for exception handling
+    mock_expect.EOF = Exception      # Define EOF for exception handling
+
+    def _load_mock_expect_module(self):
+        return mock_expect
+
+    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", _load_mock_expect_module)
+
     return TerminalAgentService(
         workspace_root=tmp_path,
         llm_service=MockLLMService(),
@@ -254,7 +266,7 @@ class TestEndToEndOutputFlow:
         # Create mock process with output
         mock_process = MagicMock()
         mock_process.poll.return_value = 0
-        mock_process.stdout.readline.side_effect = [
+        mock_process.readline.side_effect = [
             "Line 1\n",
             "Line 2\n",
             "Line 3\n",
@@ -312,7 +324,7 @@ class TestEndToEndOutputFlow:
         # Create two mock processes
         mock_process1 = MagicMock()
         mock_process1.poll.return_value = 0
-        mock_process1.stdout.readline.side_effect = [
+        mock_process1.readline.side_effect = [
             "Session 1 Line 1\n",
             "Session 1 Line 2\n",
             ""
@@ -320,7 +332,7 @@ class TestEndToEndOutputFlow:
 
         mock_process2 = MagicMock()
         mock_process2.poll.return_value = 0
-        mock_process2.stdout.readline.side_effect = [
+        mock_process2.readline.side_effect = [
             "Session 2 Line 1\n",
             "Session 2 Line 2\n",
             ""

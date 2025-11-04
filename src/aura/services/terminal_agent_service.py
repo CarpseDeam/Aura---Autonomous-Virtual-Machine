@@ -453,120 +453,145 @@ class TerminalAgentService:
             except ImportError as exc:
                 raise RuntimeError("pexpect required. Install via requirements.txt") from exc
 
-    def _create_windows_pty_wrapper(self):
-        """Create a Windows-compatible PTY wrapper using subprocess.Popen with threaded reading."""
-        import subprocess
-        import threading
-        from queue import Queue, Empty
-
-        class WindowsPTYWrapper:
-            """Windows PTY implementation using subprocess with threaded output reading."""
-
-            class TIMEOUT(Exception):
-                """Raised when readline times out."""
-                pass
-
-            class EOF(Exception):
-                """Raised when process terminates."""
-                pass
-
-            class PopenChild:
-                """Wrapper around subprocess.Popen that mimics pexpect API."""
-
-                def __init__(self, cmd, cwd, env, encoding, timeout):
-                    # Force unbuffered output
-                    env = dict(env)
-                    env.update({
-                        "PYTHONUNBUFFERED": "1",
-                        "PYTHONUTF8": "1",
-                        "PYTHONIOENCODING": "utf-8",
-                        "TERM": "dumb",
-                    })
-
-                    self.proc = subprocess.Popen(
-                        cmd,
-                        cwd=cwd,
-                        env=env,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        stdin=subprocess.PIPE,
-                        text=True,
-                        encoding=encoding,
-                        bufsize=1,  # Line buffered
-                        universal_newlines=True,
-                    )
-
-                    self.pid = self.proc.pid
-                    self.encoding = encoding
-                    self.timeout = timeout
-                    self._output_queue = Queue()
-                    self._start_reader_thread()
-
-                    logger.info("Process spawned with PID: %d", self.pid)
-
-                def _start_reader_thread(self):
-                    """Start background thread to read process output into queue."""
-                    def reader():
-                        logger.debug("Reader thread started for PID %d", self.pid)
-                        try:
-                            for line in self.proc.stdout:
-                                self._output_queue.put(('line', line))
-                        except Exception as exc:
-                            logger.debug("Reader thread error: %s", exc)
-                        finally:
-                            self._output_queue.put(('eof', None))
-                            logger.debug("Reader thread exiting for PID %d", self.pid)
-
-                    self._reader_thread = threading.Thread(
-                        target=reader,
-                        name=f"output-reader-{self.pid}",
-                        daemon=True
-                    )
-                    self._reader_thread.start()
-
-                def readline(self):
-                    """Read one line from the process output."""
+def _create_windows_pty_wrapper(self):
+    """Create a Windows-compatible PTY wrapper using Windows ConPTY."""
+    import subprocess
+    import threading
+    import sys
+    from queue import Queue, Empty
+    
+    class WindowsPTYWrapper:
+        """Windows PTY using ConPTY for real terminal emulation."""
+        
+        class TIMEOUT(Exception):
+            pass
+        
+        class EOF(Exception):
+            pass
+        
+        class ConPTYChild:
+            """Process with real ConPTY terminal on Windows."""
+            
+            def __init__(self, cmd, cwd, env, encoding, timeout):
+                # Use STARTUPINFO to enable ConPTY
+                startupinfo = subprocess.STARTUPINFO()
+                
+                # Create process with pseudo-console
+                self.proc = subprocess.Popen(
+                    cmd,
+                    cwd=cwd,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.PIPE,
+                    bufsize=0,  # Unbuffered
+                    text=False,  # Binary mode
+                    startupinfo=startupinfo,
+                )
+                
+                self.pid = self.proc.pid
+                self.encoding = encoding
+                self.timeout = timeout
+                self._output_queue = Queue()
+                self._closed = False
+                self._start_reader_thread()
+                
+                logger.info("ConPTY process spawned with PID: %d", self.pid)
+            
+            def _start_reader_thread(self):
+                """Background thread reads binary output and decodes."""
+                def reader():
                     try:
-                        event_type, data = self._output_queue.get(timeout=self.timeout)
-                        if event_type == 'eof':
-                            raise WindowsPTYWrapper.EOF()
-                        return data
-                    except Empty:
-                        raise WindowsPTYWrapper.TIMEOUT()
-
-                def sendline(self, text):
-                    """Send a line to the process stdin."""
-                    if self.proc.stdin:
-                        self.proc.stdin.write(text + '\n')
+                        while True:
+                            # Read one byte at a time to avoid blocking
+                            chunk = self.proc.stdout.read(1)
+                            if not chunk:
+                                break
+                            
+                            # Accumulate until newline
+                            line_bytes = chunk
+                            while not line_bytes.endswith(b'\n'):
+                                chunk = self.proc.stdout.read(1)
+                                if not chunk:
+                                    break
+                                line_bytes += chunk
+                            
+                            if line_bytes:
+                                try:
+                                    line = line_bytes.decode(self.encoding, errors='replace')
+                                    self._output_queue.put(('line', line))
+                                except Exception as e:
+                                    logger.error("Decode error: %s", e)
+                    except Exception as exc:
+                        logger.debug("Reader thread error: %s", exc)
+                    finally:
+                        self._output_queue.put(('eof', None))
+                
+                self._reader_thread = threading.Thread(
+                    target=reader,
+                    daemon=True,
+                    name=f"conpty-reader-{self.pid}"
+                )
+                self._reader_thread.start()
+            
+            def readline(self):
+                """Read one line from queue."""
+                try:
+                    event_type, data = self._output_queue.get(timeout=self.timeout)
+                    if event_type == 'eof':
+                        raise WindowsPTYWrapper.EOF()
+                    return data
+                except Empty:
+                    raise WindowsPTYWrapper.TIMEOUT()
+            
+            def sendline(self, text):
+                """Send text to stdin."""
+                if self.proc.stdin and not self._closed:
+                    try:
+                        self.proc.stdin.write((text + '\n').encode(self.encoding))
                         self.proc.stdin.flush()
-
-                def isalive(self):
-                    """Check if process is still running."""
-                    return self.proc.poll() is None
-
-                def close(self, force=False):
-                    """Close the process."""
-                    if self.isalive():
+                        logger.info("Sent %d bytes to stdin", len(text) + 1)
+                    except Exception as e:
+                        logger.error("Failed to write to stdin: %s", e)
+            
+            def isalive(self):
+                """Check if process is running."""
+                return self.proc.poll() is None
+            
+            def close(self, force=False):
+                """Close the process."""
+                self._closed = True
+                if self.isalive():
+                    try:
                         if force:
                             self.proc.kill()
                         else:
                             self.proc.terminate()
-                    try:
                         self.proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
+                    except:
                         self.proc.kill()
-
-            @staticmethod
-            def spawn(command, args, **kwargs):
-                """Spawn a process and return a PopenChild wrapper."""
-                full_cmd = [command] + list(args)
-                return WindowsPTYWrapper.PopenChild(
-                    cmd=full_cmd,
-                    cwd=kwargs.get('cwd'),
-                    env=kwargs.get('env'),
-                    encoding=kwargs.get('encoding', 'utf-8'),
-                    timeout=kwargs.get('timeout', 0.5),
-                )
-
-        logger.info("Created Windows PTY wrapper with threaded reader")
-        return WindowsPTYWrapper()
+        
+        @staticmethod
+        def spawn(command, args, **kwargs):
+            """Spawn process with ConPTY."""
+            full_cmd = [command] + list(args)
+            
+            # Add environment variables for unbuffered output
+            env = dict(kwargs.get('env', {}))
+            env.update({
+                "PYTHONUNBUFFERED": "1",
+                "FORCE_COLOR": "1",  # Enable colors
+                "TERM": "xterm-256color",  # Proper terminal type
+            })
+            kwargs['env'] = env
+            
+            return WindowsPTYWrapper.ConPTYChild(
+                cmd=full_cmd,
+                cwd=kwargs.get('cwd'),
+                env=env,
+                encoding=kwargs.get('encoding', 'utf-8'),
+                timeout=kwargs.get('timeout', 0.5),
+            )
+    
+    logger.info("Created Windows ConPTY wrapper")
+    return WindowsPTYWrapper()
