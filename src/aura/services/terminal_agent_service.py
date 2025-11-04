@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import shlex
-import subprocess
 import sys
 import threading
 import time
@@ -140,52 +139,33 @@ class TerminalAgentService:
         project_root: Path,
         env: Dict[str, str],
     ):
-        """Spawn the agent with platform-appropriate PTY or pipe supervision."""
+        """Spawn the agent with PTY on both Windows and Unix."""
         if not command:
             raise ValueError("Command must not be empty")
 
-        if sys.platform.startswith("win"):
-            # On Windows, launch the agent command directly with pipe supervision.
-            logger.info("Spawning headless Windows terminal with pipes: %s", command)
+        spawn_command, spawn_kwargs = self._prepare_spawn_command(command)
+        logger.info("Spawning PTY session: %s", spawn_command)
 
-            try:
-                process = subprocess.Popen(
-                    list(command),
-                    cwd=str(project_root),
-                    env=env,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,  # Combine stderr with stdout
-                    text=True,
-                    encoding='utf-8',
-                    errors='ignore',
-                    bufsize=1  # Line-buffered
-                )
-                return process  # Return the Popen object directly
-            except Exception as exc:
-                raise RuntimeError(f"Failed to spawn headless terminal for command {command}: {exc}") from exc
+        try:
+            child = self._expect.spawn(
+                spawn_command[0],
+                spawn_command[1:],
+                cwd=str(project_root),
+                env=env,
+                encoding="utf-8",
+                codec_errors="ignore",
+                timeout=self._READ_TIMEOUT_SECONDS,
+                **spawn_kwargs,
+            )
 
-        else:
-            # On Unix-like systems, the existing pexpect PTY approach works perfectly.
-            spawn_command, spawn_kwargs = self._prepare_spawn_command(command)
-            logger.info("Spawning PTY session: %s", spawn_command)
+            child.delaybeforesend = 0.05
 
-            try:
-                child = self._expect.spawn(
-                    spawn_command[0],
-                    spawn_command[1:],
-                    cwd=str(project_root),
-                    env=env,
-                    encoding="utf-8",
-                    codec_errors="ignore",
-                    timeout=self._READ_TIMEOUT_SECONDS,
-                    **spawn_kwargs,
-                )
-                child.delaybeforesend = 0.05
+            if not sys.platform.startswith("win"):
                 child.logfile_read = sys.stdout
-                return child
-            except Exception as exc:
-                raise RuntimeError(f"Failed to spawn PTY for command {spawn_command}: {exc}") from exc
+
+            return child
+        except Exception as exc:
+            raise RuntimeError(f"Failed to spawn PTY for command {spawn_command}: {exc}") from exc
 
     def _prepare_spawn_command(self, command: Sequence[str]) -> Tuple[List[str], Dict[str, Any]]:
         spawn_command = list(command)
@@ -194,7 +174,6 @@ class TerminalAgentService:
 
     def _send_initial_prompt(self, session: TerminalSession, agents_md_path: Path) -> None:
         """Send the initial AGENTS.md prompt to the agent."""
-        # Add a small delay to ensure the new process's stdin is ready.
         time.sleep(0.5)
 
         try:
@@ -213,15 +192,9 @@ class TerminalAgentService:
             logger.warning("Cannot send initial prompt; PTY child missing for task %s", session.task_id)
             return
 
-        logger.info("Sending AGENTS.md prompt to Claude Code for task %s", session.task_id)
+        logger.info("Sending AGENTS.MD prompt to Claude Code for task %s", session.task_id)
         with session.write_lock:
-            if sys.platform.startswith("win"):
-                # On Windows, child is a Popen object
-                child.stdin.write(prompt + "\n\n")
-                child.stdin.flush()
-            else:
-                # On Unix-like systems, child is a pexpect object
-                child.send(prompt + "\n\n")
+            child.sendline(prompt)
 
     def _start_monitor_thread(self, session: TerminalSession, log_path: Path) -> None:
         thread = threading.Thread(
@@ -242,88 +215,51 @@ class TerminalAgentService:
 
         try:
             with log_path.open("a", encoding="utf-8") as log_stream:
-                if sys.platform.startswith("win"):
-                    # On Windows, child is a Popen object
-                    while True:
-                        try:
-                            raw_line = child.stdout.readline()
-                        except Exception as exc:  # pragma: no cover - defensive fallback
-                            logger.error("Popen read failed for task %s: %s", session.task_id, exc, exc_info=True)
-                            break
+                while True:
+                    try:
+                        raw_line = child.readline()
+                    except self._expect.TIMEOUT:
+                        continue
+                    except self._expect.EOF:
+                        logger.info("PTY stream ended for task %s", session.task_id)
+                        break
+                    except Exception as exc:
+                        logger.error("PTY read failed for task %s: %s", session.task_id, exc, exc_info=True)
+                        break
 
-                        if not raw_line:
-                            # Empty string means stream closed
-                            logger.info("Popen stream closed for task %s", session.task_id)
-                            break
+                    if not raw_line:
+                        logger.info("PTY readline returned empty for task %s", session.task_id)
+                        break
 
-                        line = raw_line.rstrip("\r\n")
-                        if not line:
-                            continue
+                    line = raw_line.rstrip("\r\n")
+                    if not line:
+                        continue
 
-                        log_stream.write(line + "\n")
-                        log_stream.flush()
+                    log_stream.write(line + "\n")
+                    log_stream.flush()
 
-                        try:
-                            self.event_bus.dispatch(Event(
-                                event_type=AGENT_OUTPUT,
-                                payload={
-                                    "task_id": session.task_id,
-                                    "text": line,
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                            ))
-                        except Exception as exc:
-                            logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
+                    try:
+                        self.event_bus.dispatch(Event(
+                            event_type=AGENT_OUTPUT,
+                            payload={
+                                "task_id": session.task_id,
+                                "text": line,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        ))
+                    except Exception as exc:
+                        logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
 
-                        question = self._detect_question(line)
-                        if question:
-                            self._handle_agent_question(session, question)
-                else:
-                    # On Unix-like systems, child is a pexpect object
-                    while True:
-                        try:
-                            raw_line = child.readline()
-                        except self._expect.TIMEOUT:
-                            continue
-                        except self._expect.EOF:
-                            logger.info("PTY stream closed for task %s", session.task_id)
-                            break
-                        except Exception as exc:  # pragma: no cover - defensive fallback
-                            logger.error("PTY read failed for task %s: %s", session.task_id, exc, exc_info=True)
-                            break
+                    question = self._detect_question(line)
+                    if question:
+                        self._handle_agent_question(session, question)
 
-                        if not raw_line:
-                            continue
-
-                        line = raw_line.rstrip("\r\n")
-                        if not line:
-                            continue
-
-                        log_stream.write(line + "\n")
-                        log_stream.flush()
-
-                        try:
-                            self.event_bus.dispatch(Event(
-                                event_type=AGENT_OUTPUT,
-                                payload={
-                                    "task_id": session.task_id,
-                                    "text": line,
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                            ))
-                        except Exception as exc:
-                            logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
-
-                        question = self._detect_question(line)
-                        if question:
-                            self._handle_agent_question(session, question)
+        except Exception as exc:
+            logger.error("Monitor thread crashed for task %s: %s", session.task_id, exc, exc_info=True)
         finally:
-            if sys.platform.startswith("win"):
-                exit_code = child.poll()
-            else:
-                exit_code = getattr(child, "exitstatus", None)
-                if exit_code is None:
-                    exit_code = getattr(child, "status", None)
+            exit_code = getattr(child, "exitstatus", None)
+            if exit_code is None:
+                exit_code = getattr(child, "status", None)
             session.mark_exit(exit_code)
             self._safe_close(child)
             logger.info("PTY monitor stopped for task %s (exit_code=%s)", session.task_id, exit_code)
@@ -358,13 +294,7 @@ class TerminalAgentService:
         payload = message.rstrip()
         with session.write_lock:
             try:
-                if sys.platform.startswith("win"):
-                    # On Windows, child is a Popen object
-                    child.stdin.write(payload + '\n')
-                    child.stdin.flush()
-                else:
-                    # On Unix-like systems, child is a pexpect object
-                    child.sendline(payload)
+                child.sendline(payload)
             except Exception as exc:
                 logger.error("Failed to send response to agent for task %s: %s", session.task_id, exc, exc_info=True)
                 return
@@ -483,20 +413,10 @@ class TerminalAgentService:
         if child is None:
             return
         try:
-            if sys.platform.startswith("win"):
-                # On Windows, child is a Popen object
-                if child.poll() is None:
-                    child.terminate()
-                    try:
-                        child.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        child.kill()
+            if child.isalive():
+                child.close(force=True)
             else:
-                # On Unix-like systems, child is a pexpect object
-                if child.isalive():
-                    child.close(force=True)
-                else:
-                    child.close(force=False)
+                child.close(force=False)
         except Exception:
             logger.debug("Failed to close PTY child cleanly", exc_info=True)
 
