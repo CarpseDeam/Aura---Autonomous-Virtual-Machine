@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import sys
 
 import pytest
 
@@ -66,23 +67,39 @@ def test_handle_agent_question_prevents_duplicates(service: TerminalAgentService
     assert sent == ["Use a function."]
 
 
-def test_prepare_spawn_command_wraps_with_powershell(
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific behavior")
+def test_prepare_spawn_command_wraps_with_pwsh_on_windows(
     service: TerminalAgentService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(service, "_is_windows_pty", lambda: True)
-    monkeypatch.setattr(service, "_resolve_powershell_executable", lambda: "pwsh.exe")
     monkeypatch.setattr(
         "src.aura.services.terminal_agent_service.subprocess.list2cmdline",
         lambda items: " ".join(items),
     )
+    monkeypatch.setattr(
+        service,
+        "_resolve_powershell_executable",
+        lambda: r"C:\Program Files\PowerShell\7\pwsh.exe",
+    )
 
     command, kwargs = service._prepare_spawn_command(["codex"])  # noqa: SLF001
 
-    assert command[:3] == ["pwsh.exe", "-NoExit", "-Command"]
-    assert command[3].startswith("& ")
-    assert "codex" in command[3]
+    assert command[0].lower().endswith("pwsh.exe")
+    assert command[1:3] == ["-NoExit", "-Command"]
+    assert command[3].startswith("& codex")
     assert kwargs.get("interact") is True
+
+
+def test_prepare_spawn_command_returns_original_on_non_windows(
+    service: TerminalAgentService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    command, kwargs = service._prepare_spawn_command(["codex", "--flag"])  # noqa: SLF001
+
+    assert command == ["codex", "--flag"]
+    assert kwargs == {}
 
 
 def test_resolve_powershell_executable_errors_when_missing(
@@ -94,5 +111,7 @@ def test_resolve_powershell_executable_errors_when_missing(
         lambda *_args, **_kwargs: None,
     )
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as exc:
         service._resolve_powershell_executable()  # noqa: SLF001
+
+    assert "PowerShell 7 (pwsh.exe) is required" in str(exc.value)
