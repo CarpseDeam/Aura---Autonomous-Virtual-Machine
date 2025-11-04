@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QSplitter, QVBoxLayout, QWidget
 
@@ -32,6 +32,7 @@ from src.ui.widgets.chat_input_widget import ChatInputWidget
 from src.ui.widgets.terminal_monitor_widget import TerminalMonitorWidget
 from src.ui.widgets.thinking_indicator_widget import ThinkingIndicatorWidget
 from src.ui.widgets.toolbar_widget import ToolbarWidget
+from src.ui.qt_worker import Worker
 from src.ui.widgets.conversation_sidebar_widget import ConversationSidebarWidget
 
 logger = logging.getLogger(__name__)
@@ -222,11 +223,22 @@ class MainWindow(QMainWindow):
         self.chat_display.display_user_message(user_text, normalized_image)
         self.thinking_indicator.start_thinking("Analyzing your request...")
 
+        worker = Worker(self._handle_message_background, user_text, normalized_image)
+        QThreadPool.globalInstance().start(worker)
+
+    def _handle_message_background(self, user_text: str, normalized_image: Optional[str]) -> None:
+        """Runs in background thread - safe to block."""
+        logger.debug("Processing message in background")
+        if normalized_image:
+            logger.info(f"Image attachment received but not yet handled: {normalized_image}")
+
         project_name = self._resolve_active_project()
         try:
             self.supervisor.process_message(user_text, project_name)
         except Exception as exc:
             logger.error("Failed to process message with supervisor: %s", exc, exc_info=True)
+            # Since this is in a background thread, we need to explicitly restore the UI
+            self._restore_chat_input()
 
     def closeEvent(self, event) -> None:  # noqa: D401 - QWidget signature
         QApplication.quit()

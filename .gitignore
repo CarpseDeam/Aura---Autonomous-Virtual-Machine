@@ -122,6 +122,7 @@ logs/
 .claude/config.json
 /AGENTS.md
 !/AGENTS.md
+GEMINI.md
 /tmp_llm_service.txt
 /tmp_llm_service_segment.txt
 /assets/
