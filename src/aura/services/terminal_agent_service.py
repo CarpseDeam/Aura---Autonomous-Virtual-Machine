@@ -5,11 +5,12 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING, Tuple
 
 from src.aura.models.agent_task import AgentSpecification, TerminalSession
 from src.aura.services.agents_md_formatter import format_specification_for_codex
@@ -145,8 +146,17 @@ class TerminalAgentService:
         if not command:
             raise ValueError("PTY command must not be empty")
 
-        executable, *args = command
-        logger.info("Spawning PTY session: %s", command)
+        spawn_command, spawn_kwargs = self._prepare_spawn_command(command)
+
+        executable, *args = spawn_command
+        if spawn_command != list(command):
+            logger.info(
+                "Spawning PTY session via PowerShell wrapper (original=%s, effective=%s)",
+                command,
+                spawn_command,
+            )
+        else:
+            logger.info("Spawning PTY session: %s", spawn_command)
 
         try:
             child = self._expect.spawn(
@@ -157,13 +167,38 @@ class TerminalAgentService:
                 encoding="utf-8",
                 codec_errors="replace",
                 timeout=self._READ_TIMEOUT_SECONDS,
+                **spawn_kwargs,
             )
         except Exception as exc:  # pragma: no cover - expect library surfaces platform-specific exceptions
-            raise RuntimeError(f"Failed to spawn PTY for command {command}: {exc}") from exc
+            raise RuntimeError(
+                f"Failed to spawn PTY for command {spawn_command} (original={command}): {exc}"
+            ) from exc
 
         child.delaybeforesend = 0.05
         child.logfile_read = self._stdout_relay
         return child
+
+    def _prepare_spawn_command(self, command: Sequence[str]) -> Tuple[List[str], Dict[str, Any]]:
+        spawn_command = list(command)
+        spawn_kwargs: Dict[str, Any] = {}
+
+        if sys.platform.startswith("win") and getattr(self._expect, "__name__", "") == "wexpect":
+            command_line = subprocess.list2cmdline(spawn_command)
+            powershell_command = [
+                "powershell.exe",
+                "-NoExit",
+                "-Command",
+                f"& {command_line}",
+            ]
+            spawn_command = powershell_command
+            spawn_kwargs["interact"] = True
+            logger.debug(
+                "Wrapped Windows command for separate PowerShell window: %s -> %s",
+                command,
+                spawn_command,
+            )
+
+        return spawn_command, spawn_kwargs
 
     def _send_initial_prompt(self, session: TerminalSession, agents_md_path: Path) -> None:
         try:
