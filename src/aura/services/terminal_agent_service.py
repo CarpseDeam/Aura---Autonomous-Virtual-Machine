@@ -85,16 +85,7 @@ class TerminalAgentService:
         spec_path = self._persist_specification(spec)
         agents_md_path = self._write_agents_md(project_root, spec)
 
-        # Read the prompt content for print mode (-p flag)
-        prompt_content = None
-        if sys.platform.startswith("win"):
-            try:
-                prompt_content = agents_md_path.read_text(encoding="utf-8").strip()
-            except OSError as exc:
-                logger.error("Failed to read AGENTS.md for task %s: %s", spec.task_id, exc, exc_info=True)
-                raise RuntimeError(f"Failed to read AGENTS.md for task {spec.task_id}") from exc
-
-        command = self._build_command(spec, command_override, prompt_content)
+        command = self._build_command(spec, command_override)
 
         session_env = os.environ.copy()
         if sys.platform.startswith("win"):
@@ -126,9 +117,8 @@ class TerminalAgentService:
                 child=child,
                 log_path=str(log_path),
             )
-            # Only send initial prompt via stdin for non-Windows platforms (Unix uses interactive mode)
-            if not sys.platform.startswith("win"):
-                self._send_initial_prompt(session, agents_md_path)
+            # Send the initial prompt via stdin for all platforms (interactive mode)
+            self._send_initial_prompt(session, agents_md_path)
             self._start_monitor_thread(session, log_path)
             return session
         except Exception as exc:
@@ -408,10 +398,10 @@ class TerminalAgentService:
 
         tokens = self._ensure_claude_flags(tokens)
 
-        # On Windows, use print mode (-p flag) with the prompt as an argument
-        if sys.platform.startswith("win") and prompt:
-            tokens.extend(["-p", prompt])
-            logger.info("Added print mode flag with prompt for task %s", spec.task_id)
+        if sys.platform.startswith("win"):
+            # Use interactive mode on Windows to avoid command-line length limits
+            logger.info("Using interactive mode for task %s (prompt will be sent via stdin)", spec.task_id)
+            # Don't add -p flag - we'll send prompt via stdin after spawn
 
         return tokens
 

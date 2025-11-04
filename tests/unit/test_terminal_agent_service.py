@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 import subprocess
@@ -125,9 +126,10 @@ def test_prepare_spawn_command_returns_original_on_non_windows(
     assert kwargs == {}
 
 
-def test_build_command_adds_print_mode_flag_on_windows(
+def test_build_command_uses_interactive_mode_on_windows(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
@@ -143,12 +145,16 @@ def test_build_command_adds_print_mode_flag_on_windows(
     )
 
     prompt_content = "This is the AGENTS.md content for the task"
-    command = service._build_command(spec, None, prompt_content)  # noqa: SLF001
+    with caplog.at_level(logging.INFO):
+        command = service._build_command(spec, None, prompt_content)  # noqa: SLF001
 
-    assert "-p" in command
-    p_index = command.index("-p")
-    assert command[p_index + 1] == prompt_content
+    assert "-p" not in command
+    assert prompt_content not in command
     assert "--dangerously-skip-permissions" in command
+    assert any(
+        "Using interactive mode for task test-task" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_build_command_no_print_mode_on_non_windows(
