@@ -219,17 +219,7 @@ class TerminalAgentService:
         logger.info("Log path: %s", log_path)
         logger.info("=" * 60)
 
-        if sys.platform.startswith("win"):
-            from src.aura.services.output_monitor import FileStreamMonitor
-            output_file = self.spec_dir / f"{session.task_id}.output.log"
-            monitor = FileStreamMonitor(poll_interval=0.1, child_process=child)
-            logger.info("Using FileStreamMonitor for Windows (output_file=%s)", output_file)
-            monitor_path = output_file
-        else:
-            from src.aura.services.output_monitor import PipeStreamMonitor
-            monitor = PipeStreamMonitor(child)
-            logger.info("Using PipeStreamMonitor for Unix")
-            monitor_path = log_path
+        monitor = None
 
         def handle_line(line: str) -> None:
             logger.info("GOT LINE: %r", line[:100])
@@ -256,11 +246,47 @@ class TerminalAgentService:
                 logger.debug("Failed to dispatch event for task %s: %s", session.task_id, exc)
 
         try:
-            monitor.start_monitoring(monitor_path, handle_line)
+            if sys.platform.startswith("win"):
+                output_file = self.spec_dir / f"{session.task_id}.output.log"
+                logger.info("Monitoring Windows process with buffered output: %s", output_file)
+
+                while session.is_alive():
+                    time.sleep(0.1)
+
+                logger.info(
+                    "Windows process completed for task %s; reading buffered output from %s",
+                    session.task_id,
+                    output_file,
+                )
+
+                if not output_file.exists():
+                    logger.warning("Output file missing for task %s: %s", session.task_id, output_file)
+                else:
+                    try:
+                        with output_file.open("r", encoding="utf-8", errors="replace") as f:
+                            buffered_lines = f.readlines()
+                        for raw_line in buffered_lines:
+                            line = raw_line.rstrip("\r\n")
+                            if line.strip():
+                                handle_line(line)
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to read output file for task %s: %s",
+                            session.task_id,
+                            exc,
+                            exc_info=True,
+                        )
+            else:
+                from src.aura.services.output_monitor import PipeStreamMonitor
+                monitor = PipeStreamMonitor(child)
+                logger.info("Using PipeStreamMonitor for Unix")
+                monitor.start_monitoring(log_path, handle_line)
+
         except Exception as exc:
             logger.error("Monitor crashed for task %s: %s", session.task_id, exc, exc_info=True)
         finally:
-            monitor.stop_monitoring()
+            if monitor is not None:
+                monitor.stop_monitoring()
             exit_code = getattr(child, "exitstatus", None)
             if exit_code is None:
                 exit_code = getattr(child, "status", None)

@@ -147,7 +147,7 @@ def test_build_command_uses_interactive_mode_on_windows(
     assert len(command) == 7
 
     powershell_command = command[6]
-    assert "-p $input" in powershell_command
+    assert "-p $prompt" in powershell_command
     assert "--dangerously-skip-permissions" in powershell_command
     assert "claude.cmd" in powershell_command
     assert "Get-Content" in powershell_command
