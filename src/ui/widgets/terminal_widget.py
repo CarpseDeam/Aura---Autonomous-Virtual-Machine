@@ -37,10 +37,10 @@ class TerminalWidget(QWidget):
         self._html_path = html_path or self._default_html_path()
         self._web_view = QWebEngineView(self)
         self._page_ready = False
+        self._page_loaded = False
         self._pending_scripts: List[Tuple[str, Optional[Callable[[object], None]]]] = []
         self._web_view.loadFinished.connect(self._on_load_finished)
         self._init_layout()
-        self._load_terminal_page()
 
     def _init_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -56,6 +56,9 @@ class TerminalWidget(QWidget):
         return default_path
 
     def _load_terminal_page(self) -> None:
+        if self._page_loaded:
+            logger.debug("Terminal page already loaded, skipping")
+            return
         self._page_ready = False
         self._pending_scripts.clear()
         url = QUrl.fromLocalFile(str(self._html_path))
@@ -63,6 +66,7 @@ class TerminalWidget(QWidget):
         url.setQuery("&".join(query_items))
         logger.debug("Loading terminal HTML: %s", url.toString())
         self._web_view.load(url)
+        self._page_loaded = True
 
     def set_connection_target(self, *, host: str, port: int) -> None:
         """
@@ -76,6 +80,7 @@ class TerminalWidget(QWidget):
         self._ws_host = host
         self._ws_port = port
         if reload_needed:
+            self._page_loaded = False
             self._load_terminal_page()
 
     def focus_terminal(self) -> None:

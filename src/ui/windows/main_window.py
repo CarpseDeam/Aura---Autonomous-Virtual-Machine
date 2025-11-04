@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QThreadPool, Signal
+from PySide6.QtCore import Qt, QThreadPool, Signal, QTimer
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QSplitter, QVBoxLayout, QWidget
 
@@ -22,6 +22,7 @@ from src.aura.services.conversation_management_service import ConversationManage
 from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.terminal_agent_service import TerminalAgentService
+from src.aura.services.terminal_bridge import TerminalBridge
 from src.aura.services.terminal_session_manager import TerminalSessionManager
 from src.aura.services.user_settings_manager import get_auto_accept_changes
 from src.aura.services.workspace_service import WorkspaceService
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
             workspace_service,
             self.event_bus,
         )
+        self.terminal_bridge: TerminalBridge = terminal_service._terminal_bridge
 
         self._auto_accept_enabled = get_auto_accept_changes()
 
@@ -115,6 +117,7 @@ class MainWindow(QMainWindow):
         self._subscribe_supervisor_events()
 
         self.chat_display.display_boot_sequence(BOOT_SEQUENCE)
+        QTimer.singleShot(100, self._ensure_terminal_ready)
 
     def _set_window_icon(self) -> None:
         icon_path = ASSETS_DIR / "aura_gear_icon.ico"
@@ -251,6 +254,19 @@ class MainWindow(QMainWindow):
         self.thinking_indicator.stop_thinking()
         self.chat_input.setEnabled(True)
         self.chat_input.focus_input()
+
+    def _ensure_terminal_ready(self) -> None:
+        """Wait for terminal bridge readiness before loading the terminal UI."""
+        logger.debug("Waiting for terminal bridge to be ready...")
+        if self.terminal_bridge.wait_ready(timeout=5.0):
+            logger.info("Terminal bridge ready, loading terminal widget")
+            self.terminal_widget._load_terminal_page()
+            return
+        logger.error("Terminal bridge failed to become ready within timeout")
+        self.chat_display.display_system_message(
+            "ERROR",
+            "Terminal bridge failed to start. Commands will not execute.",
+        )
 
     def _resolve_active_project(self) -> str:
         active = getattr(self.workspace_service, "active_project", None)

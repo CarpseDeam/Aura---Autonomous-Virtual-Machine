@@ -64,6 +64,7 @@ class TerminalBridge:
 
         self._session_lock = threading.RLock()
         self._session: Optional[_SessionBinding] = None
+        self._ready_event = threading.Event()
 
     # ------------------------------------------------------------------ Public API
     def start(self) -> None:
@@ -72,6 +73,7 @@ class TerminalBridge:
             logger.debug("Terminal bridge already running on %s:%s", self._host, self._port)
             return
 
+        self._ready_event.clear()
         self._thread = threading.Thread(
             target=self._run_event_loop,
             name="aura-terminal-bridge",
@@ -82,6 +84,7 @@ class TerminalBridge:
 
     def stop(self) -> None:
         """Stop the websocket server and tear down active sessions."""
+        self._ready_event.clear()
         loop = self._loop
         if loop is None:
             return
@@ -133,6 +136,18 @@ class TerminalBridge:
         with self._session_lock:
             self._close_session_locked()
 
+    def wait_ready(self, timeout: float = 5.0) -> bool:
+        """
+        Block until the WebSocket server is ready to accept connections.
+
+        Args:
+            timeout: Maximum seconds to wait for readiness.
+
+        Returns:
+            True when the bridge signalled readiness, False on timeout.
+        """
+        return self._ready_event.wait(timeout)
+
     def send_input(self, data: str) -> None:
         """
         Inject input directly into the underlying PTY.
@@ -175,6 +190,7 @@ class TerminalBridge:
             self._port,
             ping_interval=None,
         )
+        self._ready_event.set()
 
     async def _handle_connection(self, websocket: WebSocketServerProtocol) -> None:
         previous = self._active_websocket
