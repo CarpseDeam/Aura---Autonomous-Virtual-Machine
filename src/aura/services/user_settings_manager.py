@@ -24,7 +24,7 @@ TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
     },
     "claude_code": {
         "label": "Claude Code",
-        "command_template": "claude --dangerously-skip-permissions"
+        "command_template": "C:\\Users\\carps\\AppData\\Roaming\\npm\\claude.cmd --dangerously-skip-permissions"
     },
     "gemini-cli": {
         "label": "Gemini CLI",

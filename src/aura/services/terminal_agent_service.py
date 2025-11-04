@@ -52,7 +52,7 @@ class TerminalAgentService:
         self.llm_service = llm_service
         self.question_agent_name = question_agent_name
 
-        self.agent_command_template = agent_command_template or "claude --dangerously-skip-permissions"
+        self.agent_command_template = agent_command_template or "C:\\Users\\carps\\AppData\\Roaming\\npm\\claude.cmd --dangerously-skip-permissions"
         self._expect = self._load_expect_module()
         self._question_patterns = self._compile_question_patterns()
 
