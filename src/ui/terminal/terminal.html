@@ -106,6 +106,7 @@
                 socket = new WebSocket(wsUrl);
 
                 socket.addEventListener('open', () => {
+                    console.log('[Aura Terminal] WebSocket connected to', wsUrl);
                     setStatus('connected', 800);
                     reconnectDelay = 1000;
                     resizeTerminal();
@@ -123,7 +124,8 @@
                     }
                 });
 
-                socket.addEventListener('close', () => {
+                socket.addEventListener('close', (event) => {
+                    console.log('[Aura Terminal] WebSocket closed. Code:', event.code, 'Reason:', event.reason);
                     setStatus('disconnected - retrying...');
                     socket = null;
                     setTimeout(connect, reconnectDelay);
@@ -131,7 +133,7 @@
                 });
 
                 socket.addEventListener('error', (err) => {
-                    console.error('WebSocket error', err);
+                    console.error('[Aura Terminal] WebSocket error:', err);
                     socket?.close();
                 });
             }

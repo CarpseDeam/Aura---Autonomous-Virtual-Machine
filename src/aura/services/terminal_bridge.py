@@ -150,13 +150,7 @@ class TerminalBridge:
         self._loop = loop
         asyncio.set_event_loop(loop)
         try:
-            start_server = websockets.serve(
-                self._handle_connection,
-                self._host,
-                self._port,
-                ping_interval=None,
-            )
-            self._server = loop.run_until_complete(start_server)
+            loop.run_until_complete(self._start_server())
             logger.info("Terminal bridge listening on ws://%s:%s", self._host, self._port)
             loop.run_forever()
         except Exception as exc:
@@ -172,6 +166,15 @@ class TerminalBridge:
                 loop.close()
                 self._loop = None
                 logger.debug("Terminal bridge event loop terminated")
+
+    async def _start_server(self) -> None:
+        """Start the WebSocket server within the running event loop."""
+        self._server = await websockets.serve(
+            self._handle_connection,
+            self._host,
+            self._port,
+            ping_interval=None,
+        )
 
     async def _handle_connection(self, websocket: WebSocketServerProtocol) -> None:
         previous = self._active_websocket

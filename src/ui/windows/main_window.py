@@ -14,6 +14,7 @@ from src.aura.models.event_types import (
     TERMINAL_EXECUTE_COMMAND,
     TERMINAL_SESSION_COMPLETED,
     TERMINAL_SESSION_FAILED,
+    TERMINAL_SESSION_STARTED,
 )
 from src.aura.models.events import Event
 from src.aura.services.agent_supervisor import AgentSupervisor
@@ -182,6 +183,7 @@ class MainWindow(QMainWindow):
     def _subscribe_supervisor_events(self) -> None:
         """Subscribe to supervisor-emitted events for agent output and lifecycle."""
         self.event_bus.subscribe(AGENT_OUTPUT, self._handle_agent_output)
+        self.event_bus.subscribe(TERMINAL_SESSION_STARTED, self._handle_terminal_session_started)
         self.event_bus.subscribe(TERMINAL_SESSION_COMPLETED, self._handle_session_completed)
         self.event_bus.subscribe(TERMINAL_SESSION_FAILED, self._handle_session_failed)
         self.event_bus.subscribe(TERMINAL_EXECUTE_COMMAND, self._handle_terminal_command)
@@ -198,6 +200,16 @@ class MainWindow(QMainWindow):
         if self.thinking_indicator.is_animating:
             self.thinking_indicator.stop_thinking()
         self.chat_display.display_system_message("AGENT", text)
+
+    def _handle_terminal_session_started(self, event: Event) -> None:
+        payload = event.payload or {}
+        task_id = payload.get("task_id")
+        command = payload.get("command", [])
+        command_str = " ".join(command) if isinstance(command, list) else str(command)
+        identifier = str(task_id) if task_id else "?"
+        logger.info("Terminal session started for task %s: %s", identifier, command_str)
+        short_identifier = identifier[:8] if identifier != "?" else identifier
+        self.chat_display.display_system_message("SYSTEM", f" Executing task {short_identifier}...")
 
     def _handle_terminal_command(self, event: Event) -> None:
         payload = event.payload or {}

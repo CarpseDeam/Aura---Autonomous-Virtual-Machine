@@ -127,7 +127,10 @@ class TerminalWidget(QWidget):
         if not self._page_ready:
             self._pending_scripts.append((script, callback))
             return
-        page.runJavaScript(script, callback)
+        if callback is not None:
+            page.runJavaScript(script, callback)
+        else:
+            page.runJavaScript(script)
 
     def _emit_output(self, result: object) -> None:
         if isinstance(result, str):
