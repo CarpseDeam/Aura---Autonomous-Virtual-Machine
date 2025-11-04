@@ -78,7 +78,17 @@ class TerminalAgentService:
         project_root = self._resolve_project_root(spec)
         spec_path = self._persist_specification(spec)
         agents_md_path = self._write_agents_md(project_root, spec)
-        command = self._build_command(spec, command_override)
+
+        # Read the prompt content for print mode (-p flag)
+        prompt_content = None
+        if sys.platform.startswith("win"):
+            try:
+                prompt_content = agents_md_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                logger.error("Failed to read AGENTS.md for task %s: %s", spec.task_id, exc, exc_info=True)
+                raise RuntimeError(f"Failed to read AGENTS.md for task {spec.task_id}") from exc
+
+        command = self._build_command(spec, command_override, prompt_content)
 
         session_env = os.environ.copy()
         if sys.platform.startswith("win"):
@@ -110,7 +120,9 @@ class TerminalAgentService:
                 child=child,
                 log_path=str(log_path),
             )
-            self._send_initial_prompt(session, agents_md_path)
+            # Only send initial prompt via stdin for non-Windows platforms (Unix uses interactive mode)
+            if not sys.platform.startswith("win"):
+                self._send_initial_prompt(session, agents_md_path)
             self._start_monitor_thread(session, log_path)
             return session
         except Exception as exc:
@@ -355,6 +367,7 @@ class TerminalAgentService:
         self,
         spec: AgentSpecification,
         command_override: Optional[Sequence[str]],
+        prompt: Optional[str] = None,
     ) -> List[str]:
         if command_override:
             tokens = list(command_override)
@@ -363,7 +376,14 @@ class TerminalAgentService:
             tokens = self._render_template_command(spec)
             logger.info("Rendered command template for task %s: %s", spec.task_id, tokens)
 
-        return self._ensure_claude_flags(tokens)
+        tokens = self._ensure_claude_flags(tokens)
+
+        # On Windows, use print mode (-p flag) with the prompt as an argument
+        if sys.platform.startswith("win") and prompt:
+            tokens.extend(["-p", prompt])
+            logger.info("Added print mode flag with prompt for task %s", spec.task_id)
+
+        return tokens
 
     def _render_template_command(self, spec: AgentSpecification) -> List[str]:
         template = (self.agent_command_template or "").strip()

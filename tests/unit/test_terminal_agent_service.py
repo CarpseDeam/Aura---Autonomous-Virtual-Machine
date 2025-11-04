@@ -115,3 +115,53 @@ def test_prepare_spawn_command_returns_original_on_non_windows(
 
     assert command == ["codex", "--flag"]
     assert kwargs == {}
+
+
+def test_build_command_adds_print_mode_flag_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
+
+    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
+
+    from src.aura.models.agent_task import AgentSpecification
+
+    spec = AgentSpecification(
+        task_id="test-task",
+        request="Test request",
+        prompt="Test prompt",
+    )
+
+    prompt_content = "This is the AGENTS.md content for the task"
+    command = service._build_command(spec, None, prompt_content)  # noqa: SLF001
+
+    assert "-p" in command
+    p_index = command.index("-p")
+    assert command[p_index + 1] == prompt_content
+    assert "--dangerously-skip-permissions" in command
+
+
+def test_build_command_no_print_mode_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(TerminalAgentService, "_load_expect_module", lambda _self: DummyExpectModule)
+
+    service = TerminalAgentService(workspace_root=tmp_path, llm_service=DummyLLM())
+
+    from src.aura.models.agent_task import AgentSpecification
+
+    spec = AgentSpecification(
+        task_id="test-task",
+        request="Test request",
+        prompt="Test prompt",
+    )
+
+    prompt_content = "This is the AGENTS.md content for the task"
+    command = service._build_command(spec, None, prompt_content)  # noqa: SLF001
+
+    assert "-p" not in command
+    assert prompt_content not in command
