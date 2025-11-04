@@ -64,3 +64,35 @@ def test_handle_agent_question_prevents_duplicates(service: TerminalAgentService
     service._handle_agent_question(session, "Should I use a function?")  # noqa: SLF001
 
     assert sent == ["Use a function."]
+
+
+def test_prepare_spawn_command_wraps_with_powershell(
+    service: TerminalAgentService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(service, "_is_windows_pty", lambda: True)
+    monkeypatch.setattr(service, "_resolve_powershell_executable", lambda: "pwsh.exe")
+    monkeypatch.setattr(
+        "src.aura.services.terminal_agent_service.subprocess.list2cmdline",
+        lambda items: " ".join(items),
+    )
+
+    command, kwargs = service._prepare_spawn_command(["codex"])  # noqa: SLF001
+
+    assert command[:3] == ["pwsh.exe", "-NoExit", "-Command"]
+    assert command[3].startswith("& ")
+    assert "codex" in command[3]
+    assert kwargs.get("interact") is True
+
+
+def test_resolve_powershell_executable_errors_when_missing(
+    service: TerminalAgentService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.aura.services.terminal_agent_service.shutil.which",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError):
+        service._resolve_powershell_executable()  # noqa: SLF001

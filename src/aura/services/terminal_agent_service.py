@@ -60,7 +60,6 @@ class TerminalAgentService:
         workspace_root: Path,
         llm_service: LLMService,
         *,
-        default_command: Optional[Sequence[str]] = None,
         agent_command_template: Optional[str] = None,
         question_agent_name: str = _DEFAULT_LLM_AGENT,
     ) -> None:
@@ -72,11 +71,11 @@ class TerminalAgentService:
         self.llm_service = llm_service
         self.question_agent_name = question_agent_name
 
-        self.default_command = list(default_command) if default_command else None
         self.agent_command_template = agent_command_template or "claude-code --dangerously-skip-permissions"
         self._expect = self._load_expect_module()
         self._stdout_relay = _StdoutRelay()
         self._question_patterns = self._compile_question_patterns()
+        self._powershell_executable: Optional[str] = None
 
         logger.info(
             "TerminalAgentService initialized with PTY support (workspace=%s, template=%s, llm_agent=%s)",
@@ -186,40 +185,8 @@ class TerminalAgentService:
         spawn_command = list(command)
         spawn_kwargs: Dict[str, Any] = {}
 
-        if sys.platform.startswith("win") and getattr(self._expect, "__name__", "") == "wexpect":
-            command_line = subprocess.list2cmdline(spawn_command)
-
-            # Try PowerShell 7 first (better UTF-8 support)
-            if shutil.which("pwsh.exe"):
-                ps_executable = "pwsh.exe"
-                logger.info("Using PowerShell 7 (pwsh.exe) for native UTF-8 support.")
-                powershell_command = [
-                    ps_executable,
-                    "-NoExit",
-                    "-Command",
-                    f"& {command_line}",
-                ]
-            else:
-                ps_executable = "powershell.exe"
-                logger.warning(
-                    "PowerShell 7 (pwsh.exe) not found, falling back to Windows PowerShell (powershell.exe). "
-                    "For optimal Unicode support, please install PowerShell 7."
-                )
-                encoding_directives = [
-                    "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
-                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-                    "$OutputEncoding = [System.Text.Encoding]::UTF8",
-                    "chcp.com 65001 > $null"
-                ]
-                powershell_script = "; ".join(encoding_directives) + f"; & {command_line}"
-                powershell_command = [
-                    ps_executable,
-                    "-NoExit",
-                    "-Command",
-                    powershell_script,
-                ]
-
-            spawn_command = powershell_command
+        if self._is_windows_pty():
+            spawn_command = self._wrap_command_with_powershell(spawn_command)
             spawn_kwargs["interact"] = True
 
             logger.debug(
@@ -362,9 +329,6 @@ class TerminalAgentService:
         if command_override:
             tokens = list(command_override)
             logger.info("Using command override for task %s: %s", spec.task_id, tokens)
-        elif self.default_command:
-            tokens = list(self.default_command)
-            logger.info("Using default command for task %s: %s", spec.task_id, tokens)
         else:
             tokens = self._render_template_command(spec)
             logger.info("Rendered command template for task %s: %s", spec.task_id, tokens)
@@ -483,3 +447,44 @@ class TerminalAgentService:
             ) from exc
         logger.info("Loaded PTY backend module: %s", module_name)
         return module
+
+    def _is_windows_pty(self) -> bool:
+        return sys.platform.startswith("win") and getattr(self._expect, "__name__", "") == "wexpect"
+
+    def _wrap_command_with_powershell(self, command: Sequence[str]) -> List[str]:
+        powershell_executable = self._resolve_powershell_executable()
+        command_line = subprocess.list2cmdline(list(command))
+        ps_command = f"& {command_line}"
+        wrapped = [
+            powershell_executable,
+            "-NoExit",
+            "-Command",
+            ps_command,
+        ]
+        logger.info(
+            "Launching PowerShell console %s for command: %s",
+            powershell_executable,
+            ps_command,
+        )
+        return wrapped
+
+    def _resolve_powershell_executable(self) -> str:
+        if self._powershell_executable:
+            return self._powershell_executable
+
+        candidate = shutil.which("pwsh.exe")
+        if candidate:
+            self._powershell_executable = candidate
+            logger.info("Using PowerShell 7 executable: %s", candidate)
+            return candidate
+
+        candidate = shutil.which("powershell.exe")
+        if candidate:
+            self._powershell_executable = candidate
+            logger.warning(
+                "PowerShell 7 (pwsh.exe) not found; falling back to Windows PowerShell: %s",
+                candidate,
+            )
+            return candidate
+
+        raise RuntimeError("Unable to locate PowerShell (pwsh.exe or powershell.exe) in PATH.")

@@ -128,7 +128,6 @@ class AuraApp:
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
             llm_service=self.llm_service,
-            default_command=None,  # Will use template-based command building
             agent_command_template=agent_command_template,
         )
         # Ensure the requested project is active
