@@ -5,12 +5,25 @@ import logging
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import QObject, QUrl, Signal
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 
 logger = logging.getLogger(__name__)
+
+
+class PermissiveWebEnginePage(QWebEnginePage):
+    """QWebEnginePage that permits the embedded terminal to open WebSocket connections."""
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        settings = self.settings()
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
+        settings.setAttribute(QWebEngineSettings.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
 
 
 class TerminalWidget(QWidget):
@@ -36,6 +49,8 @@ class TerminalWidget(QWidget):
         self._ws_port = ws_port
         self._html_path = html_path or self._default_html_path()
         self._web_view = QWebEngineView(self)
+        custom_page = PermissiveWebEnginePage(self._web_view)
+        self._web_view.setPage(custom_page)
         self._page_ready = False
         self._page_loaded = False
         self._pending_scripts: List[Tuple[str, Optional[Callable[[object], None]]]] = []
