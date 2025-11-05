@@ -67,32 +67,25 @@ def format_specification_for_gemini(spec: AgentSpecification) -> str:
     It should be placed in the project root where Gemini will auto-read it.
     """
     file_entries = _collect_file_paths(spec)
+    watch_paths = _normalize_sequence(spec.files_to_watch)
+    prompt_body = _sanitize_block(spec.prompt)
 
     lines: List[str] = [
         BASE_GUIDELINES.strip(),
         "---",
-        "# Task",
-        _sanitize_block(spec.prompt),
+        prompt_body,
         "",
-        "## Files to Create/Modify",
+        "## Task Context",
+        f"- Project: {spec.project_name or '(unspecified)'}",
+        f"- Task ID: {spec.task_id}",
+        f"- Request: {spec.request.strip() or '(no request provided)'}",
     ]
 
     if file_entries:
+        lines.append("")
+        lines.append("## File Checklist")
         lines.extend(f"- {path}" for path in file_entries)
-    else:
-        lines.append("- No specific files identified.")
 
-    lines.extend(
-        [
-            "",
-            "## Context",
-            f"- Project: {spec.project_name or '(unspecified)'}",
-            f"- Task ID: {spec.task_id}",
-            f"- Request: {spec.request.strip() or '(no request provided)'}",
-        ]
-    )
-
-    watch_paths = _normalize_sequence(spec.files_to_watch)
     if watch_paths:
         lines.append("")
         lines.append("## Files to Monitor")
@@ -116,7 +109,7 @@ def format_specification_for_gemini(spec: AgentSpecification) -> str:
 
 def _sanitize_block(value: str) -> str:
     result = (value or "").strip()
-    return result or "(no task description provided)"
+    return result or "(no task specification provided)"
 
 
 def _collect_file_paths(spec: AgentSpecification) -> List[str]:
