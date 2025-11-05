@@ -1,4 +1,4 @@
-"""Utilities for serializing AgentSpecification data into Codex-friendly AGENTS.md files."""
+"""Utilities for serializing AgentSpecification data into Claude-friendly CLAUDE.md files."""
 
 from __future__ import annotations
 
@@ -59,8 +59,13 @@ These conventions capture how the Aura engineering team writes code today. Study
 """
 
 
-def format_specification_for_codex(spec: AgentSpecification) -> str:
-    """Convert an AgentSpecification into the AGENTS.md structure expected by Codex."""
+def format_specification_for_claude(spec: AgentSpecification) -> str:
+    """
+    Convert an AgentSpecification into CLAUDE.md format.
+
+    CLAUDE.md is Claude Code's native project context file format.
+    It should be placed in the project root where Claude will auto-read it.
+    """
     file_entries = _collect_file_paths(spec)
 
     lines: List[str] = [
@@ -69,7 +74,7 @@ def format_specification_for_codex(spec: AgentSpecification) -> str:
         "# Task",
         _sanitize_block(spec.prompt),
         "",
-        "## Files",
+        "## Files to Create/Modify",
     ]
 
     if file_entries:
@@ -90,13 +95,13 @@ def format_specification_for_codex(spec: AgentSpecification) -> str:
     watch_paths = _normalize_sequence(spec.files_to_watch)
     if watch_paths:
         lines.append("")
-        lines.append("## Watch Files")
+        lines.append("## Files to Monitor")
         lines.extend(f"- {path}" for path in watch_paths)
 
     lines.append("")
-    lines.append("## Completion & Summary")
+    lines.append("## Completion Requirements")
     lines.append(f"- Write `.aura/{spec.task_id}.done` when the task is finished.")
-    lines.append(f"- Also write `.aura/{spec.task_id}.summary.json` capturing:")
+    lines.append(f"- Write `.aura/{spec.task_id}.summary.json` with the following structure:")
     lines.append("  - status: one of `completed`, `failed`, or `partial`")
     lines.append("  - files_created: list of file paths created")
     lines.append("  - files_modified: list of file paths modified")

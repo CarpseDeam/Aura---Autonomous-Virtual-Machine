@@ -15,7 +15,7 @@ from src.aura.models.event_types import (
     TERMINAL_OUTPUT_RECEIVED,
 )
 from src.aura.models.events import Event
-from src.aura.services.agents_md_formatter import format_specification_for_codex
+from src.aura.services.agents_md_formatter import format_specification_for_claude
 from src.aura.services.terminal_bridge import TerminalBridge
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ class TerminalAgentService:
     """
     Coordinate terminal-based agent sessions through the embedded xterm.js terminal.
 
-    The service persists task specifications, prepares AGENTS.md handoff files, and
+    The service persists task specifications, prepares CLAUDE.md handoff files, and
     relays execution commands to the TerminalBridge so the user can watch the live shell.
     """
 
@@ -96,8 +96,8 @@ class TerminalAgentService:
 
         project_root = self._resolve_project_root(spec)
         spec_path = self._persist_specification(spec)
-        prompt_document = format_specification_for_codex(spec)
-        agents_md_path = self._write_agents_md(project_root, prompt_document, spec)
+        prompt_document = format_specification_for_claude(spec)
+        claude_md_path = self._write_claude_md(project_root, prompt_document, spec)
         prompt_path = self._write_prompt_file(spec.task_id, prompt_document)
 
         command_tokens = self._build_command(spec, command_override)
@@ -129,7 +129,7 @@ class TerminalAgentService:
                         "task_id": spec.task_id,
                         "command": terminal_command,
                         "project_root": str(project_root),
-                        "agents_md_path": str(agents_md_path),
+                        "claude_md_path": str(claude_md_path),
                     },
                 )
             )
@@ -186,16 +186,22 @@ class TerminalAgentService:
         logger.debug("Persisted agent specification for task %s to %s", spec.task_id, spec_path)
         return spec_path
 
-    def _write_agents_md(self, project_root: Path, document: str, spec: AgentSpecification) -> Path:
-        agents_md_path = project_root / "AGENTS.md"
-        try:
-            agents_md_path.write_text(document, encoding="utf-8")
-        except OSError as exc:
-            logger.error("Failed to write AGENTS.md for task %s: %s", spec.task_id, exc, exc_info=True)
-            raise RuntimeError(f"Failed to write AGENTS.md for task {spec.task_id}") from exc
+    def _write_claude_md(self, project_root: Path, document: str, spec: AgentSpecification) -> Path:
+        """
+        Write CLAUDE.md (Claude's native context file) to project root.
 
-        logger.info("Wrote AGENTS.md for task %s to %s", spec.task_id, agents_md_path)
-        return agents_md_path
+        Claude Code automatically reads CLAUDE.md for project context.
+        This is the standard format per official documentation.
+        """
+        claude_md_path = project_root / "CLAUDE.md"
+        try:
+            claude_md_path.write_text(document, encoding="utf-8")
+        except OSError as exc:
+            logger.error("Failed to write CLAUDE.md for task %s: %s", spec.task_id, exc, exc_info=True)
+            raise RuntimeError(f"Failed to write CLAUDE.md for task {spec.task_id}") from exc
+
+        logger.info("Wrote CLAUDE.md for task %s to %s", spec.task_id, claude_md_path)
+        return claude_md_path
 
     def _write_prompt_file(self, task_id: str, prompt_document: str) -> Path:
         prompt_path = self.spec_dir / f"{task_id}.prompt.txt"
@@ -208,23 +214,29 @@ class TerminalAgentService:
         spec: AgentSpecification,
         command_override: Optional[Sequence[str]],
     ) -> List[str]:
+        """
+        Build command tokens for Claude Code headless execution.
+
+        Per Claude CLI docs, use -p flag for non-interactive mode and
+        provide a simple prompt. Claude will auto-read CLAUDE.md from cwd.
+        """
         if command_override:
             tokens = list(command_override)
             logger.info("Using command override for task %s: %s", spec.task_id, tokens)
             return tokens
 
-        project_root = self._resolve_project_root(spec)
-        agents_md_path = project_root / "AGENTS.md"
+        template_parts = self.agent_command_template.split()
+        base_cmd = template_parts[0]
 
-        tokens = shlex.split(self.agent_command_template, posix=not sys.platform.startswith("win"))
-        tokens = self._ensure_claude_flags(tokens)
-
-        if not tokens:
-            raise ValueError("Resolved agent command is empty")
+        tokens = [
+            base_cmd,
+            "--dangerously-skip-permissions",
+            "-p",
+            f"Implement all tasks described in CLAUDE.md. Follow the implementation steps exactly. When complete, write the summary to .aura/{spec.task_id}.summary.json and create .aura/{spec.task_id}.done file."
+        ]
 
         logger.info("Built command for task %s: %s", spec.task_id, " ".join(tokens))
-        logger.info("Working directory will be: %s", project_root)
-        logger.info("AGENTS.md location: %s", agents_md_path)
+        logger.info("Working directory will be: %s", self._resolve_project_root(spec))
 
         return tokens
 

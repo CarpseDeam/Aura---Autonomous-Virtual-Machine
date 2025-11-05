@@ -75,10 +75,10 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
 
     spec_file = tmp_path / ".aura" / "task123.md"
     prompt_file = tmp_path / ".aura" / "task123.prompt.txt"
-    agents_md = tmp_path / "demo_project" / "AGENTS.md"
+    claude_md = tmp_path / "demo_project" / "CLAUDE.md"
     assert spec_file.exists()
     assert prompt_file.exists()
-    assert agents_md.exists()
+    assert claude_md.exists()
 
     command_event = next(
         event for event in bus.dispatched if event.event_type == TERMINAL_EXECUTE_COMMAND
@@ -94,4 +94,7 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
         assert "export AURA_AGENT_SPEC_PATH=" in command
         assert "claude" in command
 
-    assert session.command == ["claude", "--dangerously-skip-permissions"]
+    assert session.command[0] == "claude"
+    assert session.command[1] == "--dangerously-skip-permissions"
+    assert session.command[2] == "-p"
+    assert "CLAUDE.md" in session.command[3]
