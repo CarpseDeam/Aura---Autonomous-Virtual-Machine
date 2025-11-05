@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from src.aura.models.agent_task import AgentSpecification
 from src.aura.models.event_types import TERMINAL_EXECUTE_COMMAND
@@ -19,14 +19,14 @@ class FakeTerminalBridge:
 
     def __init__(self) -> None:
         self.started = False
-        self.sessions: List[tuple[str, Path]] = []
+        self.sessions: List[tuple[str, Path, Optional[Path]]] = []
         self.ended = False
 
     def start(self) -> None:
         self.started = True
 
-    def start_session(self, task_id: str, log_path: Path) -> None:
-        self.sessions.append((task_id, Path(log_path)))
+    def start_session(self, task_id: str, log_path: Path, working_dir: Optional[Path] = None) -> None:
+        self.sessions.append((task_id, Path(log_path), working_dir))
 
     def end_session(self) -> None:
         self.ended = True

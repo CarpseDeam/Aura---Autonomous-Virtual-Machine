@@ -71,7 +71,7 @@ class AgentSupervisor:
         self._create_agents_md(project_path, spec.prompt, spec.task_id)
 
         try:
-            session = self.terminal_service.spawn_agent(spec)
+            session = self.terminal_service.spawn_agent(spec, working_dir=project_path)
         except Exception as exc:
             logger.error("Failed to spawn agent for task %s: %s", spec.task_id, exc, exc_info=True)
             self._dispatch_event(
