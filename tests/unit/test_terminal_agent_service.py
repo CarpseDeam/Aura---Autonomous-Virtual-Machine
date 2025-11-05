@@ -104,21 +104,22 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
         assert "& gemini" in command.replace("'", "")
         assert "$env:AURA_AGENT_SPEC_PATH" in command
         assert "--model" in command
-        assert "--output-format" not in command
+        assert "--output-format" in command
     else:
         assert command.startswith("cd ")
         assert "export AURA_AGENT_SPEC_PATH=" in command
         assert "gemini" in command
         assert "--model gemini-2.5-pro" in command
-        assert "--output-format" not in command
+        assert "--output-format" in command
 
     assert session.command[0] == "gemini"
     assert session.command[1] == "--model"
     assert session.command[2] == DEFAULT_GEMINI_MODEL
     assert session.command[3] == "-p"
     assert "GEMINI.md" in session.command[4]
-    assert session.command[5] == "--yolo"
-    assert "--output-format" not in session.command
+    assert session.command[5] == "--output-format"
+    assert session.command[6] == "json"
+    assert session.command[7] == "--yolo"
 
 
 def test_spawn_agent_respects_configured_gemini_model(tmp_path: Path) -> None:
