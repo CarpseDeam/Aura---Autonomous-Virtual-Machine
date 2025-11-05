@@ -18,6 +18,8 @@ from src.aura.app.event_bus import EventBus
 from src.aura.models.events import Event
 from src.aura.services.user_settings_manager import (
     AURA_BRAIN_MODEL_CHOICES,
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_MODELS,
     TERMINAL_AGENT_PRESETS,
     load_user_settings,
     save_user_settings,
@@ -109,6 +111,8 @@ class SettingsWindow(QWidget):
         self.brain_combo: QComboBox
         self.terminal_combo: QComboBox
         self.custom_command_input: QLineEdit
+        self.gemini_panel: QWidget
+        self.gemini_model_combo: QComboBox
         self.api_key_inputs: Dict[str, QLineEdit] = {}
         self.auto_accept_checkbox: QCheckBox
 
@@ -158,6 +162,23 @@ class SettingsWindow(QWidget):
         self.custom_command_input = QLineEdit()
         self.custom_command_input.setPlaceholderText("Enter custom command template (use {spec_path})")
         panel_layout.addWidget(self.custom_command_input)
+
+        # Gemini model selector (shown only for Gemini CLI)
+        self.gemini_panel = QWidget()
+        self.gemini_panel.setVisible(False)
+        gemini_layout = QVBoxLayout(self.gemini_panel)
+        gemini_layout.setContentsMargins(0, 0, 0, 0)
+        gemini_layout.setSpacing(4)
+        gemini_layout.addLayout(self._create_header_row("Gemini Model:"))
+        self.gemini_model_combo = QComboBox()
+        for model_key, metadata in GEMINI_MODELS.items():
+            index = self.gemini_model_combo.count()
+            self.gemini_model_combo.addItem(metadata.get("label", model_key), userData=model_key)
+            description = metadata.get("description")
+            if description:
+                self.gemini_model_combo.setItemData(index, description, Qt.ItemDataRole.ToolTipRole)
+        gemini_layout.addWidget(self.gemini_model_combo)
+        panel_layout.addWidget(self.gemini_panel)
 
         panel_layout.addWidget(self._create_section_label("------ API Keys ------", ascii_font))
         for provider_key, label in [
@@ -233,6 +254,8 @@ class SettingsWindow(QWidget):
         self._select_combo_value(self.terminal_combo, terminal_value)
         custom_command = settings.get("terminal_agent_custom_command") or ""
         self.custom_command_input.setText(custom_command)
+        gemini_model_value = settings.get("gemini_model") or DEFAULT_GEMINI_MODEL
+        self._select_combo_value(self.gemini_model_combo, gemini_model_value)
         self._on_terminal_changed()
 
         api_keys = settings.get("api_keys") or {}
@@ -256,14 +279,18 @@ class SettingsWindow(QWidget):
     def _on_terminal_changed(self) -> None:
         is_custom = self.terminal_combo.currentData() == "custom"
         self.custom_command_input.setVisible(is_custom)
+        is_gemini = self.terminal_combo.currentData() == "gemini-cli"
+        self.gemini_panel.setVisible(is_gemini)
 
     def _handle_save(self) -> None:
+        selected_model = self.gemini_model_combo.currentData() or DEFAULT_GEMINI_MODEL
         settings_payload = {
             "aura_brain_model": self.brain_combo.currentData() or "",
             "terminal_agent": self.terminal_combo.currentData() or "codex",
             "terminal_agent_custom_command": self.custom_command_input.text().strip(),
             "api_keys": self._collect_api_keys(),
             "auto_accept_changes": self.auto_accept_checkbox.isChecked(),
+            "gemini_model": selected_model,
         }
 
         try:
