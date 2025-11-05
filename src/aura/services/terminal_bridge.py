@@ -27,6 +27,7 @@ class _SessionBinding:
     task_id: str
     log_path: Path
     stream: TextIO
+    working_dir: Optional[Path] = None
 
 
 class TerminalBridge:
@@ -112,13 +113,14 @@ class TerminalBridge:
         self.end_session()
         logger.info("Terminal bridge stopped")
 
-    def start_session(self, task_id: str, log_path: Path) -> None:
+    def start_session(self, task_id: str, log_path: Path, working_dir: Optional[Path] = None) -> None:
         """
         Begin capturing terminal output for the supplied task.
 
         Args:
             task_id: Identifier of the agent task.
             log_path: Destination log file path for raw terminal output.
+            working_dir: Directory to execute commands in.
         """
         with self._session_lock:
             self._close_session_locked()
@@ -128,8 +130,13 @@ class TerminalBridge:
             except OSError as exc:
                 logger.error("Unable to open terminal log %s: %s", log_path, exc, exc_info=True)
                 raise
-            self._session = _SessionBinding(task_id=task_id, log_path=log_path, stream=stream)
-            logger.info("Terminal bridge capturing output for task %s at %s", task_id, log_path)
+            self._session = _SessionBinding(
+                task_id=task_id,
+                log_path=log_path,
+                stream=stream,
+                working_dir=working_dir
+            )
+            logger.info("Terminal bridge capturing output for task %s at %s (cwd=%s)", task_id, log_path, working_dir)
 
     def end_session(self) -> None:
         """Stop capturing output for the active task."""
@@ -265,12 +272,18 @@ class TerminalBridge:
             await self._spawn_unix_shell()
 
     async def _spawn_windows_shell(self) -> None:
-        logger.info("Launching Windows shell for terminal bridge")
+        working_dir = None
+        with self._session_lock:
+            if self._session and self._session.working_dir:
+                working_dir = str(self._session.working_dir)
+
+        logger.info("Launching Windows shell for terminal bridge (cwd=%s)", working_dir)
         process = await asyncio.create_subprocess_exec(
             *self._DEFAULT_WINDOWS_SHELL,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            cwd=working_dir,
         )
         self._process = process
 
@@ -280,7 +293,12 @@ class TerminalBridge:
         import struct
         import termios
 
-        logger.info("Launching POSIX shell for terminal bridge")
+        working_dir = None
+        with self._session_lock:
+            if self._session and self._session.working_dir:
+                working_dir = str(self._session.working_dir)
+
+        logger.info("Launching POSIX shell for terminal bridge (cwd=%s)", working_dir)
         env = os.environ.copy()
         env.setdefault("TERM", "xterm-256color")
         self._pty_master_fd = None
@@ -292,6 +310,7 @@ class TerminalBridge:
                 stdout=slave_fd,
                 stderr=slave_fd,
                 env=env,
+                cwd=working_dir,
             )
             self._process = process
             self._pty_master_fd = master_fd

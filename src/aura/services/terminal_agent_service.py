@@ -80,9 +80,16 @@ class TerminalAgentService:
         *,
         command_override: Optional[Sequence[str]] = None,
         env: Optional[Dict[str, str]] = None,
+        working_dir: Optional[Path] = None,
     ) -> TerminalSession:
         """
         Prepare the workspace and instruct the embedded terminal to execute Claude Code.
+
+        Args:
+            spec: Agent specification with task details
+            command_override: Optional command tokens to use instead of template
+            env: Optional environment variables
+            working_dir: Working directory for command execution
         """
         if not spec.task_id:
             raise ValueError("Agent specification must include a task_id")
@@ -106,8 +113,10 @@ class TerminalAgentService:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.touch(exist_ok=True)
 
+        effective_working_dir = working_dir or project_root
+
         try:
-            self._terminal_bridge.start_session(spec.task_id, log_path)
+            self._terminal_bridge.start_session(spec.task_id, log_path, working_dir=effective_working_dir)
         except Exception as exc:
             logger.error("Failed to start terminal bridge session for task %s: %s", spec.task_id, exc, exc_info=True)
             raise
@@ -204,10 +213,19 @@ class TerminalAgentService:
             logger.info("Using command override for task %s: %s", spec.task_id, tokens)
             return tokens
 
-        tokens = self._render_template_command(spec)
+        project_root = self._resolve_project_root(spec)
+        agents_md_path = project_root / "AGENTS.md"
+
+        tokens = shlex.split(self.agent_command_template, posix=not sys.platform.startswith("win"))
         tokens = self._ensure_claude_flags(tokens)
+
         if not tokens:
             raise ValueError("Resolved agent command is empty")
+
+        logger.info("Built command for task %s: %s", spec.task_id, " ".join(tokens))
+        logger.info("Working directory will be: %s", project_root)
+        logger.info("AGENTS.md location: %s", agents_md_path)
+
         return tokens
 
     def _render_template_command(self, spec: AgentSpecification) -> List[str]:
@@ -263,9 +281,7 @@ class TerminalAgentService:
                 f"Set-Location -Path {self._powershell_quote(str(project_root))}",
                 *env_statements,
                 "$ErrorActionPreference = 'Stop'",
-                f"$promptPath = {self._powershell_quote(str(prompt_path))}",
-                "$prompt = Get-Content -LiteralPath $promptPath -Raw",
-                f"{invocation} -p $prompt",
+                invocation,
             ]
             return "; ".join(filter(None, parts))
 
@@ -275,8 +291,7 @@ class TerminalAgentService:
         segments = [f"cd {shlex.quote(str(project_root))}"]
         if env_exports:
             segments.append(f"export {env_exports}")
-        segments.append(f"prompt=$(cat {shlex.quote(str(prompt_path))})")
-        segments.append(f"{command_str} -p \"$prompt\"")
+        segments.append(command_str)
         return " && ".join(segments)
 
     def _powershell_invoke(self, command_tokens: Sequence[str]) -> str:
