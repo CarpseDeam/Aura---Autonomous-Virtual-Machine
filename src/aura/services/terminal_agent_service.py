@@ -274,39 +274,48 @@ class TerminalAgentService:
         command_tokens: Sequence[str],
         *,
         project_root: Path,
-        prompt_path: Path,
-        environment: Dict[str, str],
+        prompt_path: Optional[Path] = None,
+        environment: Optional[Dict[str, str]] = None,
     ) -> str:
+        env_map = environment or {}
         if sys.platform.startswith("win"):
             env_statements = [
                 f"$env:{key} = {self._powershell_quote(value)}"
-                for key, value in environment.items()
+                for key, value in env_map.items()
             ]
-            invocation = self._powershell_invoke(command_tokens)
+            project_str = self._powershell_quote(str(project_root))
+            cd_command = f"Set-Location -Path {project_str}"
+
+            def _needs_quotes(token: str) -> bool:
+                special_chars = {" ", "&", "|", "<", ">", "^"}
+                return not token or any(char in token for char in special_chars)
+
+            quoted_tokens: List[str] = []
+            for raw_token in command_tokens:
+                token = str(raw_token)
+                if _needs_quotes(token):
+                    quoted_tokens.append(self._powershell_quote(token))
+                else:
+                    quoted_tokens.append(token)
+            agent_command = " ".join(quoted_tokens)
+
             parts = [
-                f"Set-Location -Path {self._powershell_quote(str(project_root))}",
+                cd_command,
                 *env_statements,
                 "$ErrorActionPreference = 'Stop'",
-                invocation,
             ]
+            if agent_command:
+                parts.append(f"& {agent_command}")
             return "; ".join(filter(None, parts))
 
-        env_exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in environment.items())
+        env_lines = [f"export {key}={shlex.quote(value)}" for key, value in env_map.items()]
         command_str = " ".join(shlex.quote(token) for token in command_tokens)
 
         segments = [f"cd {shlex.quote(str(project_root))}"]
-        if env_exports:
-            segments.append(f"export {env_exports}")
-        segments.append(command_str)
+        segments.extend(env_lines)
+        if command_str:
+            segments.append(command_str)
         return " && ".join(segments)
-
-    def _powershell_invoke(self, command_tokens: Sequence[str]) -> str:
-        if not command_tokens:
-            raise ValueError("Command tokens must not be empty for PowerShell invocation")
-
-        executable = self._powershell_quote(str(command_tokens[0]))
-        args = " ".join(self._powershell_quote(str(arg)) for arg in command_tokens[1:])
-        return f"& {executable}{(' ' + args) if args else ''}"
 
     def _powershell_quote(self, value: str) -> str:
         escaped = value.replace("'", "''")

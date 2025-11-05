@@ -88,7 +88,7 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
 
     if sys.platform.startswith("win"):
         assert "Set-Location" in command
-        assert "& 'gemini" in command
+        assert "& gemini" in command.replace("'", "")
         assert "$env:AURA_AGENT_SPEC_PATH" in command
     else:
         assert command.startswith("cd ")
