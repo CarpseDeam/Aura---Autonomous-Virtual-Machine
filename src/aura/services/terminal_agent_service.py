@@ -17,6 +17,7 @@ from src.aura.models.event_types import (
 from src.aura.models.events import Event
 from src.aura.services.agents_md_formatter import format_specification_for_gemini
 from src.aura.services.terminal_bridge import TerminalBridge
+from src.aura.services.user_settings_manager import DEFAULT_GEMINI_MODEL, UserSettingsManager
 
 if TYPE_CHECKING:
     from src.aura.app.event_bus import EventBus
@@ -46,6 +47,7 @@ class TerminalAgentService:
         agent_command_template: Optional[str] = None,
         question_agent_name: str = _DEFAULT_LLM_AGENT,
         terminal_bridge: Optional[TerminalBridge] = None,
+        settings_manager: Optional[UserSettingsManager] = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -63,6 +65,7 @@ class TerminalAgentService:
         self._terminal_bridge.start()
 
         self._sessions: Dict[str, TerminalSession] = {}
+        self.settings_manager = settings_manager
 
         self.event_bus.subscribe(TERMINAL_OUTPUT_RECEIVED, self._handle_terminal_output)
 
@@ -231,8 +234,25 @@ class TerminalAgentService:
         template_parts = self.agent_command_template.split()
         base_cmd = template_parts[0]
 
+        resolved_model = DEFAULT_GEMINI_MODEL
+        if self.settings_manager:
+            try:
+                resolved_model = self.settings_manager.get_gemini_model()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to resolve Gemini model for task %s: %s",
+                    spec.task_id,
+                    exc,
+                )
+
+        tokens = [base_cmd]
+        base_cmd_name = Path(base_cmd).stem.lower()
+        include_model_flag = base_cmd_name == "gemini"
+        if include_model_flag:
+            tokens.extend(["--model", resolved_model])
+
         tokens = [
-            base_cmd,
+            *tokens,
             "-p",
             f"Implement all tasks described in GEMINI.md. When complete, write .aura/{spec.task_id}.done and .aura/{spec.task_id}.summary.json files.",
             "--output-format",
@@ -240,7 +260,15 @@ class TerminalAgentService:
             "--yolo",
         ]
 
-        logger.info("Built command for task %s: %s", spec.task_id, " ".join(tokens))
+        if include_model_flag:
+            logger.info(
+                "Built command for task %s with model %s: %s",
+                spec.task_id,
+                resolved_model,
+                " ".join(tokens),
+            )
+        else:
+            logger.info("Built command for task %s: %s", spec.task_id, " ".join(tokens))
         logger.info("Working directory will be: %s", self._resolve_project_root(spec))
 
         return tokens

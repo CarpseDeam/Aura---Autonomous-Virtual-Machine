@@ -17,23 +17,39 @@ AURA_BRAIN_MODEL_CHOICES: List[Tuple[str, str]] = [
 ]
 
 # Preset terminal agent options with command templates that users can select from.
-TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
+TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, Optional[str]]] = {
     "gemini-cli": {
         "label": "Gemini CLI",
-        "command_template": "gemini"
+        "command_template": "gemini",
+        "default_model": "gemini-2.5-pro",
     },
     "codex": {
         "label": "Codex (GPT-5)",
-        "command_template": "codex"
+        "command_template": "codex",
+        "default_model": None,
     },
     "claude_code": {
         "label": "Claude Code",
-        "command_template": "C:\\Users\\carps\\AppData\\Roaming\\npm\\claude.cmd --dangerously-skip-permissions"
+        "command_template": "C:\\Users\\carps\\AppData\\Roaming\\npm\\claude.cmd --dangerously-skip-permissions",
+        "default_model": None,
+    },
+}
+
+# Available Gemini CLI models surfaced to the user.
+GEMINI_MODELS: Dict[str, Dict[str, str]] = {
+    "gemini-2.5-pro": {
+        "label": "Gemini 2.5 Pro",
+        "description": "Most capable model, best for complex tasks",
+    },
+    "gemini-2.5-flash": {
+        "label": "Gemini 2.5 Flash",
+        "description": "Faster and cheaper, good for simple tasks",
     },
 }
 
 # Default command template used when the selection cannot be resolved.
 DEFAULT_TERMINAL_COMMAND_TEMPLATE = TERMINAL_AGENT_PRESETS["gemini-cli"]["command_template"]
+DEFAULT_GEMINI_MODEL = TERMINAL_AGENT_PRESETS["gemini-cli"]["default_model"] or "gemini-2.5-pro"
 
 # Baseline API key structure for the simplified settings payload.
 DEFAULT_API_KEYS = {
@@ -52,6 +68,7 @@ def _default_settings() -> Dict[str, Any]:
         "terminal_host": "auto",
         "api_keys": DEFAULT_API_KEYS.copy(),
         "auto_accept_changes": True,
+        "gemini_model": DEFAULT_GEMINI_MODEL,
     }
 
 
@@ -61,6 +78,13 @@ def _normalize_brain_model(value: Optional[str], fallback: str) -> str:
     value = value.strip()
     valid_ids = {identifier for identifier, _ in AURA_BRAIN_MODEL_CHOICES}
     return value if value in valid_ids else fallback
+
+
+def _normalize_gemini_model(value: Optional[str], fallback: str) -> str:
+    if not isinstance(value, str):
+        return fallback
+    normalized = value.strip()
+    return normalized if normalized in GEMINI_MODELS else fallback
 
 
 def _normalize_terminal_selection(value: Any) -> str:
@@ -177,6 +201,12 @@ def load_user_settings() -> Dict[str, Any]:
         auto_accept = (data.get("preferences") or {}).get("auto_accept_changes")
     settings["auto_accept_changes"] = bool(auto_accept) if auto_accept is not None else settings["auto_accept_changes"]
 
+    gemini_model = data.get("gemini_model")
+    if gemini_model is None:
+        preferences = data.get("preferences") or {}
+        gemini_model = preferences.get("gemini_model")
+    settings["gemini_model"] = _normalize_gemini_model(gemini_model, settings["gemini_model"])
+
     return settings
 
 
@@ -196,6 +226,10 @@ def save_user_settings(settings: Dict[str, Any]) -> None:
         "terminal_host": _normalize_terminal_host(normalized.get("terminal_host")),
         "api_keys": _sanitize_api_keys(normalized.get("api_keys")),
         "auto_accept_changes": bool(normalized.get("auto_accept_changes", True)),
+        "gemini_model": _normalize_gemini_model(
+            normalized.get("gemini_model"),
+            DEFAULT_GEMINI_MODEL,
+        ),
     }
 
     custom_command = (normalized.get("terminal_agent_custom_command") or "").strip()
@@ -240,6 +274,12 @@ def update_agent_settings(agent_updates: Dict[str, Any]) -> Dict[str, Any]:
 
     if "terminal_agent_custom_command" in agent_updates:
         settings["terminal_agent_custom_command"] = str(agent_updates.get("terminal_agent_custom_command") or "").strip()
+
+    if "gemini_model" in agent_updates:
+        settings["gemini_model"] = _normalize_gemini_model(
+            agent_updates.get("gemini_model"),
+            settings["gemini_model"],
+        )
 
     save_user_settings(settings)
     return settings
@@ -289,3 +329,50 @@ def get_terminal_host_preference(settings: Optional[Dict[str, Any]] = None) -> s
         settings = load_user_settings()
 
     return _normalize_terminal_host(settings.get("terminal_host"))
+
+
+def get_gemini_model(settings: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Resolve the Gemini CLI model selection from settings.
+    """
+    if settings is None:
+        settings = load_user_settings()
+    return _normalize_gemini_model(settings.get("gemini_model"), DEFAULT_GEMINI_MODEL)
+
+
+def set_gemini_model(model: str) -> Dict[str, Any]:
+    """
+    Persist a new Gemini CLI model selection.
+    """
+    if model not in GEMINI_MODELS:
+        raise ValueError(f"Invalid Gemini model: {model}. Must be one of {list(GEMINI_MODELS.keys())}")
+    settings = load_user_settings()
+    settings["gemini_model"] = model
+    save_user_settings(settings)
+    return settings
+
+
+class UserSettingsManager:
+    """
+    Convenience wrapper around the functional settings API for dependency injection.
+    """
+
+    def __init__(self) -> None:
+        self._settings: Dict[str, Any] = load_user_settings()
+
+    @property
+    def settings(self) -> Dict[str, Any]:
+        return dict(self._settings)
+
+    def refresh(self) -> None:
+        self._settings = load_user_settings()
+
+    def get_terminal_command_template(self) -> str:
+        return get_terminal_agent_command_template(self._settings)
+
+    def get_gemini_model(self) -> str:
+        return get_gemini_model(self._settings)
+
+    def set_gemini_model(self, model: str) -> None:
+        set_gemini_model(model)
+        self.refresh()

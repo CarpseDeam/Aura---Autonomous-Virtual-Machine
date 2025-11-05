@@ -8,6 +8,7 @@ from src.aura.models.agent_task import AgentSpecification
 from src.aura.models.event_types import TERMINAL_EXECUTE_COMMAND
 from src.aura.models.events import Event
 from src.aura.services.terminal_agent_service import TerminalAgentService
+from src.aura.services.user_settings_manager import DEFAULT_GEMINI_MODEL
 
 
 class FakeLLMService:
@@ -48,15 +49,27 @@ class FakeEventBus:
             callback(event)
 
 
+class FakeSettingsManager:
+    """Lightweight stub exposing the Gemini model accessor expected by the service."""
+
+    def __init__(self, model: str = DEFAULT_GEMINI_MODEL) -> None:
+        self._model = model
+
+    def get_gemini_model(self) -> str:
+        return self._model
+
+
 def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
     bridge = FakeTerminalBridge()
     bus = FakeEventBus()
+    settings_manager = FakeSettingsManager()
     service = TerminalAgentService(
         workspace_root=tmp_path,
         llm_service=FakeLLMService(),
         event_bus=bus,
         terminal_bridge=bridge,
         agent_command_template="gemini",
+        settings_manager=settings_manager,
     )
 
     spec = AgentSpecification(
@@ -90,14 +103,45 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
         assert "Set-Location" in command
         assert "& gemini" in command.replace("'", "")
         assert "$env:AURA_AGENT_SPEC_PATH" in command
+        assert "--model" in command
     else:
         assert command.startswith("cd ")
         assert "export AURA_AGENT_SPEC_PATH=" in command
         assert "gemini" in command
+        assert "--model gemini-2.5-pro" in command
 
     assert session.command[0] == "gemini"
-    assert session.command[1] == "-p"
-    assert "GEMINI.md" in session.command[2]
-    assert session.command[3] == "--output-format"
-    assert session.command[4] == "json"
-    assert session.command[5] == "--yolo"
+    assert session.command[1] == "--model"
+    assert session.command[2] == DEFAULT_GEMINI_MODEL
+    assert session.command[3] == "-p"
+    assert "GEMINI.md" in session.command[4]
+    assert session.command[5] == "--output-format"
+    assert session.command[6] == "json"
+    assert session.command[7] == "--yolo"
+
+
+def test_spawn_agent_respects_configured_gemini_model(tmp_path: Path) -> None:
+    bridge = FakeTerminalBridge()
+    bus = FakeEventBus()
+    settings_manager = FakeSettingsManager(model="gemini-2.5-flash")
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        llm_service=FakeLLMService(),
+        event_bus=bus,
+        terminal_bridge=bridge,
+        agent_command_template="gemini",
+        settings_manager=settings_manager,
+    )
+
+    spec = AgentSpecification(
+        task_id="task456",
+        request="Implement terminal support",
+        project_name="demo_project",
+        prompt="Do the work",
+    )
+
+    session = service.spawn_agent(spec)
+
+    assert session.command[0] == "gemini"
+    assert session.command[1] == "--model"
+    assert session.command[2] == "gemini-2.5-flash"

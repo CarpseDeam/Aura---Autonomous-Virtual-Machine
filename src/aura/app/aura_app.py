@@ -14,10 +14,7 @@ from src.aura.services.conversation_persistence_service import ConversationPersi
 from src.aura.services.image_storage_service import ImageStorageService
 from src.aura.services.llm_service import LLMService
 from src.aura.services.terminal_agent_service import TerminalAgentService
-from src.aura.services.user_settings_manager import (
-    get_terminal_agent_command_template,
-    load_user_settings,
-)
+from src.aura.services.user_settings_manager import UserSettingsManager
 from src.aura.services.workspace_service import WorkspaceService
 from src.aura.models.events import Event
 from src.ui.controllers.conversation_sidebar_controller import ConversationSidebarController
@@ -122,14 +119,15 @@ class AuraApp:
         self.llm_service = LLMService(self.event_bus, self.image_storage_service)
 
         # Load terminal agent configuration from user settings
-        user_settings = load_user_settings()
-        agent_command_template = get_terminal_agent_command_template(user_settings)
+        self.settings_manager = UserSettingsManager()
+        agent_command_template = self.settings_manager.get_terminal_command_template()
 
         self.terminal_agent_service = TerminalAgentService(
             workspace_root=WORKSPACE_DIR,
             llm_service=self.llm_service,
             event_bus=self.event_bus,
             agent_command_template=agent_command_template,
+            settings_manager=self.settings_manager,
         )
         # Ensure the requested project is active
         try:
