@@ -20,14 +20,20 @@ class FakeTerminalBridge:
 
     def __init__(self) -> None:
         self.started = False
-        self.sessions: List[tuple[str, Path, Optional[Path]]] = []
+        self.sessions: List[tuple[str, Path, Optional[Path], Optional[Dict[str, str]]]] = []
         self.ended = False
 
     def start(self) -> None:
         self.started = True
 
-    def start_session(self, task_id: str, log_path: Path, working_dir: Optional[Path] = None) -> None:
-        self.sessions.append((task_id, Path(log_path), working_dir))
+    def start_session(
+        self,
+        task_id: str,
+        log_path: Path,
+        working_dir: Optional[Path] = None,
+        environment: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.sessions.append((task_id, Path(log_path), working_dir, environment))
 
     def end_session(self) -> None:
         self.ended = True
@@ -82,9 +88,14 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
     session = service.spawn_agent(spec)
 
     assert bridge.started
-    assert bridge.sessions and bridge.sessions[0][0] == "task123"
-    log_path = bridge.sessions[0][1]
+    assert bridge.sessions
+    recorded_task, log_path, working_dir, environment = bridge.sessions[0]
+    assert recorded_task == "task123"
     assert log_path.exists()
+    assert working_dir == tmp_path / "demo_project"
+    assert environment is not None
+    assert environment["AURA_AGENT_TASK_ID"] == "task123"
+    assert environment["PYTHONUNBUFFERED"] == "1"
 
     spec_file = tmp_path / ".aura" / "task123.md"
     prompt_file = tmp_path / ".aura" / "task123.prompt.txt"
@@ -99,18 +110,17 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
     assert command_event.payload["gemini_md_path"].endswith("GEMINI.md")
     command = command_event.payload["command"]
 
-    if sys.platform.startswith("win"):
-        assert "Set-Location" in command
-        assert "& gemini" in command.replace("'", "")
-        assert "$env:AURA_AGENT_SPEC_PATH" in command
-        assert "--model" in command
-        assert "--output-format" in command
-    else:
-        assert command.startswith("cd ")
-        assert "export AURA_AGENT_SPEC_PATH=" in command
-        assert "gemini" in command
-        assert "--model gemini-2.5-pro" in command
-        assert "--output-format" in command
+    assert command.strip().startswith("gemini")
+    assert "--model" in command
+    assert "--output-format" in command
+    assert "--yolo" in command
+    assert "Set-Location" not in command
+    assert "$env:" not in command
+
+    if not sys.platform.startswith("win"):
+        assert command.startswith("gemini")
+        assert "export " not in command
+        assert " && " not in command
 
     assert session.command[0] == "gemini"
     assert session.command[1] == "--model"

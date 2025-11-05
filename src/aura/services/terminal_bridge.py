@@ -9,7 +9,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Dict, Optional, TextIO
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -28,6 +28,7 @@ class _SessionBinding:
     log_path: Path
     stream: TextIO
     working_dir: Optional[Path] = None
+    environment: Optional[Dict[str, str]] = None
 
 
 class TerminalBridge:
@@ -113,7 +114,13 @@ class TerminalBridge:
         self.end_session()
         logger.info("Terminal bridge stopped")
 
-    def start_session(self, task_id: str, log_path: Path, working_dir: Optional[Path] = None) -> None:
+    def start_session(
+        self,
+        task_id: str,
+        log_path: Path,
+        working_dir: Optional[Path] = None,
+        environment: Optional[Dict[str, str]] = None,
+    ) -> None:
         """
         Begin capturing terminal output for the supplied task.
 
@@ -121,6 +128,7 @@ class TerminalBridge:
             task_id: Identifier of the agent task.
             log_path: Destination log file path for raw terminal output.
             working_dir: Directory to execute commands in.
+            environment: Optional environment variables for the shell session.
         """
         with self._session_lock:
             self._close_session_locked()
@@ -134,9 +142,16 @@ class TerminalBridge:
                 task_id=task_id,
                 log_path=log_path,
                 stream=stream,
-                working_dir=working_dir
+                working_dir=working_dir,
+                environment=environment,
             )
-            logger.info("Terminal bridge capturing output for task %s at %s (cwd=%s)", task_id, log_path, working_dir)
+            logger.info(
+                "Terminal bridge capturing output for task %s at %s (cwd=%s, env_keys=%s)",
+                task_id,
+                log_path,
+                working_dir,
+                sorted(environment.keys()) if environment else [],
+            )
 
     def end_session(self) -> None:
         """Stop capturing output for the active task."""
@@ -272,18 +287,30 @@ class TerminalBridge:
             await self._spawn_unix_shell()
 
     async def _spawn_windows_shell(self) -> None:
-        working_dir = None
+        working_dir: Optional[str] = None
+        env_vars: Optional[Dict[str, str]] = None
         with self._session_lock:
-            if self._session and self._session.working_dir:
-                working_dir = str(self._session.working_dir)
+            if self._session:
+                if self._session.working_dir:
+                    working_dir = str(self._session.working_dir)
+                env_vars = self._session.environment
 
-        logger.info("Launching Windows shell for terminal bridge (cwd=%s)", working_dir)
+        env = os.environ.copy()
+        if env_vars:
+            env.update(env_vars)
+
+        logger.info(
+            "Launching Windows shell for terminal bridge (cwd=%s, env_keys=%s)",
+            working_dir,
+            sorted(env_vars.keys()) if env_vars else [],
+        )
         process = await asyncio.create_subprocess_exec(
             *self._DEFAULT_WINDOWS_SHELL,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=working_dir,
+            env=env,
         )
         self._process = process
 
@@ -293,14 +320,23 @@ class TerminalBridge:
         import struct
         import termios
 
-        working_dir = None
+        working_dir: Optional[str] = None
+        env_vars: Optional[Dict[str, str]] = None
         with self._session_lock:
-            if self._session and self._session.working_dir:
-                working_dir = str(self._session.working_dir)
+            if self._session:
+                if self._session.working_dir:
+                    working_dir = str(self._session.working_dir)
+                env_vars = self._session.environment
 
-        logger.info("Launching POSIX shell for terminal bridge (cwd=%s)", working_dir)
+        logger.info(
+            "Launching POSIX shell for terminal bridge (cwd=%s, env_keys=%s)",
+            working_dir,
+            sorted(env_vars.keys()) if env_vars else [],
+        )
         env = os.environ.copy()
         env.setdefault("TERM", "xterm-256color")
+        if env_vars:
+            env.update(env_vars)
         self._pty_master_fd = None
         master_fd, slave_fd = pty.openpty()
         try:

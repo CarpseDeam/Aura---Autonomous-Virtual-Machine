@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Callable, List
 from unittest.mock import MagicMock
@@ -51,6 +52,9 @@ def test_spawn_agent_session_flow_records_command_dispatch(
     session = harness.service.spawn_agent(spec)
 
     harness.bridge.start_session.assert_called_once()
+    _args, kwargs = harness.bridge.start_session.call_args
+    env_kwargs = kwargs.get("environment") or {}
+    assert env_kwargs.get("AURA_AGENT_TASK_ID") == spec.task_id
     command_events = [event for event in harness.event_bus.dispatched if event.event_type == TERMINAL_EXECUTE_COMMAND]
     assert command_events, "Expected TERMINAL_EXECUTE_COMMAND dispatch"
 
@@ -197,5 +201,7 @@ def test_compose_terminal_command_non_windows_shell(
         environment={"A": "1"},
     )
 
-    assert command.startswith("cd ")
-    assert "export A=1" in command
+    assert command.startswith("gemini")
+    assert "cd " not in command
+    assert "export " not in command
+    assert shlex.split(command) == tokens

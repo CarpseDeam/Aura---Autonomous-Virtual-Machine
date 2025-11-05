@@ -119,7 +119,12 @@ class TerminalAgentService:
         effective_working_dir = working_dir or project_root
 
         try:
-            self._terminal_bridge.start_session(spec.task_id, log_path, working_dir=effective_working_dir)
+            self._terminal_bridge.start_session(
+                spec.task_id,
+                log_path,
+                working_dir=effective_working_dir,
+                environment=env_map,
+            )
         except Exception as exc:
             logger.error("Failed to start terminal bridge session for task %s: %s", spec.task_id, exc, exc_info=True)
             raise
@@ -255,6 +260,8 @@ class TerminalAgentService:
             *tokens,
             "-p",
             f"Implement all tasks described in GEMINI.md. When complete, write .aura/{spec.task_id}.done and .aura/{spec.task_id}.summary.json files.",
+            "--output-format",
+            "json",
             "--yolo",
         ]
 
@@ -303,15 +310,7 @@ class TerminalAgentService:
         prompt_path: Optional[Path] = None,
         environment: Optional[Dict[str, str]] = None,
     ) -> str:
-        env_map = environment or {}
         if sys.platform.startswith("win"):
-            env_statements = [
-                f"$env:{key} = {self._powershell_quote(value)}"
-                for key, value in env_map.items()
-            ]
-            project_str = self._powershell_quote(str(project_root))
-            cd_command = f"Set-Location -Path {project_str}"
-
             def _needs_quotes(token: str) -> bool:
                 special_chars = {" ", "&", "|", "<", ">", "^"}
                 return not token or any(char in token for char in special_chars)
@@ -324,24 +323,9 @@ class TerminalAgentService:
                 else:
                     quoted_tokens.append(token)
             agent_command = " ".join(quoted_tokens)
+            return agent_command
 
-            parts = [
-                cd_command,
-                *env_statements,
-                "$ErrorActionPreference = 'Stop'",
-            ]
-            if agent_command:
-                parts.append(f"& {agent_command}")
-            return "; ".join(filter(None, parts))
-
-        env_lines = [f"export {key}={shlex.quote(value)}" for key, value in env_map.items()]
-        command_str = " ".join(shlex.quote(token) for token in command_tokens)
-
-        segments = [f"cd {shlex.quote(str(project_root))}"]
-        segments.extend(env_lines)
-        if command_str:
-            segments.append(command_str)
-        return " && ".join(segments)
+        return " ".join(shlex.quote(str(token)) for token in command_tokens)
 
     def _powershell_quote(self, value: str) -> str:
         escaped = value.replace("'", "''")
