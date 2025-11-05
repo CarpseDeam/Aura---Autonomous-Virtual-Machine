@@ -56,7 +56,7 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
         llm_service=FakeLLMService(),
         event_bus=bus,
         terminal_bridge=bridge,
-        agent_command_template="claude --dangerously-skip-permissions",
+        agent_command_template="gemini",
     )
 
     spec = AgentSpecification(
@@ -75,26 +75,29 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
 
     spec_file = tmp_path / ".aura" / "task123.md"
     prompt_file = tmp_path / ".aura" / "task123.prompt.txt"
-    claude_md = tmp_path / "demo_project" / "CLAUDE.md"
+    gemini_md = tmp_path / "demo_project" / "GEMINI.md"
     assert spec_file.exists()
     assert prompt_file.exists()
-    assert claude_md.exists()
+    assert gemini_md.exists()
 
     command_event = next(
         event for event in bus.dispatched if event.event_type == TERMINAL_EXECUTE_COMMAND
     )
+    assert command_event.payload["gemini_md_path"].endswith("GEMINI.md")
     command = command_event.payload["command"]
 
     if sys.platform.startswith("win"):
         assert "Set-Location" in command
-        assert "& 'claude" in command
+        assert "& 'gemini" in command
         assert "$env:AURA_AGENT_SPEC_PATH" in command
     else:
         assert command.startswith("cd ")
         assert "export AURA_AGENT_SPEC_PATH=" in command
-        assert "claude" in command
+        assert "gemini" in command
 
-    assert session.command[0] == "claude"
-    assert session.command[1] == "--dangerously-skip-permissions"
-    assert session.command[2] == "-p"
-    assert "CLAUDE.md" in session.command[3]
+    assert session.command[0] == "gemini"
+    assert session.command[1] == "-p"
+    assert "GEMINI.md" in session.command[2]
+    assert session.command[3] == "--output-format"
+    assert session.command[4] == "json"
+    assert session.command[5] == "--yolo"

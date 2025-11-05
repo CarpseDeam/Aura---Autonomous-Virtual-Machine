@@ -68,7 +68,7 @@ class AgentSupervisor:
             },
         )
 
-        self._create_claude_md(project_path, spec.prompt, spec.task_id)
+        self._create_gemini_md(project_path, spec.prompt, spec.task_id)
 
         try:
             session = self.terminal_service.spawn_agent(spec, working_dir=project_path)
@@ -175,11 +175,11 @@ Always provide explicit file names. Never say "a file" or "a script" without nam
         (project_path / ".aura").mkdir(parents=True, exist_ok=True)
         return project_path
 
-    def _create_claude_md(self, project_path: Path, task_description: str, task_id: str) -> None:
+    def _create_gemini_md(self, project_path: Path, task_description: str, task_id: str) -> None:
         """
-        Write CLAUDE.md to project root with task description.
+        Write GEMINI.md to project root with task description.
 
-        CLAUDE.md is Claude Code's standard context file.
+        GEMINI.md is Gemini CLI's standard context file.
         """
         description = task_description.strip() or "(no task description provided)"
         content = (
@@ -191,9 +191,9 @@ Always provide explicit file names. Never say "a file" or "a script" without nam
             f"- Mark completion by writing `.aura/{task_id}.done`.\n"
             f"- Write summary to `.aura/{task_id}.summary.json`.\n"
         )
-        claude_md_path = project_path / "CLAUDE.md"
-        claude_md_path.write_text(content, encoding="utf-8")
-        logger.info("Wrote CLAUDE.md to %s", claude_md_path)
+        gemini_md_path = project_path / "GEMINI.md"
+        gemini_md_path.write_text(content, encoding="utf-8")
+        logger.info("Wrote GEMINI.md to %s", gemini_md_path)
 
     def _start_monitor_thread(self, session: TerminalSession, project_path: Path) -> None:
         threading.Thread(

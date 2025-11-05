@@ -18,22 +18,22 @@ AURA_BRAIN_MODEL_CHOICES: List[Tuple[str, str]] = [
 
 # Preset terminal agent options with command templates that users can select from.
 TERMINAL_AGENT_PRESETS: Dict[str, Dict[str, str]] = {
+    "gemini-cli": {
+        "label": "Gemini CLI",
+        "command_template": "gemini"
+    },
     "codex": {
         "label": "Codex (GPT-5)",
-        "command_template": "codex"  # Just this!
+        "command_template": "codex"
     },
     "claude_code": {
         "label": "Claude Code",
         "command_template": "C:\\Users\\carps\\AppData\\Roaming\\npm\\claude.cmd --dangerously-skip-permissions"
     },
-    "gemini-cli": {
-        "label": "Gemini CLI",
-        "command_template": "gemini -p \"{prompt}\" --output-format json"
-    },
 }
 
 # Default command template used when the selection cannot be resolved.
-DEFAULT_TERMINAL_COMMAND_TEMPLATE = TERMINAL_AGENT_PRESETS["codex"]["command_template"]
+DEFAULT_TERMINAL_COMMAND_TEMPLATE = TERMINAL_AGENT_PRESETS["gemini-cli"]["command_template"]
 
 # Baseline API key structure for the simplified settings payload.
 DEFAULT_API_KEYS = {
@@ -47,7 +47,7 @@ DEFAULT_API_KEYS = {
 def _default_settings() -> Dict[str, Any]:
     return {
         "aura_brain_model": AURA_BRAIN_MODEL_CHOICES[0][0],
-        "terminal_agent": "codex",
+        "terminal_agent": "gemini-cli",
         "terminal_agent_custom_command": "",
         "terminal_host": "auto",
         "api_keys": DEFAULT_API_KEYS.copy(),
@@ -74,12 +74,12 @@ def _normalize_terminal_selection(value: Any) -> str:
         selection = aliases.get(selection, selection)
         if selection in TERMINAL_AGENT_PRESETS or selection == "custom":
             return "custom" if selection == "custom" else selection
-    return "codex"
+    return "gemini-cli"
 
 
 def _infer_terminal_preset_from_command(command: Optional[str]) -> str:
     if not command:
-        return "codex"
+        return "gemini-cli"
     normalized = command.strip()
     if normalized == "claude" or normalized.startswith("claude "):
         return "claude_code"
@@ -149,7 +149,7 @@ def load_user_settings() -> Dict[str, Any]:
         settings["terminal_agent"] = _infer_terminal_preset_from_command(command_template)
         custom_command = command_template or ""
     else:
-        settings["terminal_agent"] = "codex"
+        settings["terminal_agent"] = "gemini-cli"
 
     if not custom_command:
         legacy_custom = data.get("terminal_agent_custom_command")

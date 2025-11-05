@@ -15,7 +15,7 @@ from src.aura.models.event_types import (
     TERMINAL_OUTPUT_RECEIVED,
 )
 from src.aura.models.events import Event
-from src.aura.services.agents_md_formatter import format_specification_for_claude
+from src.aura.services.agents_md_formatter import format_specification_for_gemini
 from src.aura.services.terminal_bridge import TerminalBridge
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ class TerminalAgentService:
     """
     Coordinate terminal-based agent sessions through the embedded xterm.js terminal.
 
-    The service persists task specifications, prepares CLAUDE.md handoff files, and
+    The service persists task specifications, prepares GEMINI.md handoff files, and
     relays execution commands to the TerminalBridge so the user can watch the live shell.
     """
 
@@ -57,7 +57,7 @@ class TerminalAgentService:
         self.question_agent_name = question_agent_name
 
         template = (agent_command_template or "").strip()
-        self.agent_command_template = template or "claude --dangerously-skip-permissions"
+        self.agent_command_template = template or "gemini"
 
         self._terminal_bridge = terminal_bridge or TerminalBridge(event_bus=event_bus)
         self._terminal_bridge.start()
@@ -83,7 +83,7 @@ class TerminalAgentService:
         working_dir: Optional[Path] = None,
     ) -> TerminalSession:
         """
-        Prepare the workspace and instruct the embedded terminal to execute Claude Code.
+        Prepare the workspace and instruct the embedded terminal to execute Gemini CLI.
 
         Args:
             spec: Agent specification with task details
@@ -96,8 +96,8 @@ class TerminalAgentService:
 
         project_root = self._resolve_project_root(spec)
         spec_path = self._persist_specification(spec)
-        prompt_document = format_specification_for_claude(spec)
-        claude_md_path = self._write_claude_md(project_root, prompt_document, spec)
+        prompt_document = format_specification_for_gemini(spec)
+        gemini_md_path = self._write_gemini_md(project_root, prompt_document, spec)
         prompt_path = self._write_prompt_file(spec.task_id, prompt_document)
 
         command_tokens = self._build_command(spec, command_override)
@@ -129,7 +129,7 @@ class TerminalAgentService:
                         "task_id": spec.task_id,
                         "command": terminal_command,
                         "project_root": str(project_root),
-                        "claude_md_path": str(claude_md_path),
+                        "gemini_md_path": str(gemini_md_path),
                     },
                 )
             )
@@ -186,22 +186,22 @@ class TerminalAgentService:
         logger.debug("Persisted agent specification for task %s to %s", spec.task_id, spec_path)
         return spec_path
 
-    def _write_claude_md(self, project_root: Path, document: str, spec: AgentSpecification) -> Path:
+    def _write_gemini_md(self, project_root: Path, document: str, spec: AgentSpecification) -> Path:
         """
-        Write CLAUDE.md (Claude's native context file) to project root.
+        Write GEMINI.md (Gemini CLI's native context file) to project root.
 
-        Claude Code automatically reads CLAUDE.md for project context.
+        Gemini CLI automatically reads GEMINI.md for project context.
         This is the standard format per official documentation.
         """
-        claude_md_path = project_root / "CLAUDE.md"
+        gemini_md_path = project_root / "GEMINI.md"
         try:
-            claude_md_path.write_text(document, encoding="utf-8")
+            gemini_md_path.write_text(document, encoding="utf-8")
         except OSError as exc:
-            logger.error("Failed to write CLAUDE.md for task %s: %s", spec.task_id, exc, exc_info=True)
-            raise RuntimeError(f"Failed to write CLAUDE.md for task {spec.task_id}") from exc
+            logger.error("Failed to write GEMINI.md for task %s: %s", spec.task_id, exc, exc_info=True)
+            raise RuntimeError(f"Failed to write GEMINI.md for task {spec.task_id}") from exc
 
-        logger.info("Wrote CLAUDE.md for task %s to %s", spec.task_id, claude_md_path)
-        return claude_md_path
+        logger.info("Wrote GEMINI.md for task %s to %s", spec.task_id, gemini_md_path)
+        return gemini_md_path
 
     def _write_prompt_file(self, task_id: str, prompt_document: str) -> Path:
         prompt_path = self.spec_dir / f"{task_id}.prompt.txt"
@@ -215,10 +215,13 @@ class TerminalAgentService:
         command_override: Optional[Sequence[str]],
     ) -> List[str]:
         """
-        Build command tokens for Claude Code headless execution.
+        Build command tokens for Gemini CLI headless execution.
 
-        Per Claude CLI docs, use -p flag for non-interactive mode and
-        provide a simple prompt. Claude will auto-read CLAUDE.md from cwd.
+        Per Gemini CLI docs:
+        - Use -p flag for headless/non-interactive mode
+        - Use --output-format json for structured output
+        - Use --yolo to skip all confirmations
+        - Gemini auto-reads GEMINI.md from current working directory
         """
         if command_override:
             tokens = list(command_override)
@@ -230,9 +233,11 @@ class TerminalAgentService:
 
         tokens = [
             base_cmd,
-            "--dangerously-skip-permissions",
             "-p",
-            f"Implement all tasks described in CLAUDE.md. Follow the implementation steps exactly. When complete, write the summary to .aura/{spec.task_id}.summary.json and create .aura/{spec.task_id}.done file."
+            f"Implement all tasks described in GEMINI.md. When complete, write .aura/{spec.task_id}.done and .aura/{spec.task_id}.summary.json files.",
+            "--output-format",
+            "json",
+            "--yolo",
         ]
 
         logger.info("Built command for task %s: %s", spec.task_id, " ".join(tokens))
@@ -263,17 +268,6 @@ class TerminalAgentService:
             raise ValueError("agent_command_template produced an empty command")
 
         return shlex.split(rendered, posix=not sys.platform.startswith("win"))
-
-    def _ensure_claude_flags(self, tokens: Sequence[str]) -> List[str]:
-        updated = list(tokens)
-        if not updated:
-            return updated
-
-        executable = updated[0].lower()
-        flags = {token.lower() for token in updated[1:]}
-        if "claude" in executable and "--dangerously-skip-permissions" not in flags:
-            updated.append("--dangerously-skip-permissions")
-        return updated
 
     def _compose_terminal_command(
         self,

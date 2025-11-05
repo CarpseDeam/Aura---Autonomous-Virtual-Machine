@@ -1,4 +1,4 @@
-"""Utilities for serializing AgentSpecification data into Claude-friendly CLAUDE.md files."""
+"""Utilities for serializing AgentSpecification data into Gemini-friendly GEMINI.md files."""
 
 from __future__ import annotations
 
@@ -59,12 +59,12 @@ These conventions capture how the Aura engineering team writes code today. Study
 """
 
 
-def format_specification_for_claude(spec: AgentSpecification) -> str:
+def format_specification_for_gemini(spec: AgentSpecification) -> str:
     """
-    Convert an AgentSpecification into CLAUDE.md format.
+    Convert an AgentSpecification into GEMINI.md format.
 
-    CLAUDE.md is Claude Code's native project context file format.
-    It should be placed in the project root where Claude will auto-read it.
+    GEMINI.md is Gemini CLI's native project context file format.
+    It should be placed in the project root where Gemini will auto-read it.
     """
     file_entries = _collect_file_paths(spec)
 
@@ -101,8 +101,8 @@ def format_specification_for_claude(spec: AgentSpecification) -> str:
     lines.append("")
     lines.append("## Completion Requirements")
     lines.append(f"- Write `.aura/{spec.task_id}.done` when the task is finished.")
-    lines.append(f"- Write `.aura/{spec.task_id}.summary.json` with the following structure:")
-    lines.append("  - status: one of `completed`, `failed`, or `partial`")
+    lines.append(f"- Write `.aura/{spec.task_id}.summary.json` with:")
+    lines.append("  - status: 'completed', 'failed', or 'partial'")
     lines.append("  - files_created: list of file paths created")
     lines.append("  - files_modified: list of file paths modified")
     lines.append("  - files_deleted: list of file paths deleted")
