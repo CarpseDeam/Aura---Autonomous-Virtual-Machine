@@ -8,10 +8,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 import pydantic
+from pydantic import BaseModel, Field
 
 from src.aura.app.event_bus import EventBus
 from src.aura.models.agent_task import AgentSpecification, TerminalSession, TaskSummary
@@ -35,6 +36,23 @@ logger = logging.getLogger(__name__)
 class TaskPlanningResult:
     detailed_plan: str
     task_spec: str
+
+
+class ParsedCliStats(BaseModel):
+    """Normalized statistics extracted from Gemini CLI logs and filesystem artefacts."""
+
+    files_created_count: Optional[int] = Field(default=None)
+    files_modified_count: Optional[int] = Field(default=None)
+    files_deleted_count: Optional[int] = Field(default=None)
+    lines_added: Optional[int] = Field(default=None)
+    lines_removed: Optional[int] = Field(default=None)
+    tool_calls: Optional[int] = Field(default=None)
+    response: Optional[str] = Field(default=None)
+    stats: Optional[Dict[str, Any]] = Field(default=None)
+    source: Optional[str] = Field(
+        default=None,
+        description="Describes which extractor produced these statistics (json, text, filesystem, mixed).",
+    )
 
 
 class AgentSupervisor:
@@ -411,39 +429,173 @@ Rules:
             return None
 
         latest_block = self._extract_latest_json_block(log_text)
-        if latest_block is None:
+        json_stats = self._build_stats_from_json_payload(latest_block) if latest_block else None
+        text_stats = self._extract_stats_from_verbose_output(log_text)
+        filesystem_stats = self._inspect_filesystem_counts(log_path)
+
+        merged = self._merge_parsed_cli_stats(json_stats, text_stats, filesystem_stats)
+        if not merged:
+            logger.debug("No CLI statistics could be derived from %s", log_path)
             return None
 
-        stats = latest_block.get("stats")
+        logger.debug(
+            "Extracted CLI stats for %s using sources: %s",
+            log_path,
+            merged.source or "unknown",
+        )
+        return merged.model_dump(exclude_none=True)
+
+    def _build_stats_from_json_payload(self, payload: Optional[Dict[str, Any]]) -> Optional[ParsedCliStats]:
+        if not isinstance(payload, dict):
+            return None
+
+        stats = payload.get("stats")
         if not isinstance(stats, dict):
             return None
 
-        tools = stats.get("tools") if isinstance(stats.get("tools"), dict) else None
-        by_name = tools.get("byName") if isinstance(tools, dict) else None
-        write_file = by_name.get("write_file") if isinstance(by_name, dict) else None
+        tools_section = stats.get("tools") if isinstance(stats.get("tools"), dict) else None
+        tools_by_name = tools_section.get("byName") if isinstance(tools_section, dict) else None
+        write_file = tools_by_name.get("write_file") if isinstance(tools_by_name, dict) else None
         files_info = stats.get("files") if isinstance(stats.get("files"), dict) else None
 
-        files_created_count = self._coerce_int(write_file.get("count")) if isinstance(write_file, dict) else None
-        lines_added = self._coerce_int(files_info.get("totalLinesAdded")) if isinstance(files_info, dict) else None
-        lines_removed = self._coerce_int(files_info.get("totalLinesRemoved")) if isinstance(files_info, dict) else None
+        files_created_count = (
+            self._coerce_int(write_file.get("count")) if isinstance(write_file, dict) else None
+        )
+        lines_added = (
+            self._coerce_int(files_info.get("totalLinesAdded")) if isinstance(files_info, dict) else None
+        )
+        lines_removed = (
+            self._coerce_int(files_info.get("totalLinesRemoved")) if isinstance(files_info, dict) else None
+        )
 
-        result: Dict[str, Any] = {
-            "files_created_count": files_created_count,
-            "lines_added": lines_added,
-            "lines_removed": lines_removed,
-            "stats": stats,
+        tool_calls = None
+        if isinstance(tools_section, dict):
+            tool_calls = self._coerce_int(tools_section.get("totalCalls"))
+
+        response = payload.get("response")
+        normalized_response = response.strip() if isinstance(response, str) and response.strip() else None
+
+        stats_model = ParsedCliStats(
+            files_created_count=files_created_count,
+            lines_added=lines_added,
+            lines_removed=lines_removed,
+            tool_calls=tool_calls,
+            response=normalized_response,
+            stats=stats,
+            source="json",
+        )
+
+        non_empty = {
+            key: value for key, value in stats_model.model_dump(exclude_none=True).items() if key != "source"
         }
+        if not non_empty:
+            return None
+        return stats_model
 
-        if isinstance(tools, dict):
-            tool_calls = self._coerce_int(tools.get("totalCalls"))
-            if tool_calls is not None:
-                result["tool_calls"] = tool_calls
+    def _extract_stats_from_verbose_output(self, log_text: str) -> Optional[ParsedCliStats]:
+        if not log_text:
+            return None
 
-        response = latest_block.get("response")
-        if isinstance(response, str) and response.strip():
-            result["response"] = response.strip()
+        tool_calls = 0
+        file_targets: Set[str] = set()
+        lines_added = 0
+        lines_removed = 0
+        matched_any = False
 
-        return result
+        for raw_line in log_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if "using tool:" in line.lower():
+                tool_calls += 1
+                matched_any = True
+
+            writing_match = re.search(r"writing to:\s*(.+)", line, re.IGNORECASE)
+            if writing_match:
+                file_targets.add(writing_match.group(1).strip())
+                matched_any = True
+
+            wrote_match = re.search(r"(?:wrote|added)\s+(\d+)\s+lines", line, re.IGNORECASE)
+            if wrote_match:
+                lines_added += int(wrote_match.group(1))
+                matched_any = True
+
+            removed_match = re.search(r"(?:removed|deleted)\s+(\d+)\s+lines", line, re.IGNORECASE)
+            if removed_match:
+                lines_removed += int(removed_match.group(1))
+                matched_any = True
+
+        if not matched_any:
+            return None
+
+        files_created_count = len(file_targets) if file_targets else None
+        stats_model = ParsedCliStats(
+            files_created_count=files_created_count,
+            lines_added=lines_added or None,
+            lines_removed=lines_removed or None,
+            tool_calls=tool_calls or None,
+            source="text",
+        )
+
+        meaningful = {
+            key: value for key, value in stats_model.model_dump(exclude_none=True).items() if key != "source"
+        }
+        if not meaningful:
+            return None
+        return stats_model
+
+    def _inspect_filesystem_counts(self, log_path: Path) -> Optional[ParsedCliStats]:
+        summary_name = log_path.name.replace(".output.log", ".summary.json")
+        summary_path = log_path.with_name(summary_name)
+        if not summary_path.exists():
+            return None
+
+        try:
+            summary_content = summary_path.read_text(encoding="utf-8")
+            summary = TaskSummary.model_validate_json(summary_content)
+        except (OSError, json.JSONDecodeError, pydantic.ValidationError) as exc:
+            logger.debug(
+                "Failed to derive fallback file stats from summary %s: %s",
+                summary_path,
+                exc,
+            )
+            return None
+
+        return ParsedCliStats(
+            files_created_count=len(summary.files_created) if summary.files_created else None,
+            files_modified_count=len(summary.files_modified) if summary.files_modified else None,
+            files_deleted_count=len(summary.files_deleted) if summary.files_deleted else None,
+            source="filesystem",
+        )
+
+    def _merge_parsed_cli_stats(
+        self,
+        *candidates: Optional[ParsedCliStats],
+    ) -> Optional[ParsedCliStats]:
+        merged = ParsedCliStats()
+        ordered_sources: List[str] = []
+
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            data = candidate.model_dump(exclude_none=True)
+            source_value = data.pop("source", None)
+            if source_value:
+                ordered_sources.append(source_value)
+
+            for field_name, value in data.items():
+                if getattr(merged, field_name) is None:
+                    setattr(merged, field_name, value)
+
+        if ordered_sources:
+            merged.source = "+".join(dict.fromkeys(ordered_sources))
+
+        payload = merged.model_dump(exclude_none=True)
+        payload.pop("source", None)
+        if not payload:
+            return None
+        return merged
 
     def _extract_latest_json_block(self, log_text: str) -> Optional[Dict[str, Any]]:
         candidates: list[int] = []

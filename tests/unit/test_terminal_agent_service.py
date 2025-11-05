@@ -104,20 +104,21 @@ def test_spawn_agent_dispatches_terminal_command(tmp_path: Path) -> None:
         assert "& gemini" in command.replace("'", "")
         assert "$env:AURA_AGENT_SPEC_PATH" in command
         assert "--model" in command
+        assert "--output-format" not in command
     else:
         assert command.startswith("cd ")
         assert "export AURA_AGENT_SPEC_PATH=" in command
         assert "gemini" in command
         assert "--model gemini-2.5-pro" in command
+        assert "--output-format" not in command
 
     assert session.command[0] == "gemini"
     assert session.command[1] == "--model"
     assert session.command[2] == DEFAULT_GEMINI_MODEL
     assert session.command[3] == "-p"
     assert "GEMINI.md" in session.command[4]
-    assert session.command[5] == "--output-format"
-    assert session.command[6] == "json"
-    assert session.command[7] == "--yolo"
+    assert session.command[5] == "--yolo"
+    assert "--output-format" not in session.command
 
 
 def test_spawn_agent_respects_configured_gemini_model(tmp_path: Path) -> None:
@@ -145,3 +146,25 @@ def test_spawn_agent_respects_configured_gemini_model(tmp_path: Path) -> None:
     assert session.command[0] == "gemini"
     assert session.command[1] == "--model"
     assert session.command[2] == "gemini-2.5-flash"
+
+
+def test_build_session_environment_enables_unbuffered_output(tmp_path: Path) -> None:
+    bridge = FakeTerminalBridge()
+    bus = FakeEventBus()
+    settings_manager = FakeSettingsManager()
+    service = TerminalAgentService(
+        workspace_root=tmp_path,
+        llm_service=FakeLLMService(),
+        event_bus=bus,
+        terminal_bridge=bridge,
+        agent_command_template="gemini",
+        settings_manager=settings_manager,
+    )
+
+    spec_path = tmp_path / ".aura" / "env-check.md"
+    env_map = service._build_session_environment(spec_path, "task789", {})
+
+    assert env_map["PYTHONUNBUFFERED"] == "1"
+
+    overridden = service._build_session_environment(spec_path, "task789", {"PYTHONUNBUFFERED": "0"})
+    assert overridden["PYTHONUNBUFFERED"] == "0"

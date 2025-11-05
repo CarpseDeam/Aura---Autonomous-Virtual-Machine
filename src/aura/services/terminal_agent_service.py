@@ -255,8 +255,6 @@ class TerminalAgentService:
             *tokens,
             "-p",
             f"Implement all tasks described in GEMINI.md. When complete, write .aura/{spec.task_id}.done and .aura/{spec.task_id}.summary.json files.",
-            "--output-format",
-            "json",
             "--yolo",
         ]
 
@@ -359,6 +357,8 @@ class TerminalAgentService:
             "AURA_AGENT_SPEC_PATH": str(spec_path),
             "AURA_AGENT_TASK_ID": task_id,
         }
+        # Encourage downstream CLI processes to stream output without buffering so the UI updates promptly.
+        env_map.setdefault("PYTHONUNBUFFERED", "1")
         if sys.platform.startswith("win"):
             env_map.setdefault("PYTHONUTF8", "1")
             env_map.setdefault("PYTHONIOENCODING", "utf-8")

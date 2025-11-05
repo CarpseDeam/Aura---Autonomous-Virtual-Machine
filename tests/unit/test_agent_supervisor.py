@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -84,6 +85,62 @@ def test_parse_cli_stats_extracts_recent_json(tmp_path: Path) -> None:
     assert stats["tool_calls"] == 7
     assert stats["response"] == "All tasks complete."
     assert isinstance(stats["stats"], dict)
+    assert stats["source"] == "json"
+
+
+def test_parse_cli_stats_handles_verbose_output_without_json(tmp_path: Path) -> None:
+    supervisor = _build_supervisor()
+    log_path = tmp_path / "task.output.log"
+    log_path.write_text(
+        "Using tool: write_file\n"
+        "Writing to: main.py\n"
+        "✓ Wrote 70 lines\n"
+        "Using tool: write_file\n"
+        "Writing to: README.md\n"
+        "✓ Wrote 12 lines\n"
+        "Using tool: run_command\n"
+        "Removed 3 lines\n",
+        encoding="utf-8",
+    )
+
+    stats = supervisor._parse_cli_stats(log_path)
+
+    assert stats is not None
+    assert stats["files_created_count"] == 2
+    assert stats["lines_added"] == 82
+    assert stats["lines_removed"] == 3
+    assert stats["tool_calls"] == 3
+    assert stats["source"] == "text"
+
+
+def test_parse_cli_stats_falls_back_to_summary_counts(tmp_path: Path) -> None:
+    supervisor = _build_supervisor()
+    aura_dir = tmp_path / ".aura"
+    aura_dir.mkdir()
+
+    log_path = aura_dir / "task123.output.log"
+    log_path.write_text("", encoding="utf-8")
+
+    summary_path = aura_dir / "task123.summary.json"
+    summary_payload = {
+        "status": "completed",
+        "files_created": ["src/new_file.py"],
+        "files_modified": ["src/app.py", "README.md"],
+        "files_deleted": [],
+        "errors": [],
+        "warnings": [],
+        "execution_time_seconds": 42.3,
+        "suggestions": [],
+    }
+    summary_path.write_text(json.dumps(summary_payload), encoding="utf-8")
+
+    stats = supervisor._parse_cli_stats(log_path)
+
+    assert stats is not None
+    assert stats["files_created_count"] == 1
+    assert stats["files_modified_count"] == 2
+    assert "files_deleted_count" not in stats
+    assert stats["source"] == "filesystem"
 
 
 def test_format_specification_for_gemini_includes_condensed_spec() -> None:
